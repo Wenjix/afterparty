@@ -197,7 +197,12 @@ for cat in $KILL_CATS; do
   echo "Killing category '$cat' (keep: ${KEEP:-none})"
   pgs=$(pgids_for "$re" "$KEEP")
   if [ -z "$pgs" ]; then echo "  nothing to kill"; continue; fi
-  for pg in $pgs; do kill_group "$pg"; done
+  # pgids_for emits one pgid per line; the surrounding loop runs under
+  # IFS=',' so word-splitting would glue them into one token — read by line.
+  while IFS= read -r pg; do
+    [ -n "$pg" ] || continue
+    kill_group "$pg"
+  done <<< "$pgs"
 done
 unset IFS
 echo "done"
