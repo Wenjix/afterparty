@@ -35,6 +35,24 @@ clean_field() {
   printf '%s' "$1" | tr '\t\n' '  '
 }
 
+# Tab is IFS whitespace, so consecutive tabs collapse during read and an
+# empty field (pgid, port, purpose, command) would shift every column after
+# it. Pad empty fields with "-" before splitting; readers map "-" back to
+# empty via unpad. Known collision: a purpose that is literally "-" reads as
+# empty — implausible enough to accept. On-disk format is unchanged.
+pad_row() {
+  local l="$1"
+  while [ "${l#*$'\t\t'}" != "$l" ]; do
+    l="${l//$'\t\t'/$'\t'-$'\t'}"
+  done
+  case "$l" in *$'\t') l="${l}-" ;; esac
+  printf '%s' "$l"
+}
+
+unpad() {
+  if [ "${1:-}" = "-" ]; then printf ''; else printf '%s' "${1:-}"; fi
+}
+
 workspace_root() {
   local dir="${1:-$PWD}"
   git -C "$dir" rev-parse --show-toplevel 2>/dev/null || printf '%s\n' "$dir"
@@ -134,7 +152,7 @@ add_entry() {
 }
 
 list_entries() {
-  local all_roots=0 want_root want_kind="" json=0 ts root cwd pid pgid kind port purpose command_label status cpu jcpu rc rr N_LIVE
+  local all_roots=0 want_root want_kind="" json=0 __row ts root cwd pid pgid kind port purpose command_label status cpu jcpu rc rr N_LIVE
   want_root="$(workspace_root "$PWD")"
 
   while [ $# -gt 0 ]; do
@@ -154,7 +172,9 @@ list_entries() {
     print_header
   fi
   N_LIVE=0
-  while IFS=$'\t' read -r ts root cwd pid pgid kind port purpose command_label; do
+  while IFS= read -r __row; do
+    IFS=$'\t' read -r ts root cwd pid pgid kind port purpose command_label <<< "$(pad_row "$__row")"
+    pgid="$(unpad "$pgid")" port="$(unpad "$port")" purpose="$(unpad "$purpose")" command_label="$(unpad "$command_label")"
     [ -n "${pid:-}" ] || continue
     row_matches "$want_root" "$all_roots" "$want_kind" "$root" "$kind" || continue
     status="dead"
@@ -184,7 +204,7 @@ list_entries() {
 }
 
 stop_entries() {
-  local do_kill=0 all_roots=0 want_root want_kind="" keep_pgid="" ts root cwd pid pgid kind port purpose command_label groups="" group
+  local do_kill=0 all_roots=0 want_root want_kind="" keep_pgid="" __row ts root cwd pid pgid kind port purpose command_label groups="" group
   want_root="$(workspace_root "$PWD")"
 
   while [ $# -gt 0 ]; do
@@ -207,7 +227,9 @@ stop_entries() {
     s_mode "$C_YEL" "DRY RUN" " - the tab is open; nothing stopped yet (--kill to settle up)" \
       "DRY RUN - recorded live process groups"
   fi
-  while IFS=$'\t' read -r ts root cwd pid pgid kind port purpose command_label; do
+  while IFS= read -r __row; do
+    IFS=$'\t' read -r ts root cwd pid pgid kind port purpose command_label <<< "$(pad_row "$__row")"
+    pgid="$(unpad "$pgid")" port="$(unpad "$port")" purpose="$(unpad "$purpose")" command_label="$(unpad "$command_label")"
     [ -n "${pid:-}" ] || continue
     row_matches "$want_root" "$all_roots" "$want_kind" "$root" "$kind" || continue
     is_live "$pid" || continue
@@ -221,6 +243,12 @@ stop_entries() {
     fi
     if is_protected_pid "$pid"; then
       s_dim "  protect pid $pid pgid $pgid: $(command_for "$pid")"
+      continue
+    fi
+    # The recorded pid may be fine while a protected sibling shares its
+    # group — never signal the whole group in that case.
+    if pgid_has_protected "$pgid"; then
+      s_dim "  protect pgid $pgid: shares its group with a protected process"
       continue
     fi
     case " $groups " in *" $pgid "*) continue ;; esac
@@ -259,8 +287,12 @@ stop_entries() {
     return 0
   fi
 
+  N_SENT=0
   for group in $groups; do
-    kill -TERM -"$group" 2>/dev/null && s_kill "  SIGTERM -> pgid $group"
+    if kill -TERM -"$group" 2>/dev/null; then
+      N_SENT=$((N_SENT + 1))
+      s_kill "  SIGTERM -> pgid $group"
+    fi
   done
   sleep 2
   for group in $groups; do
@@ -272,7 +304,11 @@ stop_entries() {
     echo
     s_card_open
     s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty stop --kill${C_RESET}"
-    s_card_line "   $(s_n "$N_GROUPS" 'process group sent home' 'process groups sent home')"
+    if [ "$N_SENT" -gt 0 ]; then
+      s_card_line "   $(s_n "$N_SENT" 'process group sent home' 'process groups sent home')"
+    else
+      s_card_line "   no group accepted the signal — nothing stopped"
+    fi
     s_card_line
     s_card_line "   thanks for partying responsibly 🎉"
     s_card_close
@@ -280,7 +316,7 @@ stop_entries() {
 }
 
 prune_entries() {
-  local all_roots=0 want_root tmp ts root cwd pid pgid kind port purpose command_label kept=0 dropped=0
+  local all_roots=0 want_root tmp __row ts root cwd pid pgid kind port purpose command_label kept=0 dropped=0
   want_root="$(workspace_root "$PWD")"
 
   while [ $# -gt 0 ]; do
@@ -294,7 +330,9 @@ prune_entries() {
 
   ensure_ledger
   tmp="$(mktemp)"
-  while IFS=$'\t' read -r ts root cwd pid pgid kind port purpose command_label; do
+  while IFS= read -r __row; do
+    IFS=$'\t' read -r ts root cwd pid pgid kind port purpose command_label <<< "$(pad_row "$__row")"
+    pgid="$(unpad "$pgid")" port="$(unpad "$port")" purpose="$(unpad "$purpose")" command_label="$(unpad "$command_label")"
     [ -n "${pid:-}" ] || continue
     if row_matches "$want_root" "$all_roots" "" "$root" "$kind" && ! is_live "$pid"; then
       dropped=$((dropped + 1))
