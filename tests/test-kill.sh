@@ -27,10 +27,13 @@ trap cleanup EXIT
 cd "$REPO" || exit 1
 
 # Spawn a command as its own session/group leader; echo the leader pid
-# (which equals the pgid).
+# (which equals the pgid). The spawned process MUST be detached from our
+# stdout/stderr: callers capture this function with $(...) and a background
+# child holding the substitution pipe would block the capture until the
+# child exits (sleep 300 = a five-minute hang per spawn).
 spawn_group() {
   local pf="$T/pid.$RANDOM.$RANDOM" i=0
-  setsid bash -c 'echo $$ > "$1"; shift; exec "$@"' _ "$pf" "$@" &
+  setsid bash -c 'echo $$ > "$1"; shift; exec "$@"' _ "$pf" "$@" >/dev/null 2>&1 </dev/null &
   while [ ! -s "$pf" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
   cat "$pf" 2>/dev/null
 }
@@ -47,6 +50,7 @@ printf '#!/usr/bin/env bash\nsleep 300\n' > "$T/bin/cursor-server"  # matches PR
 printf '#!/usr/bin/env bash\n"$(dirname "$0")/cursor-server" &\nexec "$(dirname "$0")/nodemon"\n' > "$T/bin/party"
 chmod +x "$T/bin/nodemon" "$T/bin/cursor-server" "$T/bin/party"
 
+B1=$FAILS
 # ---------- 1. ledger stop --kill really kills the recorded group ----------
 LEDGER="$T/ledger.tsv"
 P1="$(spawn_group sleep 300)"
@@ -57,8 +61,9 @@ OUT="$(AFTERPARTY_STYLE=always AGENT_PROCESS_LEDGER="$LEDGER" bash "$LIB/process
 printf '%s\n' "$OUT" | grep -q "SIGTERM -> pgid $P1" || fail "ledger kill: SIGTERM line missing"
 printf '%s\n' "$OUT" | grep -q '1 process group sent home' || fail "ledger kill: receipt count wrong"
 wait_dead "$P1" || fail "ledger kill: process survived"
-pass "ledger stop --kill kills the recorded group and counts it"
+[ "$FAILS" -eq "$B1" ] && pass "ledger stop --kill kills the recorded group and counts it"
 
+B2=$FAILS
 # ---------- 2. audit --kill dev really kills a matching group ----------
 P2="$(spawn_group "$T/bin/nodemon")"
 [ -n "$P2" ] || fail "spawn failed (category test)"
@@ -69,8 +74,9 @@ OUT="$(AFTERPARTY_STYLE=always bash "$LIB/audit-processes.sh" --kill dev 2>/dev/
 printf '%s\n' "$OUT" | grep -q "SIGTERM -> pgid $P2" || fail "category kill: SIGTERM line missing"
 printf '%s\n' "$OUT" | grep -q '1 process group shown the door' || fail "category kill: receipt count wrong"
 wait_dead "$P2" || fail "category kill: process survived"
-pass "audit --kill dev kills the matching group and counts real kills"
+[ "$FAILS" -eq "$B2" ] && pass "audit --kill dev kills the matching group and counts real kills"
 
+B3=$FAILS
 # ---------- 3. protected sibling shields the whole group ----------
 P3="$(spawn_group "$T/bin/party")"
 [ -n "$P3" ] || fail "spawn failed (protect test)"
@@ -82,8 +88,9 @@ printf '%s\n' "$OUT" | grep -q "protect pgid $P3: shares its group with a protec
 printf '%s\n' "$OUT" | grep -q "SIGTERM -> pgid $P3" && fail "protect: group was signaled anyway"
 kill -0 "$P3" 2>/dev/null || fail "protect: nodemon leader died"
 pgrep -f "bin/cursor-server" >/dev/null 2>&1 || fail "protect: cursor-server sibling died"
-pass "a protected sibling shields the whole group from --kill"
+[ "$FAILS" -eq "$B3" ] && pass "a protected sibling shields the whole group from --kill"
 
+B4=$FAILS
 # ---------- 4. recycled-pid guard refuses a mismatched group ----------
 P4="$(spawn_group sleep 300)"
 [ -n "$P4" ] || fail "spawn failed (recycle test)"
@@ -94,7 +101,7 @@ OUT="$(AGENT_PROCESS_LEDGER="$T/recycled.tsv" bash "$LIB/process-ledger.sh" stop
 printf '%s\n' "$OUT" | grep -q "skip pid $P4: group changed since it was recorded" \
   || fail "recycle guard: skip message missing"
 kill -0 "$P4" 2>/dev/null || fail "recycle guard: process was killed despite mismatch"
-pass "recycled-pid guard refuses a group that no longer matches"
+[ "$FAILS" -eq "$B4" ] && pass "recycled-pid guard refuses a group that no longer matches"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi
