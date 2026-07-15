@@ -118,6 +118,15 @@ name, otherwise to `~/.cache/agent-processes/report.md` — so a cleanup tool
 never litters your repos. Add `report.md` to a repo's `.gitignore` to opt in
 to per-repo reports.
 
+### Style
+
+On an interactive terminal, audits end with a little reward: color, glyph
+headers, and a finale card — a damage report when leftovers exist, confetti
+when the house is spotless, a receipt after a cleanup. Pipes, `--json`, and
+`report.md` always get plain text; `NO_COLOR` is honored; and
+`AFTERPARTY_STYLE=always|never|auto` overrides everything (precedence:
+`AFTERPARTY_STYLE` > `NO_COLOR` > tty detection).
+
 ## What It Tracks
 
 `afterparty add` records long-running processes in:

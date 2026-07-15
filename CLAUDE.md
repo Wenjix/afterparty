@@ -28,6 +28,12 @@ mechanics when you touch them.
   `audit --report` writes report.md at the repo root ONLY when the repo
   gitignores it (litter guard), else `~/.cache/agent-processes/report.md`;
   the plugin's SessionEnd hook relies on this.
+- Terminal styling lives ONLY in skills/afterparty/lib/style.sh, gated on
+  TTY / NO_COLOR / AFTERPARTY_STYLE=always|never|auto. Plain (piped) and
+  --json output are CONTRACT surfaces — byte-stable; banners and finale
+  cards are additive, styled-mode only. Composite `audit` collects child
+  counters via the AFTERPARTY_TALLY file; AFTERPARTY_CARD=0 suppresses
+  cards (doctor, nested calls).
 
 **Environment gotcha:** I develop on Windows 11 but the scripts are bash targeting
 macOS/Linux. Under Git Bash, `rg` and `lsof` are missing and `ps` lacks -Ao, so
@@ -42,9 +48,8 @@ grepping for \r lies); if a working copy shows w/crlf, fix via `rm` +
 **Conventions:** lowercase conventional commits (feat:/fix:/docs:/style:).
 LF endings enforced via .gitattributes — scripts must never pick up CRLF.
 
-**Known backlog:** ledger pgid-recycling defense; logo is still the old broom
-mark (party-themed redesign pending); no CI (shellcheck would be a good
-addition). Cleanup areas researched (2026-07) but deliberately deferred: ml/gpu
-audit category (jupyter, ollama/vllm, tensorboard, nvidia-smi VRAM orphans),
-docker debris, and agent harness-state cleanup (old transcripts/scratchpads,
-temp browser profiles).
+**Known backlog:** ledger pgid-recycling defense; no CI (shellcheck would be a
+good addition). Cleanup areas researched (2026-07) but deliberately deferred:
+ml/gpu audit category (jupyter, ollama/vllm, tensorboard, nvidia-smi VRAM
+orphans), docker debris, and agent harness-state cleanup (old
+transcripts/scratchpads, temp browser profiles).
