@@ -109,14 +109,19 @@ pgids_for() {
   done
 }
 
-# SIGTERM then SIGKILL a process group.
+# SIGTERM then SIGKILL a process group. Returns 0 only if the SIGTERM was
+# delivered, so callers can count actual kills rather than candidates.
 kill_group() {
-  local pg="$1"
-  kill -TERM -"$pg" 2>/dev/null && s_kill "  SIGTERM -> pgid $pg"
+  local pg="$1" ok=1
+  if kill -TERM -"$pg" 2>/dev/null; then
+    ok=0
+    s_kill "  SIGTERM -> pgid $pg"
+  fi
   sleep 2
   if ps -Ao pgid= 2>/dev/null | tr -d ' ' | match_q "^${pg}$"; then
     kill -KILL -"$pg" 2>/dev/null && s_kill "  SIGKILL -> pgid $pg (straggler)"
   fi
+  return "$ok"
 }
 
 category_re() {
@@ -250,12 +255,17 @@ for cat in $KILL_CATS; do
     "Killing category '$cat' (keep: ${KEEP:-none})"
   pgs=$(pgids_for "$re" "$KEEP")
   if [ -z "$pgs" ]; then s_dim "  nothing to kill"; continue; fi
-  N_KILLED=$((N_KILLED + $(printf '%s\n' "$pgs" | grep -c .)))
   # pgids_for emits one pgid per line; the surrounding loop runs under
   # IFS=',' so word-splitting would glue them into one token — read by line.
   while IFS= read -r pg; do
     [ -n "$pg" ] || continue
-    kill_group "$pg"
+    # The listing filtered protected rows, but a protected process may share
+    # this group — never signal the whole group in that case.
+    if pgid_has_protected "$pg"; then
+      s_dim "  protect pgid $pg: shares its group with a protected process"
+      continue
+    fi
+    kill_group "$pg" && N_KILLED=$((N_KILLED + 1))
   done <<< "$pgs"
 done
 unset IFS
