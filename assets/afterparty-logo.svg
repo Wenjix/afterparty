@@ -1,0 +1,39 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Afterparty frosted glass logo</title>
+  <defs>
+    <linearGradient id="glass" x1="34" y1="18" x2="480" y2="498" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF3E3" stop-opacity="0.96"/>
+      <stop offset="0.45" stop-color="#FFD49A" stop-opacity="0.76"/>
+      <stop offset="1" stop-color="#F59B38" stop-opacity="0.56"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="34" y1="22" x2="478" y2="492" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFDF8" stop-opacity="0.92"/>
+      <stop offset="1" stop-color="#EA8730" stop-opacity="0.48"/>
+    </linearGradient>
+    <filter id="soft-shadow" x="-10" y="-10" width="532" height="532" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="22" stdDeviation="26" flood-color="#6F3E17" flood-opacity="0.18"/>
+    </filter>
+    <filter id="frost" x="0" y="0" width="512" height="512" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" seed="27" result="noise"/>
+      <feColorMatrix in="noise" type="matrix" values="0 0 0 0 1 0 0 0 0 0.78 0 0 0 0 0.48 0 0 0 0.14 0" result="mist"/>
+      <feBlend in="SourceGraphic" in2="mist" mode="screen"/>
+    </filter>
+    <mask id="broom-cutout">
+      <rect width="512" height="512" fill="black"/>
+      <rect x="14" y="14" width="484" height="484" rx="112" fill="white"/>
+      <g transform="translate(30 0)" fill="black">
+        <path d="M142 222L148 236L162 242L148 248L142 262L136 248L122 242L136 236Z"/>
+        <path d="M188 183L193 195L205 200L193 205L188 217L183 205L171 200L183 195Z"/>
+        <path d="M190 257L194 267L204 271L194 275L190 285L186 275L176 271L186 267Z"/>
+        <path d="M244 342L352 122" stroke="black" stroke-width="20" stroke-linecap="round" fill="none"/>
+        <path d="M207 325L274 359L265 374L198 340Z"/>
+        <path d="M114 330C143 353 180 350 216 328C249 334 277 357 293 387C264 418 214 426 166 405C139 393 120 366 114 330Z"/>
+        <path d="M124 315C145 336 175 344 207 334C176 336 149 330 124 315Z"/>
+        <path d="M115 352C134 373 160 384 190 384C160 391 132 381 115 352Z"/>
+      </g>
+    </mask>
+  </defs>
+
+  <rect x="14" y="14" width="484" height="484" rx="112" fill="url(#glass)" filter="url(#soft-shadow)" mask="url(#broom-cutout)"/>
+  <rect x="23" y="23" width="466" height="466" rx="103" stroke="url(#edge)" stroke-width="4" filter="url(#frost)" mask="url(#broom-cutout)"/>
+</svg>

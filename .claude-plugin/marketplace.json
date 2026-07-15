@@ -1,0 +1,12 @@
+{
+  "name": "afterparty",
+  "description": "Afterparty — cleanup skill and CLI for the mess coding agents leave behind.",
+  "owner": { "name": "Wenjix" },
+  "plugins": [
+    {
+      "name": "afterparty",
+      "source": "./",
+      "description": "Process tracking, audit, and cleanup for coding agents — localhost servers, test watchers, orphaned MCP processes, build artifacts, and dev caches."
+    }
+  ]
+}
