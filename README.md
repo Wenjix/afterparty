@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="./assets/afterparty-terminal.png" alt="Afterparty cleaning up localhost dev servers in a terminal" width="860">
+  <img src="./assets/afterparty-terminal.svg" alt="Afterparty dry-run audit ending in the damage-report card" width="860">
 </p>
 
 Afterparty is for the boring mess that coding agents leave behind: localhost
@@ -42,9 +42,10 @@ script, inspect the dry run, then choose whether to apply anything.
 /plugin install afterparty@afterparty
 ```
 
-The plugin also ships a `SessionEnd` hook: when a session ends it runs
+The plugin also ships a `SessionEnd` hook — when a session ends it runs
 `afterparty audit --report`, so the leftovers report is already on disk when
-the next session starts.
+the next session starts — and a `/afterparty` slash command to run the audit
+on demand (`/afterparty clean` walks the gated cleanup paths).
 
 ### As a plain agent skill
 
@@ -184,7 +185,11 @@ afterparty devclean --disk
 It is conservative by default. It does not treat every `crashpad_handler` as a
 safe orphan because normal active apps on macOS use those helpers. Crashpad file
 cleanup and crash reporter settings live behind `--optimize`, where you can
-review the exact targets first.
+review the exact targets first. Codex session transcripts are age-gated: only
+date folders older than 30 days are cleaned (they power resume and record what
+agents did). Tuning flags: `--documents-root DIR` and `--project-maxdepth N`
+scope the `--disk` project scan, and `--no-repo-artifacts` skips the
+current-repo artifact pass.
 
 ## Artifact Cleanup
 

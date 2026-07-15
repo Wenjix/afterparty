@@ -11,6 +11,10 @@
 #   devclean.sh --optimize              # audit IDE crash reporters / Crashpad / agents
 #   devclean.sh --disk                  # audit global dev caches + project artifacts
 #   devclean.sh --deep --disk --apply   # act on selected modes
+#   devclean.sh --dry-run               # force dry-run (the default)
+#   devclean.sh --documents-root DIR    # where --disk scans for project artifacts
+#   devclean.sh --project-maxdepth N    # --disk project scan depth (default 6)
+#   devclean.sh --no-repo-artifacts     # --disk: skip the current-repo artifact pass
 set -uo pipefail
 
 # Every cleanup target below is composed from $HOME; an empty HOME would turn
@@ -34,7 +38,7 @@ PROJECT_MAXDEPTH=6
 RUN_REPO_ARTIFACTS=1
 
 usage() {
-  sed -n '2,15p' "$0"
+  sed -n '2,17p' "$0"
 }
 
 while [ $# -gt 0 ]; do
