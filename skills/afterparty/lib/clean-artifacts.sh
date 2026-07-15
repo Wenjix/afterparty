@@ -14,6 +14,10 @@
 # any path that still contains git-tracked files is skipped. Exit: 0 ok · 2 usage.
 set -uo pipefail
 
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# TTY-gated styling + finale cards (plain passthrough on pipes).
+. "$DIR/style.sh"
+
 ROOT="$PWD"
 DO_CLEAN=0 CACHES_ONLY=0 DEEP=0
 while [ $# -gt 0 ]; do
@@ -100,21 +104,28 @@ while IFS= read -r f; do [ -n "$f" ] && caches+=("$f"); done < <(
     -type f \( -name '*.tsbuildinfo' -o -name '.eslintcache' \) -print 2>/dev/null)
 
 TOTAL_KB=0
+N_PATHS=0
 process() {
   local label="$1"; shift
   local paths=("$@") printed=0 p rel kb
   for p in "${paths[@]}"; do
     [ -n "$p" ] && [ -e "$p" ] || continue
     rel="${p#"$ROOT"/}"
-    if is_tracked "$rel"; then echo "  skip (git-tracked): $rel"; continue; fi
-    if [ "$printed" -eq 0 ]; then echo; echo "=== $label ==="; printed=1; fi
+    if is_tracked "$rel"; then s_dim "  skip (git-tracked): $rel"; continue; fi
+    if [ "$printed" -eq 0 ]; then s_hdr "$label"; printed=1; fi
     kb=$(du -sk "$p" 2>/dev/null | awk '{print $1}'); TOTAL_KB=$((TOTAL_KB + ${kb:-0}))
+    N_PATHS=$((N_PATHS + 1))
     printf '  %-6s %s\n' "$(human "$p")" "$rel"
-    [ "$DO_CLEAN" -eq 1 ] && rm -rf "$p" && echo "         deleted"
+    [ "$DO_CLEAN" -eq 1 ] && rm -rf "$p" && s_ok "         deleted"
   done
 }
 
-echo "Repo: $ROOT $([ "$DO_CLEAN" -eq 1 ] && echo '(CLEAN)' || echo '(dry run — pass --clean to delete)')"
+if [ "$DO_CLEAN" -eq 1 ]; then
+  s_lead "$C_RED" "Repo: $ROOT (CLEAN — hauling out the recycling)" "Repo: $ROOT (CLEAN)"
+else
+  s_lead "$C_YEL" "Repo: $ROOT (dry run — sizing up the empties; pass --clean to delete)" \
+    "Repo: $ROOT (dry run — pass --clean to delete)"
+fi
 process "Caches (.turbo/.vite/.cache/*.tsbuildinfo)" "${caches[@]:-}"
 [ "$CACHES_ONLY" -eq 0 ] && process "Build outputs (.next/dist/build/out)" "${builds[@]:-}"
 process "Test artifacts (coverage/test-results/playwright)" "${tests[@]:-}"
@@ -122,5 +133,30 @@ process "Test artifacts (coverage/test-results/playwright)" "${tests[@]:-}"
 printf '\nReclaimable total: %s MB%s\n' "$((TOTAL_KB / 1024))" "$([ "$DO_CLEAN" -eq 1 ] && echo ' (freed)' || echo '')"
 
 if [ "$DO_CLEAN" -eq 1 ] && [ "$DEEP" -eq 1 ] && command -v pnpm >/dev/null 2>&1; then
-  echo; echo "=== pnpm store prune ==="; pnpm store prune 2>&1 | tail -3
+  s_hdr "pnpm store prune"; pnpm store prune 2>&1 | tail -3
+fi
+
+# Finale card (styled standalone runs only; devclean/doctor suppress it).
+if cards_on; then
+  echo
+  s_card_open
+  if [ "$DO_CLEAN" -eq 1 ]; then
+    s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty artifacts --clean${C_RESET}"
+    if [ "$N_PATHS" -gt 0 ]; then
+      s_card_line "   swept $(s_n "$N_PATHS" 'path' 'paths') — $((TOTAL_KB / 1024)) MB back on the shelf"
+    else
+      s_card_line "   nothing needed doing — already spotless ✨"
+    fi
+    s_card_line
+    s_card_line "   thanks for partying responsibly 🎉"
+  elif [ "$N_PATHS" -gt 0 ]; then
+    s_card_line "${C_BOLD}${C_YEL}🧹 the damage — artifacts${C_RESET}"
+    s_card_line "   $(s_n "$N_PATHS" 'path' 'paths') of cups and confetti to pick up ($((TOTAL_KB / 1024)) MB)"
+    s_card_line
+    s_card_line "   closing time: ${C_CYAN}afterparty artifacts --clean${C_RESET}"
+  else
+    s_card_line "${C_BOLD}${C_GRN}✨ spotless — not a cup out of place${C_RESET}"
+    s_card_line "   see you next session 🎉"
+  fi
+  s_card_close
 fi

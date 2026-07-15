@@ -18,6 +18,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/protect.sh"
 # JSON Lines helpers for list --json.
 . "$DIR/json.sh"
+# TTY-gated styling + finale cards (plain passthrough on pipes).
+. "$DIR/style.sh"
 SELF_PGID="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')"
 
 usage() {
@@ -70,7 +72,9 @@ pgid_exists() {
 }
 
 print_header() {
-  printf '%-5s %-7s %-7s %-8s %-6s %-6s %-24s %s\n' STATUS PID PGID KIND PORT CPU PURPOSE COMMAND
+  local hc="" hr=""
+  if [ "$STYLE_ON" -eq 1 ]; then hc="$C_DIM"; hr="$C_RESET"; fi
+  printf '%s%-5s %-7s %-7s %-8s %-6s %-6s %-24s %s%s\n' "$hc" STATUS PID PGID KIND PORT CPU PURPOSE COMMAND "$hr"
 }
 
 row_matches() {
@@ -126,11 +130,11 @@ add_entry() {
     "$(clean_field "$purpose")" \
     "$(clean_field "$command_label")" >> "$LEDGER"
 
-  echo "recorded pid $pid pgid ${pgid:-unknown} kind $kind port ${port:-none}"
+  s_ok "recorded pid $pid pgid ${pgid:-unknown} kind $kind port ${port:-none}"
 }
 
 list_entries() {
-  local all_roots=0 want_root want_kind="" json=0 ts root cwd pid pgid kind port purpose command_label status cpu jcpu
+  local all_roots=0 want_root want_kind="" json=0 ts root cwd pid pgid kind port purpose command_label status cpu jcpu rc rr N_LIVE
   want_root="$(workspace_root "$PWD")"
 
   while [ $# -gt 0 ]; do
@@ -146,9 +150,10 @@ list_entries() {
 
   ensure_ledger
   if [ "$json" -eq 0 ]; then
-    echo "Ledger: $LEDGER"
+    s_dim "Ledger: $LEDGER"
     print_header
   fi
+  N_LIVE=0
   while IFS=$'\t' read -r ts root cwd pid pgid kind port purpose command_label; do
     [ -n "${pid:-}" ] || continue
     row_matches "$want_root" "$all_roots" "$want_kind" "$root" "$kind" || continue
@@ -157,6 +162,7 @@ list_entries() {
     if is_live "$pid"; then
       status="live"
       cpu="$(ps -o %cpu= -p "$pid" 2>/dev/null | tr -d ' ')"
+      N_LIVE=$((N_LIVE + 1))
     fi
     if [ "$json" -eq 1 ]; then
       jcpu="$cpu"
@@ -166,10 +172,15 @@ list_entries() {
         "$(json_kvz port "${port:-}")" "$(json_kvz cpu "$jcpu")" "$(json_kv purpose "${purpose:-}")" \
         "$(json_kv command "${command_label:-}")" "$(json_kv root "$root")" "$(json_kv ts "$ts")"
     else
-      printf '%-5s %-7s %-7s %-8s %-6s %-6s %-24s %.80s\n' \
-        "$status" "$pid" "${pgid:-?}" "$kind" "${port:-?}" "${cpu:-?}" "${purpose:-}" "${command_label:-}"
+      rc=""; rr=""
+      if [ "$STYLE_ON" -eq 1 ] && [ "$status" = "dead" ]; then rc="$C_DIM"; rr="$C_RESET"; fi
+      printf '%s%-5s %-7s %-7s %-8s %-6s %-6s %-24s %.80s%s\n' \
+        "$rc" "$status" "$pid" "${pgid:-?}" "$kind" "${port:-?}" "${cpu:-?}" "${purpose:-}" "${command_label:-}" "$rr"
     fi
   done < "$LEDGER"
+  if [ "$json" -eq 0 ]; then
+    tally_add ledger.live "$N_LIVE"
+  fi
 }
 
 stop_entries() {
@@ -189,40 +200,83 @@ stop_entries() {
   done
 
   ensure_ledger
-  echo "$([ "$do_kill" -eq 1 ] && echo "STOP" || echo "DRY RUN") - recorded live process groups"
+  if [ "$do_kill" -eq 1 ]; then
+    s_mode "$C_RED" "STOP" " - settling the tab, stopping recorded groups" \
+      "STOP - recorded live process groups"
+  else
+    s_mode "$C_YEL" "DRY RUN" " - the tab is open; nothing stopped yet (--kill to settle up)" \
+      "DRY RUN - recorded live process groups"
+  fi
   while IFS=$'\t' read -r ts root cwd pid pgid kind port purpose command_label; do
     [ -n "${pid:-}" ] || continue
     row_matches "$want_root" "$all_roots" "$want_kind" "$root" "$kind" || continue
     is_live "$pid" || continue
     if [ -z "$pgid" ] || [ "$pgid" = "$SELF_PGID" ]; then
-      echo "  skip pid $pid: pgid is shared with this shell (${pgid:-unknown})"
+      s_dim "  skip pid $pid: pgid is shared with this shell (${pgid:-unknown})"
       continue
     fi
     if [ -n "$keep_pgid" ] && [ "$pgid" = "$keep_pgid" ]; then
-      echo "  keep pgid $pgid: ${purpose:-$command_label}"
+      s_dim "  keep pgid $pgid: ${purpose:-$command_label}"
       continue
     fi
     if is_protected_pid "$pid"; then
-      echo "  protect pid $pid pgid $pgid: $(command_for "$pid")"
+      s_dim "  protect pid $pid pgid $pgid: $(command_for "$pid")"
       continue
     fi
     case " $groups " in *" $pgid "*) continue ;; esac
     groups="$groups $pgid"
-    echo "  $([ "$do_kill" -eq 1 ] && echo "kill" || echo "would kill") pgid $pgid: ${purpose:-$command_label}"
+    if [ "$do_kill" -eq 1 ]; then
+      s_kill "  kill pgid $pgid: ${purpose:-$command_label}"
+    else
+      s_would "  would kill pgid $pgid: ${purpose:-$command_label}"
+    fi
   done < "$LEDGER"
 
-  [ -n "$groups" ] || { echo "  nothing to stop"; return 0; }
-  [ "$do_kill" -eq 1 ] || return 0
+  if [ -z "$groups" ]; then
+    s_dim "  nothing to stop"
+    if cards_on; then
+      echo
+      s_card_open
+      s_card_line "${C_BOLD}${C_GRN}✨ ledger clear — nobody left on the tab${C_RESET}"
+      s_card_line "   see you next session 🎉"
+      s_card_close
+    fi
+    return 0
+  fi
+  # shellcheck disable=SC2086
+  set -- $groups
+  N_GROUPS=$#
+  if [ "$do_kill" -eq 0 ]; then
+    if cards_on; then
+      echo
+      s_card_open
+      s_card_line "${C_BOLD}${C_YEL}🧹 the damage — ledger${C_RESET}"
+      s_card_line "   $(s_n "$N_GROUPS" 'recorded process group still on the tab' 'recorded process groups still on the tab')"
+      s_card_line
+      s_card_line "   closing time: ${C_CYAN}afterparty stop --kill${C_RESET}"
+      s_card_close
+    fi
+    return 0
+  fi
 
   for group in $groups; do
-    kill -TERM -"$group" 2>/dev/null && echo "  SIGTERM -> pgid $group"
+    kill -TERM -"$group" 2>/dev/null && s_kill "  SIGTERM -> pgid $group"
   done
   sleep 2
   for group in $groups; do
     if pgid_exists "$group"; then
-      kill -KILL -"$group" 2>/dev/null && echo "  SIGKILL -> pgid $group (straggler)"
+      kill -KILL -"$group" 2>/dev/null && s_kill "  SIGKILL -> pgid $group (straggler)"
     fi
   done
+  if cards_on; then
+    echo
+    s_card_open
+    s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty stop --kill${C_RESET}"
+    s_card_line "   $(s_n "$N_GROUPS" 'process group sent home' 'process groups sent home')"
+    s_card_line
+    s_card_line "   thanks for partying responsibly 🎉"
+    s_card_close
+  fi
 }
 
 prune_entries() {
@@ -250,7 +304,7 @@ prune_entries() {
     kept=$((kept + 1))
   done < "$LEDGER"
   mv "$tmp" "$LEDGER"
-  echo "pruned $dropped dead entr$([ "$dropped" -eq 1 ] && echo y || echo ies); kept $kept"
+  s_ok "pruned $dropped dead entr$([ "$dropped" -eq 1 ] && echo y || echo ies); kept $kept"
 }
 
 cmd="${1:-}"

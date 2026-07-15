@@ -16,9 +16,79 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# TTY-gated styling, finale cards, and the composite tally (plain on pipes).
+. "$DIR/style.sh"
 
 usage() {
   sed -n '2,15p' "$0"
+}
+
+# The one finale card for the composite audit, fed by the children's tally.
+print_finale_card() {
+  local killed found live gitf bytes stashes listeners
+  killed="$(tally_get procs.killed)"
+  found="$(tally_get procs.found)"
+  live="$(tally_get ledger.live)"
+  gitf="$(tally_get git.findings)"
+  bytes="$(tally_get git.litter_bytes)"
+  stashes="$(tally_get git.stashes)"
+  listeners="$(tally_get procs.listeners)"
+  echo
+  s_card_open
+  if [ "$killed" -gt 0 ]; then
+    s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty audit --kill${C_RESET}"
+    s_card_line "   $(s_n "$killed" 'process group shown the door' 'process groups shown the door')"
+    if [ "$gitf" -gt 0 ]; then
+      s_card_line "   still on the tab: $(s_n "$gitf" 'git leftover' 'git leftovers')"
+    fi
+    if [ "$live" -gt 0 ]; then
+      s_card_line "   still on the tab: $(s_n "$live" 'ledger entry' 'ledger entries')"
+    fi
+    s_card_line
+    s_card_line "   thanks for partying responsibly 🎉"
+  elif [ $((found + live + gitf)) -gt 0 ]; then
+    s_card_line "${C_BOLD}${C_YEL}🧹 the damage${C_RESET}"
+    if [ "$found" -gt 0 ]; then
+      s_card_line "   $(s_n "$found" 'stray process still partying' 'stray processes still partying')"
+    fi
+    if [ "$live" -gt 0 ]; then
+      s_card_line "   $(s_n "$live" 'ledger entry live on the tab' 'ledger entries live on the tab')"
+    fi
+    if [ "$gitf" -gt 0 ]; then
+      if [ "$bytes" -gt 0 ]; then
+        s_card_line "   $(s_n "$gitf" 'git leftover' 'git leftovers') (${bytes} B of litter)"
+      else
+        s_card_line "   $(s_n "$gitf" 'git leftover' 'git leftovers')"
+      fi
+    fi
+    if [ "$listeners" -gt 0 ]; then
+      s_card_line "${C_DIM}   ($(s_n "$listeners" 'localhost listener up — likely yours' 'localhost listeners up — likely yours'))${C_RESET}"
+    fi
+    if [ "$stashes" -gt 0 ]; then
+      s_card_line "${C_DIM}   ($(s_n "$stashes" 'stash on the shelf — your call' 'stashes on the shelf — your call'))${C_RESET}"
+    fi
+    s_card_line
+    s_card_line "   closing time:"
+    if [ "$live" -gt 0 ]; then
+      s_card_line "     ${C_CYAN}afterparty stop --kill${C_RESET}"
+    fi
+    if [ "$found" -gt 0 ]; then
+      s_card_line "     ${C_CYAN}afterparty audit --kill tests,dev,browser${C_RESET}"
+    fi
+    if [ "$gitf" -gt 0 ]; then
+      s_card_line "     ${C_CYAN}afterparty git --clean${C_RESET}"
+    fi
+  else
+    s_card_line "${C_BOLD}${C_GRN}✨ spotless — nobody crashed on your couch${C_RESET}"
+    if [ "$listeners" -gt 0 ]; then
+      s_card_line "${C_DIM}   ($(s_n "$listeners" 'localhost listener up — likely yours' 'localhost listeners up — likely yours'))${C_RESET}"
+    fi
+    if [ "$stashes" -gt 0 ]; then
+      s_card_line "${C_DIM}   ($(s_n "$stashes" 'stash on the shelf — your call' 'stashes on the shelf — your call'))${C_RESET}"
+    fi
+    s_card_line "   see you next session 🎉"
+  fi
+  s_card_close
 }
 
 cmd="${1:-}"
@@ -72,7 +142,22 @@ case "$cmd" in
       echo "note: writing audit report to $REPORT_FILE" >&2
       { echo "# afterparty audit — $(date -u +'%Y-%m-%dT%H:%M:%SZ')"; run_audit; } | tee "$REPORT_FILE"
     else
+      if [ "$STYLE_ON" -eq 1 ] && [ -z "$JSON_FLAG" ]; then
+        s_banner "afterparty — last call" "let's see what the session left behind"
+        if AFTERPARTY_TALLY="$(mktemp "${TMPDIR:-/tmp}/afterparty-tally.XXXXXX" 2>/dev/null)"; then
+          export AFTERPARTY_TALLY
+        else
+          # No tally file: suppress the children's cards rather than showing
+          # three separate ones.
+          AFTERPARTY_TALLY=""
+          export AFTERPARTY_CARD=0
+        fi
+      fi
       run_audit
+      if [ -n "${AFTERPARTY_TALLY:-}" ]; then
+        print_finale_card
+        rm -f "$AFTERPARTY_TALLY"
+      fi
     fi
     ;;
   git)
@@ -85,6 +170,8 @@ case "$cmd" in
     exec "$DIR/devclean.sh" "$@"
     ;;
   doctor)
+    # One long checkup, no finale cards.
+    export AFTERPARTY_CARD=0
     "$DIR/process-ledger.sh" list
     "$DIR/audit-processes.sh"
     "$DIR/audit-git.sh"

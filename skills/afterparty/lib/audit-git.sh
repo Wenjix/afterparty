@@ -24,6 +24,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # JSON Lines helpers (json_escape / json_kv* / json_row), shared with the
 # other audits.
 . "$DIR/json.sh"
+# TTY-gated styling + finale cards (plain passthrough on pipes).
+. "$DIR/style.sh"
 
 # Branch names owned by coding agents. Extend here to cover more tools.
 AGENT_BRANCH_RE='^(claude|codex|cursor|copilot|aider|agent)[/-]'
@@ -62,9 +64,14 @@ g rev-parse -q --verify 'HEAD^{commit}' >/dev/null 2>&1 && HAS_COMMITS=1
 NOW="$(date +%s)"
 
 # --- helpers -------------------------------------------------------------------
-say()  { [ "$JSON" -eq 1 ] || echo "$@"; }
-hdr()  { [ "$JSON" -eq 1 ] || printf '\n=== %s ===\n' "$1"; }
-warn() { echo "warning: $*" >&2; }
+# Human-line helpers gate on $JSON; the s_* styling is plain passthrough when
+# stdout is not a TTY, so plain output stays byte-identical to legacy.
+say()       { [ "$JSON" -eq 1 ] || echo "$@"; }
+say_would() { [ "$JSON" -eq 1 ] || s_would "$@"; }
+say_ok()    { [ "$JSON" -eq 1 ] || s_ok "$@"; }
+say_dim()   { [ "$JSON" -eq 1 ] || s_dim "$@"; }
+hdr()       { [ "$JSON" -eq 1 ] || s_hdr "$1"; }
+warn()      { s_warn "$*"; }
 
 # GNU stat first (Linux, Git Bash), BSD fallback (macOS).
 mtime_epoch() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
@@ -130,7 +137,7 @@ audit_worktrees() {
     # The first block from `git worktree list` is always the main worktree.
     if [ "$seen_main" -eq 0 ]; then
       seen_main=1
-      say "  main: $path (${branch:-detached}) — never pruned or removed"
+      say_dim "  main: $path (${branch:-detached}) — never pruned or removed"
       wt_row "$path" "$branch" "$head" 1 active "" "" keep
       return 0
     fi
@@ -142,20 +149,20 @@ audit_worktrees() {
         prune_list="$prune_list$path
 "
       else
-        say "  would prune $path (directory gone; admin data only)"
+        say_would "  would prune $path (directory gone; admin data only)"
         wt_row "$path" "$branch" "$head" 0 prunable "" "" prune 0
       fi
       return 0
     fi
 
     if [ "$locked" -eq 1 ]; then
-      say "  locked: $path — left alone"
+      say_dim "  locked: $path — left alone"
       wt_row "$path" "$branch" "$head" 0 locked "" "" report
       return 0
     fi
 
     if [ "$path" = "$ROOT" ]; then
-      say "  current: $path — not a removal candidate"
+      say_dim "  current: $path — not a removal candidate"
       wt_row "$path" "$branch" "$head" 0 current "" "" report
       return 0
     fi
@@ -177,13 +184,13 @@ audit_worktrees() {
     fi
 
     if [ "$age" -le "$AGE_DAYS" ]; then
-      say "  active: $path (${branch:-detached}, idle ${age}d) — keeping"
+      say_dim "  active: $path (${branch:-detached}, idle ${age}d) — keeping"
       wt_row "$path" "$branch" "$head" 0 active "$dirty" "$age" keep
       return 0
     fi
 
     if [ "$dirty" -eq 1 ]; then
-      say "  stale but DIRTY: $path (idle ${age}d) — commit or stash inside it, then: git worktree remove $path"
+      say_would "  stale but DIRTY: $path (idle ${age}d) — commit or stash inside it, then: git worktree remove $path"
       wt_row "$path" "$branch" "$head" 0 stale 1 "$age" report
       return 0
     fi
@@ -193,7 +200,7 @@ audit_worktrees() {
       # final guard against races between our check and the remove.
       if remove_err="$(g worktree remove "$path" 2>&1)"; then
         N_WT=$((N_WT + 1))
-        say "  removed $path (clean, idle ${age}d)"
+        say_ok "  removed $path (clean, idle ${age}d)"
         wt_row "$path" "$branch" "$head" 0 stale 0 "$age" remove 1
       else
         warn "worktree remove failed for $path: $remove_err (files may be open — close them and re-run)"
@@ -201,7 +208,7 @@ audit_worktrees() {
       fi
     else
       N_WT=$((N_WT + 1))
-      say "  would remove $path (clean, idle ${age}d, ${branch:-detached})"
+      say_would "  would remove $path (clean, idle ${age}d, ${branch:-detached})"
       wt_row "$path" "$branch" "$head" 0 stale 0 "$age" remove 0
     fi
   }
@@ -218,7 +225,7 @@ audit_worktrees() {
   flush_wt
 
   if [ "$seen_main" -eq 0 ]; then
-    say "  (no worktrees listed)"
+    say_dim "  (no worktrees listed)"
     return 0
   fi
 
@@ -233,7 +240,7 @@ audit_worktrees() {
     while IFS= read -r p; do
       [ -n "$p" ] || continue
       if [ "$prune_ok" -eq 1 ]; then
-        say "  pruned $p (admin data)"
+        say_ok "  pruned $p (admin data)"
         wt_row "$p" "" "" 0 prunable "" "" prune 1
       else
         wt_row "$p" "" "" 0 prunable "" "" prune 0 "$prune_err"
@@ -261,7 +268,7 @@ br_row() {  # name merged checked_out age_days ahead action [applied [error]]
 audit_branches() {
   hdr "Agent branches ($AGENT_BRANCH_RE)"
   if [ "$HAS_COMMITS" -eq 0 ]; then
-    say "  (no commits yet — skipping)"
+    say_dim "  (no commits yet — skipping)"
     return 0
   fi
   local merged_list name cts merged checked_out age ahead found=0 del_err
@@ -278,13 +285,13 @@ audit_branches() {
 
     if [ "$merged" -eq 0 ]; then
       ahead="$(g rev-list --count "HEAD..$name" 2>/dev/null)" || ahead=""
-      say "  unmerged: $name (${ahead:-?} commit(s) not in HEAD, last commit ${age}d ago) — review with: git log HEAD..$name"
+      say_would "  unmerged: $name (${ahead:-?} commit(s) not in HEAD, last commit ${age}d ago) — review with: git log HEAD..$name"
       br_row "$name" 0 "$checked_out" "$age" "$ahead" report
       continue
     fi
 
     if [ "$checked_out" -eq 1 ]; then
-      say "  merged but checked out: $name — remove that worktree first"
+      say_would "  merged but checked out: $name — remove that worktree first"
       br_row "$name" 1 1 "$age" "" report
       continue
     fi
@@ -294,7 +301,7 @@ audit_branches() {
       # is checked out somewhere, which backstops our own checks.
       if del_err="$(g branch -d "$name" 2>&1)"; then
         N_BRANCH=$((N_BRANCH + 1))
-        say "  deleted branch $name (merged, last commit ${age}d ago)"
+        say_ok "  deleted branch $name (merged, last commit ${age}d ago)"
         br_row "$name" 1 0 "$age" "" delete 1
       else
         warn "branch -d failed for $name: $del_err"
@@ -302,12 +309,12 @@ audit_branches() {
       fi
     else
       N_BRANCH=$((N_BRANCH + 1))
-      say "  would delete branch $name (merged into HEAD, last commit ${age}d ago)"
+      say_would "  would delete branch $name (merged into HEAD, last commit ${age}d ago)"
       br_row "$name" 1 0 "$age" "" delete 0
     fi
   done < <(g for-each-ref refs/heads --format='%(refname:short) %(committerdate:unix)' 2>/dev/null | grep -E -- "$AGENT_BRANCH_RE")
 
-  [ "$found" -eq 1 ] || say "  (none)"
+  [ "$found" -eq 1 ] || say_dim "  (none)"
 }
 
 # --- index.lock -------------------------------------------------------------------
@@ -335,14 +342,14 @@ $COMMON_DIR/index.lock"
     ts="$(mtime_epoch "$lock")"
     m="$(age_mins_of "$ts")"
     if [ "$m" -lt "$LOCK_AGE_MIN" ]; then
-      say "  left alone: $lock (${m}m old — a git process may still be running)"
+      say_dim "  left alone: $lock (${m}m old — a git process may still be running)"
       lk_row "$lock" "$m" keep
       continue
     fi
     if [ "$DO_CLEAN" -eq 1 ]; then
       if rm -f -- "$lock" 2>/dev/null; then
         N_LOCK=$((N_LOCK + 1))
-        say "  removed $lock (${m}m old, gate ${LOCK_AGE_MIN}m)"
+        say_ok "  removed $lock (${m}m old, gate ${LOCK_AGE_MIN}m)"
         lk_row "$lock" "$m" remove 1
       else
         warn "could not remove $lock"
@@ -350,11 +357,11 @@ $COMMON_DIR/index.lock"
       fi
     else
       N_LOCK=$((N_LOCK + 1))
-      say "  would remove $lock (${m}m old, gate ${LOCK_AGE_MIN}m)"
+      say_would "  would remove $lock (${m}m old, gate ${LOCK_AGE_MIN}m)"
       lk_row "$lock" "$m" remove 0
     fi
   done <<< "$locks"
-  [ "$found" -eq 1 ] || say "  (none)"
+  [ "$found" -eq 1 ] || say_dim "  (none)"
 }
 
 # --- conflict litter ---------------------------------------------------------------
@@ -372,7 +379,7 @@ lt_row() {  # path bytes action [applied [error]]
 audit_conflict_litter() {
   hdr "Conflict litter (*.orig *.rej *.BACKUP.* *.BASE.* *.LOCAL.* *.REMOTE.*)"
   if [ "$IS_BARE" = "true" ]; then
-    say "  (bare repo — no working tree)"
+    say_dim "  (bare repo — no working tree)"
     return 0
   fi
   local f base bytes found=0
@@ -390,7 +397,7 @@ audit_conflict_litter() {
     if [ "$DO_CLEAN" -eq 1 ]; then
       if rm -f -- "$ROOT/$f" 2>/dev/null; then
         N_LITTER=$((N_LITTER + 1)); LITTER_BYTES=$((LITTER_BYTES + bytes))
-        say "  removed $f (${bytes} B)"
+        say_ok "  removed $f (${bytes} B)"
         lt_row "$f" "$bytes" delete 1
       else
         warn "could not remove $f"
@@ -398,14 +405,14 @@ audit_conflict_litter() {
       fi
     else
       N_LITTER=$((N_LITTER + 1)); LITTER_BYTES=$((LITTER_BYTES + bytes))
-      say "  would remove $f (${bytes} B)"
+      say_would "  would remove $f (${bytes} B)"
       lt_row "$f" "$bytes" delete 0
     fi
   done < <(g ls-files --others --exclude-standard -z 2>/dev/null)
   if [ "$found" -eq 1 ]; then
     say "  total: $N_LITTER file(s), $LITTER_BYTES B"
   else
-    say "  (none)"
+    say_dim "  (none)"
   fi
 }
 
@@ -424,18 +431,56 @@ audit_stashes() {
     fi
   done < <(g stash list --format='%ct%x09%gd%x09%gs' 2>/dev/null)
   if [ "$N_STASH" -eq 0 ]; then
-    say "  (none)"
+    say_dim "  (none)"
   else
-    say "  stashes are user data — never auto-dropped; review then: git stash drop <ref>"
+    say_dim "  stashes are user data — never auto-dropped; review then: git stash drop <ref>"
   fi
+}
+
+# --- finale card (styled standalone runs only) ---------------------------------------
+print_git_card() {
+  local total=$((N_PRUNABLE + N_WT + N_BRANCH + N_LOCK + N_LITTER))
+  echo
+  s_card_open
+  if [ "$DO_CLEAN" -eq 1 ]; then
+    s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty git --clean${C_RESET}"
+    if [ "$total" -eq 0 ]; then
+      s_card_line "   nothing needed doing — already spotless ✨"
+    else
+      [ "$N_PRUNABLE" -gt 0 ] && s_card_line "   pruned $(s_n "$N_PRUNABLE" 'worktree entry' 'worktree entries')"
+      [ "$N_WT" -gt 0 ] && s_card_line "   removed $(s_n "$N_WT" 'worktree' 'worktrees')"
+      [ "$N_BRANCH" -gt 0 ] && s_card_line "   deleted $(s_n "$N_BRANCH" 'branch' 'branches')"
+      [ "$N_LOCK" -gt 0 ] && s_card_line "   removed $(s_n "$N_LOCK" 'index.lock' 'index.locks')"
+      [ "$N_LITTER" -gt 0 ] && s_card_line "   swept $(s_n "$N_LITTER" 'litter file' 'litter files') (${LITTER_BYTES} B)"
+      s_card_line
+      s_card_line "   thanks for partying responsibly 🎉"
+    fi
+  elif [ "$total" -gt 0 ]; then
+    s_card_line "${C_BOLD}${C_YEL}🧹 the damage — git${C_RESET}"
+    [ "$N_PRUNABLE" -gt 0 ] && s_card_line "   $(s_n "$N_PRUNABLE" 'prunable worktree entry' 'prunable worktree entries')"
+    [ "$N_WT" -gt 0 ] && s_card_line "   $(s_n "$N_WT" 'stale worktree ready to go' 'stale worktrees ready to go')"
+    [ "$N_BRANCH" -gt 0 ] && s_card_line "   $(s_n "$N_BRANCH" 'merged agent branch to delete' 'merged agent branches to delete')"
+    [ "$N_LOCK" -gt 0 ] && s_card_line "   $(s_n "$N_LOCK" 'stale index.lock' 'stale index.locks')"
+    [ "$N_LITTER" -gt 0 ] && s_card_line "   $(s_n "$N_LITTER" 'litter file' 'litter files') (${LITTER_BYTES} B)"
+    [ "$N_STASH" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_STASH" 'stash on the shelf — your call' 'stashes on the shelf — your call'))${C_RESET}"
+    s_card_line
+    s_card_line "   closing time: ${C_CYAN}afterparty git --clean${C_RESET}"
+  else
+    s_card_line "${C_BOLD}${C_GRN}✨ spotless — no git mess left behind${C_RESET}"
+    [ "$N_STASH" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_STASH" 'stash on the shelf — your call' 'stashes on the shelf — your call'))${C_RESET}"
+    s_card_line "   see you next session 🎉"
+  fi
+  s_card_close
 }
 
 # --- main ----------------------------------------------------------------------------
 if [ "$JSON" -eq 0 ]; then
   if [ "$DO_CLEAN" -eq 1 ]; then
-    echo "CLEAN — applying safe git cleanup in $ROOT"
+    s_mode "$C_RED" "CLEAN" " — sweeping up the git leftovers in $ROOT (safe subset only)" \
+      "CLEAN — applying safe git cleanup in $ROOT"
   else
-    echo "DRY RUN — reporting git leftovers in $ROOT (use --clean to apply the safe subset)"
+    s_mode "$C_YEL" "DRY RUN" " — checking what the party did to $ROOT (--clean applies the safe subset)" \
+      "DRY RUN — reporting git leftovers in $ROOT (use --clean to apply the safe subset)"
   fi
 fi
 
@@ -451,5 +496,9 @@ if [ "$JSON" -eq 0 ]; then
   echo
   echo "Summary: $N_PRUNABLE prunable, $N_WT $verb worktree(s), $N_BRANCH $verb_br branch(es), $N_LOCK stale lock(s), $N_LITTER litter file(s) ($LITTER_BYTES B), $N_STASH stash(es) (report only)"
   [ "$DO_CLEAN" -eq 1 ] || echo "Nothing was changed."
+  tally_add git.findings "$((N_PRUNABLE + N_WT + N_BRANCH + N_LOCK + N_LITTER))"
+  tally_add git.litter_bytes "$LITTER_BYTES"
+  tally_add git.stashes "$N_STASH"
+  if cards_on; then print_git_card; fi
 fi
 exit 0

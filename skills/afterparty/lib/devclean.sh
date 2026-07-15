@@ -21,6 +21,8 @@ if [ -z "${HOME:-}" ]; then
 fi
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# TTY-gated styling + finale cards (plain passthrough on pipes).
+. "$DIR/style.sh"
 OS="$(uname -s)"
 
 DRY_RUN=1
@@ -53,6 +55,10 @@ done
 mode_label() {
   [ "$DRY_RUN" -eq 1 ] && echo "DRY RUN" || echo "APPLY"
 }
+
+MODE_C="$C_YEL"
+if [ "$DRY_RUN" -eq 0 ]; then MODE_C="$C_RED"; fi
+N_PROC=0
 
 human_mb() {
   awk -v kb="${1:-0}" 'BEGIN { printf "%.1f MB", kb / 1024 }'
@@ -110,10 +116,11 @@ pids_by_pattern() {
 }
 
 print_process_table() {
-  local pids="$1" pid rss total=0 count=0
+  local pids="$1" pid rss total=0 count=0 hc="" hr=""
   [ -n "$pids" ] || return 1
 
-  printf '  %-7s %-7s %-7s %-8s %-6s %-10s %s\n' PID PPID PGID RSS CPU ELAPSED COMMAND
+  if [ "$STYLE_ON" -eq 1 ]; then hc="$C_DIM"; hr="$C_RESET"; fi
+  printf '  %s%-7s %-7s %-7s %-8s %-6s %-10s %s%s\n' "$hc" PID PPID PGID RSS CPU ELAPSED COMMAND "$hr"
   for pid in $pids; do
     rss="$(rss_kb_for "$pid")"
     total=$((total + ${rss:-0}))
@@ -129,12 +136,12 @@ terminate_pids() {
   [ -n "$pids" ] || return 0
 
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "  would SIGTERM PIDs: $pids"
+    s_would "  would SIGTERM PIDs: $pids"
     return 0
   fi
 
   for pid in $pids; do
-    kill -TERM "$pid" 2>/dev/null && echo "  SIGTERM -> pid $pid"
+    kill -TERM "$pid" 2>/dev/null && s_kill "  SIGTERM -> pid $pid"
   done
 
   waited=0
@@ -150,19 +157,21 @@ terminate_pids() {
   done
 
   for pid in $remaining; do
-    kill -KILL "$pid" 2>/dev/null && echo "  SIGKILL -> pid $pid"
+    kill -KILL "$pid" 2>/dev/null && s_kill "  SIGKILL -> pid $pid"
   done
 }
 
 cleanup_pattern() {
   local label="$1" pattern="$2" scope="${3:-all}" pids
   pids="$(filter_pids $(pids_by_pattern "$pattern" "$scope"))"
-  echo
-  echo "=== $label ($scope) ==="
+  s_hdr "$label ($scope)"
   if [ -z "$pids" ]; then
-    echo "  (none)"
+    s_dim "  (none)"
     return 0
   fi
+  # shellcheck disable=SC2086
+  set -- $pids
+  N_PROC=$((N_PROC + $#))
   print_process_table "$pids"
   terminate_pids "$pids"
 }
@@ -185,13 +194,13 @@ ORPHAN_PATTERNS=(
 run_safe_orphans() {
   local re
   re="$(join_re "${ORPHAN_PATTERNS[@]}")"
-  echo "devclean safe orphan audit ($(mode_label))"
+  s_lead "$MODE_C" "devclean safe orphan audit ($(mode_label))" "devclean safe orphan audit ($(mode_label))"
   cleanup_pattern "Safe orphaned dev processes" "$re" "orphans"
 }
 
 run_deep() {
   echo
-  echo "Deep daemon audit ($(mode_label))"
+  s_lead "$MODE_C" "Deep daemon audit ($(mode_label))" "Deep daemon audit ($(mode_label))"
   cleanup_pattern "Kotlin LSP" 'kotlinLsp' all
   cleanup_pattern "Gradle Daemon" 'org\.gradle\.launcher\.daemon|GradleDaemon' all
   cleanup_pattern "Flutter Daemon" 'flutter_tools\.snapshot daemon' all
@@ -203,18 +212,20 @@ run_deep() {
   cleanup_pattern "LogiRightSight" 'LogiRightSight' all
 
   if [ "$OS" = "Darwin" ] && command -v xcrun >/dev/null 2>&1; then
-    echo
-    echo "=== iOS Simulators ==="
+    s_hdr "iOS Simulators"
     sim_pids="$(filter_pids $(pids_by_pattern 'CoreSimulator|Simulator\.app' all))"
     if [ -n "$sim_pids" ]; then
+      # shellcheck disable=SC2086
+      set -- $sim_pids
+      N_PROC=$((N_PROC + $#))
       print_process_table "$sim_pids"
       if [ "$DRY_RUN" -eq 1 ]; then
-        echo "  would run: xcrun simctl shutdown all"
+        s_would "  would run: xcrun simctl shutdown all"
       else
-        xcrun simctl shutdown all 2>/dev/null && echo "  shutdown all simulators"
+        xcrun simctl shutdown all 2>/dev/null && s_ok "  shutdown all simulators"
       fi
     else
-      echo "  (none)"
+      s_dim "  (none)"
     fi
   fi
 }
@@ -230,8 +241,7 @@ patch_crash_reporters() {
     "$HOME/.vscode-oss"
   )
 
-  echo
-  echo "=== IDE crash reporters ==="
+  s_hdr "IDE crash reporters"
   found=0
   for dir in "${dirs[@]}"; do
     argv="$dir/argv.json"
@@ -240,20 +250,19 @@ patch_crash_reporters() {
     found=1
     label="$(basename "$dir" | sed 's/^\.//')"
     if [ "$DRY_RUN" -eq 1 ]; then
-      echo "  would disable crash reporter in $label ($argv)"
+      s_would "  would disable crash reporter in $label ($argv)"
     else
       sed -i.bak 's/"enable-crash-reporter"[[:space:]]*:[[:space:]]*true/"enable-crash-reporter": false/' "$argv"
       rm -f "$argv.bak"
-      echo "  disabled crash reporter in $label"
+      s_ok "  disabled crash reporter in $label"
     fi
   done
-  [ "$found" -eq 1 ] || echo "  (none enabled)"
+  [ "$found" -eq 1 ] || s_dim "  (none enabled)"
 }
 
 clean_crashpad_dumps() {
   local count=0 dir diag
-  echo
-  echo "=== Crashpad dumps ==="
+  s_hdr "Crashpad dumps"
 
   if [ "$OS" = "Darwin" ]; then
     for dir in "$HOME/Library/Application Support"/*/Crashpad/pending "$HOME/Library/Application Support"/*/Crashpad/completed; do
@@ -262,10 +271,10 @@ clean_crashpad_dumps() {
       [ "${n:-0}" -gt 0 ] || continue
       count=$((count + n))
       if [ "$DRY_RUN" -eq 1 ]; then
-        echo "  would delete $n files under $dir"
+        s_would "  would delete $n files under $dir"
       else
         find "$dir" -type f -exec rm -f {} + 2>/dev/null
-        echo "  deleted $n files under $dir"
+        s_ok "  deleted $n files under $dir"
       fi
     done
 
@@ -275,10 +284,10 @@ clean_crashpad_dumps() {
       if [ "${n:-0}" -gt 0 ]; then
         count=$((count + n))
         if [ "$DRY_RUN" -eq 1 ]; then
-          echo "  would delete $n chrome_crashpad_handler reports"
+          s_would "  would delete $n chrome_crashpad_handler reports"
         else
           find "$diag" -name 'chrome_crashpad_handler*.ips' -type f -exec rm -f {} + 2>/dev/null
-          echo "  deleted $n chrome_crashpad_handler reports"
+          s_ok "  deleted $n chrome_crashpad_handler reports"
         fi
       fi
     fi
@@ -289,22 +298,21 @@ clean_crashpad_dumps() {
       [ "${n:-0}" -gt 0 ] || continue
       count=$((count + n))
       if [ "$DRY_RUN" -eq 1 ]; then
-        echo "  would delete $n files under $dir"
+        s_would "  would delete $n files under $dir"
       else
         find "$dir" -type f -exec rm -f {} + 2>/dev/null
-        echo "  deleted $n files under $dir"
+        s_ok "  deleted $n files under $dir"
       fi
     done
   fi
 
-  [ "$count" -gt 0 ] || echo "  (none)"
+  [ "$count" -gt 0 ] || s_dim "  (none)"
 }
 
 disable_background_agents() {
-  echo
-  echo "=== Background agents ==="
+  s_hdr "Background agents"
   if [ "$OS" != "Darwin" ] || ! command -v launchctl >/dev/null 2>&1; then
-    echo "  launchctl unavailable"
+    s_dim "  launchctl unavailable"
     return 0
   fi
 
@@ -319,19 +327,19 @@ disable_background_agents() {
     launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 || continue
     found=1
     if [ "$DRY_RUN" -eq 1 ]; then
-      echo "  would disable $name ($label)"
+      s_would "  would disable $name ($label)"
     else
       launchctl disable "gui/$(id -u)/$label" 2>/dev/null || true
       launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
-      echo "  disabled $name ($label)"
+      s_ok "  disabled $name ($label)"
     fi
   done
-  [ "$found" -eq 1 ] || echo "  (none registered)"
+  [ "$found" -eq 1 ] || s_dim "  (none registered)"
 }
 
 run_optimize() {
   echo
-  echo "Optimize audit ($(mode_label))"
+  s_lead "$MODE_C" "Optimize audit ($(mode_label))" "Optimize audit ($(mode_label))"
   patch_crash_reporters
   clean_crashpad_dumps
   disable_background_agents
@@ -352,10 +360,10 @@ clean_dir() {
   DISK_TOTAL_KB=$((DISK_TOTAL_KB + kb))
 
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "  would clean $label: $target ($(human_mb "$kb"))"
+    s_would "  would clean $label: $target ($(human_mb "$kb"))"
   else
     rm -rf "$target"
-    echo "  cleaned $label: $target ($(human_mb "$kb"))"
+    s_ok "  cleaned $label: $target ($(human_mb "$kb"))"
   fi
 }
 
@@ -393,9 +401,9 @@ clean_find() {
   [ "$found" -gt 0 ] || return 0
   DISK_TOTAL_KB=$((DISK_TOTAL_KB + total))
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "  would clean $found $label dirs ($(human_mb "$total"))"
+    s_would "  would clean $found $label dirs ($(human_mb "$total"))"
   else
-    echo "  cleaned $found $label dirs ($(human_mb "$total"))"
+    s_ok "  cleaned $found $label dirs ($(human_mb "$total"))"
   fi
 }
 
@@ -419,21 +427,19 @@ run_repo_artifacts() {
     return 0
   fi
 
-  echo
-  echo "=== Current repo artifacts ==="
+  s_hdr "Current repo artifacts"
   if [ "$DRY_RUN" -eq 1 ]; then
-    "$DIR/clean-artifacts.sh"
+    AFTERPARTY_CARD=0 "$DIR/clean-artifacts.sh"
   else
-    "$DIR/clean-artifacts.sh" --clean
+    AFTERPARTY_CARD=0 "$DIR/clean-artifacts.sh" --clean
   fi
 }
 
 run_disk() {
   echo
-  echo "Disk cleanup audit ($(mode_label))"
+  s_lead "$MODE_C" "Disk cleanup audit ($(mode_label))" "Disk cleanup audit ($(mode_label))"
 
-  echo
-  echo "=== macOS developer caches ==="
+  s_hdr "macOS developer caches"
   if [ "$OS" = "Darwin" ]; then
     clean_dir "Xcode DerivedData" "$HOME/Library/Developer/Xcode/DerivedData"
     clean_dir "iOS DeviceSupport" "$HOME/Library/Developer/Xcode/iOS DeviceSupport"
@@ -441,26 +447,23 @@ run_disk() {
     clean_dir "CocoaPods cache" "$HOME/Library/Caches/CocoaPods"
     clean_dir "Playwright cache" "$HOME/Library/Caches/ms-playwright"
   else
-    echo "  (not macOS)"
+    s_dim "  (not macOS)"
   fi
 
-  echo
-  echo "=== Cross-platform developer caches ==="
+  s_hdr "Cross-platform developer caches"
   clean_dir "Gradle caches" "$HOME/.gradle/caches"
   clean_dir "Gradle wrapper" "$HOME/.gradle/wrapper"
   clean_dir "CocoaPods repos" "$HOME/.cocoapods/repos"
   clean_dir "Pub cache" "$HOME/.pub-cache"
   clean_dir "npm cache" "$HOME/.npm"
 
-  echo
-  echo "=== AI tool caches ==="
+  s_hdr "AI tool caches"
   clean_dir "Gemini browser recordings" "$HOME/.gemini/antigravity/browser_recordings"
   clean_dir "Codex sessions" "$HOME/.codex/sessions"
   clean_dir "Codex logs" "$HOME/.codex/log"
   clean_fvm_incomplete
 
-  echo
-  echo "=== Project artifacts under $DOCUMENTS_ROOT ==="
+  s_hdr "Project artifacts under $DOCUMENTS_ROOT"
   clean_find "project build/" "$DOCUMENTS_ROOT" "build" \
     "pubspec.yaml" "build.gradle" "build.gradle.kts" "Makefile" "CMakeLists.txt"
   clean_find "project .dart_tool/" "$DOCUMENTS_ROOT" ".dart_tool" "pubspec.yaml"
@@ -481,7 +484,11 @@ run_disk() {
   fi
 }
 
-echo "Mode: $(mode_label)"
+if [ "$DRY_RUN" -eq 1 ]; then
+  s_lead "$MODE_C" "Mode: $(mode_label) — look, don't touch" "Mode: $(mode_label)"
+else
+  s_lead "$MODE_C" "Mode: $(mode_label) — closing time" "Mode: $(mode_label)"
+fi
 run_safe_orphans
 [ "$DEEP" -eq 1 ] && run_deep
 [ "$OPTIMIZE" -eq 1 ] && run_optimize
@@ -489,5 +496,32 @@ run_safe_orphans
 
 if [ "$DEEP" -eq 0 ] && [ "$OPTIMIZE" -eq 0 ] && [ "$DISK" -eq 0 ]; then
   echo
-  echo "Tip: add --deep, --optimize, or --disk. Add --apply only after reviewing the dry run."
+  s_dim "Tip: add --deep, --optimize, or --disk. Add --apply only after reviewing the dry run."
+fi
+
+# Finale card (styled runs only; doctor suppresses via AFTERPARTY_CARD=0).
+if cards_on; then
+  echo
+  s_card_open
+  if [ "$DRY_RUN" -eq 0 ]; then
+    s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty devclean --apply${C_RESET}"
+    if [ "$N_PROC" -eq 0 ] && [ "$DISK_TOTAL_KB" -eq 0 ]; then
+      s_card_line "   nothing needed doing — already spotless ✨"
+    else
+      [ "$N_PROC" -gt 0 ] && s_card_line "   $(s_n "$N_PROC" 'process sent home' 'processes sent home')"
+      [ "$DISK_TOTAL_KB" -gt 0 ] && s_card_line "   $(human_mb "$DISK_TOTAL_KB") hauled to the curb"
+      s_card_line
+      s_card_line "   thanks for partying responsibly 🎉"
+    fi
+  elif [ "$N_PROC" -gt 0 ] || [ "$DISK_TOTAL_KB" -gt 0 ]; then
+    s_card_line "${C_BOLD}${C_YEL}🧹 the damage — devclean${C_RESET}"
+    [ "$N_PROC" -gt 0 ] && s_card_line "   $(s_n "$N_PROC" 'orphaned process still partying' 'orphaned processes still partying')"
+    [ "$DISK_TOTAL_KB" -gt 0 ] && s_card_line "   $(human_mb "$DISK_TOTAL_KB") of caches to haul out"
+    s_card_line
+    s_card_line "   closing time: ${C_CYAN}afterparty devclean --apply${C_RESET}"
+  else
+    s_card_line "${C_BOLD}${C_GRN}✨ spotless — the house is quiet${C_RESET}"
+    s_card_line "   see you next session 🎉"
+  fi
+  s_card_close
 fi

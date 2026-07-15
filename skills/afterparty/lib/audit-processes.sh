@@ -23,6 +23,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/protect.sh"
 # JSON Lines helpers for --json output.
 . "$DIR/json.sh"
+# TTY-gated styling + finale cards (plain passthrough on pipes).
+. "$DIR/style.sh"
 
 # Category patterns (extended regex, matched against the full command string).
 TESTS_RE='vitest|jest|mocha|jasmine|ava |pytest|pnpm test|npm test|yarn test|vitest run|pnpm exec vitest'
@@ -58,25 +60,30 @@ list_matches() {
     | awk -v self="$SELF_PGID" '$3 != self'
 }
 
-# Print a human report for a category.
+# Print a human report for a category. Sets LAST_N to the row count so the
+# caller can tally findings.
 report() {
-  local label="$1" re="$2" rows
+  local label="$1" re="$2" rows hc="" hr=""
   rows=$(list_matches "$re" || true)
-  printf '\n=== %s ===\n' "$label"
+  LAST_N=0
+  [ -n "$rows" ] && LAST_N=$(printf '%s\n' "$rows" | grep -c .)
+  s_hdr "$label"
   if [ -z "$rows" ]; then
-    echo "  (none)"
+    s_dim "  (none)"
     return
   fi
-  printf '  %-7s %-7s %-7s %-6s %-10s %s\n' PID PPID PGID %CPU ELAPSED COMMAND
+  if [ "$STYLE_ON" -eq 1 ]; then hc="$C_DIM"; hr="$C_RESET"; fi
+  printf '  %s%-7s %-7s %-7s %-6s %-10s %s%s\n' "$hc" PID PPID PGID %CPU ELAPSED COMMAND "$hr"
   echo "$rows" | while IFS= read -r line; do
     echo "$line" | awk '{printf "  %-7s %-7s %-7s %-6s %-10s ", $1,$2,$3,$4,$5; for(i=6;i<=NF && i<=14;i++) printf "%s ", $i; print ""}'
   done
 }
 
 report_localhost() {
-  printf '\n=== Localhost listeners (ports that may be active dev servers) ===\n'
+  s_hdr "Localhost listeners (ports that may be active dev servers)"
+  LAST_N=0
   if ! command -v lsof >/dev/null 2>&1; then
-    echo "  lsof unavailable"
+    s_dim "  lsof unavailable"
     return
   fi
   rows=$(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null \
@@ -84,10 +91,11 @@ report_localhost() {
     | match_i "$LOCALHOST_RE" \
     | match_iv "$PROTECT_RE" || true)
   if [ -z "$rows" ]; then
-    echo "  (none)"
+    s_dim "  (none)"
     return
   fi
-  echo "  COMMAND     PID     USER   FD   TYPE DEVICE SIZE/OFF NODE NAME"
+  LAST_N=$(printf '%s\n' "$rows" | grep -c .)
+  s_dim "  COMMAND     PID     USER   FD   TYPE DEVICE SIZE/OFF NODE NAME"
   echo "$rows" | awk '{print "  " $0}'
 }
 
@@ -104,10 +112,10 @@ pgids_for() {
 # SIGTERM then SIGKILL a process group.
 kill_group() {
   local pg="$1"
-  kill -TERM -"$pg" 2>/dev/null && echo "  SIGTERM -> pgid $pg"
+  kill -TERM -"$pg" 2>/dev/null && s_kill "  SIGTERM -> pgid $pg"
   sleep 2
   if ps -Ao pgid= 2>/dev/null | tr -d ' ' | match_q "^${pg}$"; then
-    kill -KILL -"$pg" 2>/dev/null && echo "  SIGKILL -> pgid $pg (straggler)"
+    kill -KILL -"$pg" 2>/dev/null && s_kill "  SIGKILL -> pgid $pg (straggler)"
   fi
 }
 
@@ -179,24 +187,70 @@ if [ "$JSON" -eq 1 ]; then
   exit 0
 fi
 
-if [ -z "$KILL_CATS" ]; then
-  echo "DRY RUN — reporting stray processes (use --kill <tests|dev|browser> to act)"
-  report_localhost
-  report "Test / watch runners (usually safe to kill)" "$TESTS_RE"
-  report "Dev servers (keep the one you are actively using)" "$DEV_RE"
-  report "Automation browsers (close via the browser tool first)" "$BROWSER_RE"
+# Finale cards (styled standalone runs only; the composite router owns the
+# card when AFTERPARTY_TALLY is set).
+print_procs_card() {
+  local total=$((N_TESTS + N_DEV + N_BROWSER)) cats=""
   echo
-  echo "Protected (never killed): $PROTECT_RE"
+  s_card_open
+  if [ "$total" -gt 0 ]; then
+    [ "$N_TESTS" -gt 0 ] && cats="tests"
+    [ "$N_DEV" -gt 0 ] && cats="${cats:+$cats,}dev"
+    [ "$N_BROWSER" -gt 0 ] && cats="${cats:+$cats,}browser"
+    s_card_line "${C_BOLD}${C_YEL}🧹 the damage — processes${C_RESET}"
+    [ "$N_TESTS" -gt 0 ] && s_card_line "   $(s_n "$N_TESTS" 'test runner still running laps' 'test runners still running laps')"
+    [ "$N_DEV" -gt 0 ] && s_card_line "   $(s_n "$N_DEV" 'dev server still serving' 'dev servers still serving')"
+    [ "$N_BROWSER" -gt 0 ] && s_card_line "   $(s_n "$N_BROWSER" 'automation browser nobody closed' 'automation browsers nobody closed')"
+    [ "$N_LISTEN" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_LISTEN" 'localhost listener up — likely yours' 'localhost listeners up — likely yours'))${C_RESET}"
+    s_card_line
+    s_card_line "   closing time: ${C_CYAN}afterparty audit --kill $cats${C_RESET}"
+  else
+    s_card_line "${C_BOLD}${C_GRN}✨ spotless — no stragglers, nobody hiding in the bathroom${C_RESET}"
+    [ "$N_LISTEN" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_LISTEN" 'localhost listener up — likely yours' 'localhost listeners up — likely yours'))${C_RESET}"
+    s_card_line "   see you next session 🎉"
+  fi
+  s_card_close
+}
+
+print_procs_receipt() {
+  echo
+  s_card_open
+  s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty audit --kill $KILL_CATS${C_RESET}"
+  if [ "$N_KILLED" -gt 0 ]; then
+    s_card_line "   $(s_n "$N_KILLED" 'process group shown the door' 'process groups shown the door')"
+  else
+    s_card_line "   nothing to kick out — floor was already clear ✨"
+  fi
+  s_card_line
+  s_card_line "   thanks for partying responsibly 🎉"
+  s_card_close
+}
+
+if [ -z "$KILL_CATS" ]; then
+  s_mode "$C_YEL" "DRY RUN" " — headcount only, nobody gets kicked out yet (use --kill <tests|dev|browser> to act)" \
+    "DRY RUN — reporting stray processes (use --kill <tests|dev|browser> to act)"
+  report_localhost;                                                N_LISTEN=$LAST_N
+  report "Test / watch runners (usually safe to kill)" "$TESTS_RE";  N_TESTS=$LAST_N
+  report "Dev servers (keep the one you are actively using)" "$DEV_RE"; N_DEV=$LAST_N
+  report "Automation browsers (close via the browser tool first)" "$BROWSER_RE"; N_BROWSER=$LAST_N
+  echo
+  s_dim "Protected (never killed): $PROTECT_RE"
+  tally_add procs.found "$((N_TESTS + N_DEV + N_BROWSER))"
+  tally_add procs.listeners "$N_LISTEN"
+  if cards_on; then print_procs_card; fi
   exit 0
 fi
 
+N_KILLED=0
 IFS=','
 for cat in $KILL_CATS; do
   re=$(category_re "$cat")
   if [ -z "$re" ]; then echo "unknown category: $cat (use tests|dev|browser)" >&2; exit 2; fi
-  echo "Killing category '$cat' (keep: ${KEEP:-none})"
+  s_lead "$C_RED" "Killing category '$cat' — last call (keep: ${KEEP:-none})" \
+    "Killing category '$cat' (keep: ${KEEP:-none})"
   pgs=$(pgids_for "$re" "$KEEP")
-  if [ -z "$pgs" ]; then echo "  nothing to kill"; continue; fi
+  if [ -z "$pgs" ]; then s_dim "  nothing to kill"; continue; fi
+  N_KILLED=$((N_KILLED + $(printf '%s\n' "$pgs" | grep -c .)))
   # pgids_for emits one pgid per line; the surrounding loop runs under
   # IFS=',' so word-splitting would glue them into one token — read by line.
   while IFS= read -r pg; do
@@ -205,4 +259,6 @@ for cat in $KILL_CATS; do
   done <<< "$pgs"
 done
 unset IFS
-echo "done"
+s_ok "done"
+tally_add procs.killed "$N_KILLED"
+if cards_on; then print_procs_receipt; fi
