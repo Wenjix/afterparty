@@ -59,6 +59,8 @@ mode_label() {
 MODE_C="$C_YEL"
 if [ "$DRY_RUN" -eq 0 ]; then MODE_C="$C_RED"; fi
 N_PROC=0
+N_OPT=0   # optimize findings/actions: crash reporters, crashpad files, agents
+CODEX_SESSION_AGE_DAYS=30   # matches Claude Code's default transcript retention
 
 human_mb() {
   awk -v kb="${1:-0}" 'BEGIN { printf "%.1f MB", kb / 1024 }'
@@ -248,6 +250,7 @@ patch_crash_reporters() {
     [ -f "$argv" ] || continue
     grep -q '"enable-crash-reporter"[[:space:]]*:[[:space:]]*true' "$argv" || continue
     found=1
+    N_OPT=$((N_OPT + 1))
     label="$(basename "$dir" | sed 's/^\.//')"
     if [ "$DRY_RUN" -eq 1 ]; then
       s_would "  would disable crash reporter in $label ($argv)"
@@ -306,6 +309,7 @@ clean_crashpad_dumps() {
     done
   fi
 
+  N_OPT=$((N_OPT + count))
   [ "$count" -gt 0 ] || s_dim "  (none)"
 }
 
@@ -326,6 +330,7 @@ disable_background_agents() {
     name="${entry##*:}"
     launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 || continue
     found=1
+    N_OPT=$((N_OPT + 1))
     if [ "$DRY_RUN" -eq 1 ]; then
       s_would "  would disable $name ($label)"
     else
@@ -407,6 +412,26 @@ clean_find() {
   fi
 }
 
+# Codex CLI keeps every session transcript forever (no built-in retention),
+# so old ones are fair game — but recent transcripts power resume and are the
+# audit trail of what agents did. Delete only date folders older than
+# CODEX_SESSION_AGE_DAYS, mirroring Claude Code's default retention. The
+# YYYY/MM/DD layout makes this a zero-padded string comparison, no mtimes.
+clean_codex_sessions() {
+  local base="$HOME/.codex/sessions" cutoff d rel
+  [ -d "$base" ] || return 0
+  cutoff="$(date -d "$CODEX_SESSION_AGE_DAYS days ago" +%Y/%m/%d 2>/dev/null \
+    || date -v -"${CODEX_SESSION_AGE_DAYS}d" +%Y/%m/%d 2>/dev/null)"
+  [ -n "$cutoff" ] || return 0
+  for d in "$base"/[0-9][0-9][0-9][0-9]/[0-9][0-9]/[0-9][0-9]; do
+    [ -d "$d" ] || continue
+    rel="${d#"$base"/}"
+    if [ "$rel" \< "$cutoff" ]; then
+      clean_dir "Codex sessions (>${CODEX_SESSION_AGE_DAYS}d)" "$d"
+    fi
+  done
+}
+
 clean_fvm_incomplete() {
   local base ver_dir ver_name
   for base in "$HOME/fvm/versions" "$HOME/.fvm/versions"; do
@@ -459,7 +484,7 @@ run_disk() {
 
   s_hdr "AI tool caches"
   clean_dir "Gemini browser recordings" "$HOME/.gemini/antigravity/browser_recordings"
-  clean_dir "Codex sessions" "$HOME/.codex/sessions"
+  clean_codex_sessions
   clean_dir "Codex logs" "$HOME/.codex/log"
   clean_fvm_incomplete
 
@@ -505,17 +530,19 @@ if cards_on; then
   s_card_open
   if [ "$DRY_RUN" -eq 0 ]; then
     s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty devclean --apply${C_RESET}"
-    if [ "$N_PROC" -eq 0 ] && [ "$DISK_TOTAL_KB" -eq 0 ]; then
+    if [ "$N_PROC" -eq 0 ] && [ "$DISK_TOTAL_KB" -eq 0 ] && [ "$N_OPT" -eq 0 ]; then
       s_card_line "   nothing needed doing — already spotless ✨"
     else
       [ "$N_PROC" -gt 0 ] && s_card_line "   $(s_n "$N_PROC" 'process sent home' 'processes sent home')"
+      [ "$N_OPT" -gt 0 ] && s_card_line "   tidied $(s_n "$N_OPT" 'optimize target' 'optimize targets')"
       [ "$DISK_TOTAL_KB" -gt 0 ] && s_card_line "   $(human_mb "$DISK_TOTAL_KB") hauled to the curb"
       s_card_line
       s_card_line "   thanks for partying responsibly 🎉"
     fi
-  elif [ "$N_PROC" -gt 0 ] || [ "$DISK_TOTAL_KB" -gt 0 ]; then
+  elif [ "$N_PROC" -gt 0 ] || [ "$DISK_TOTAL_KB" -gt 0 ] || [ "$N_OPT" -gt 0 ]; then
     s_card_line "${C_BOLD}${C_YEL}🧹 the damage — devclean${C_RESET}"
     [ "$N_PROC" -gt 0 ] && s_card_line "   $(s_n "$N_PROC" 'orphaned process still partying' 'orphaned processes still partying')"
+    [ "$N_OPT" -gt 0 ] && s_card_line "   $(s_n "$N_OPT" 'optimize target to tidy' 'optimize targets to tidy')"
     [ "$DISK_TOTAL_KB" -gt 0 ] && s_card_line "   $(human_mb "$DISK_TOTAL_KB") of caches to haul out"
     s_card_line
     s_card_line "   closing time: ${C_CYAN}afterparty devclean --apply${C_RESET}"
