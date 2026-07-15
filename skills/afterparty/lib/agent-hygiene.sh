@@ -140,14 +140,17 @@ case "$cmd" in
         mkdir -p "$(dirname "$REPORT_FILE")"
       fi
       echo "note: writing audit report to $REPORT_FILE" >&2
-      # Children write into this pipe (not a tty) so their output is plain;
-      # the sed turns their "=== X ===" headers into markdown H2s for the
-      # next session's reader. Contract data lines never match the pattern.
-      {
+      # Children write into this pipe (not a tty) so their output is plain,
+      # and AFTERPARTY_STYLE=never makes that unconditional — a globally
+      # exported =always must never put ANSI into report.md. The sed turns
+      # the "=== X ===" headers into markdown H2s for the next session's
+      # reader; contract data lines never match the pattern.
+      (
+        export AFTERPARTY_STYLE=never
         printf '# afterparty report — what the last session left behind\n\n'
         printf 'generated %s — afterparty audit --report\n\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
         run_audit
-      } | sed -e 's/^=== \(.*\) ===$/## \1/' | tee "$REPORT_FILE"
+      ) | sed -e 's/^=== \(.*\) ===$/## \1/' | tee "$REPORT_FILE"
     else
       if [ "$STYLE_ON" -eq 1 ] && [ -z "$JSON_FLAG" ]; then
         s_banner "afterparty — last call" "let's see what the session left behind"
