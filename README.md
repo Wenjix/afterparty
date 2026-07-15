@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/afterparty-logo.svg" alt="Afterparty logo" width="132" height="132">
+  <img src="./assets/afterparty-logo.svg" alt="Afterparty confetti logo" width="132" height="132">
 </p>
 
 <h1 align="center">Afterparty</h1>
