@@ -204,7 +204,7 @@ list_entries() {
 }
 
 stop_entries() {
-  local do_kill=0 all_roots=0 want_root want_kind="" keep_pgid="" __row ts root cwd pid pgid kind port purpose command_label groups="" group
+  local do_kill=0 all_roots=0 want_root want_kind="" keep_pgid="" __row ts root cwd pid pgid kind port purpose command_label groups="" group current_pgid current_cmd
   want_root="$(workspace_root "$PWD")"
 
   while [ $# -gt 0 ]; do
@@ -236,6 +236,24 @@ stop_entries() {
     if [ -z "$pgid" ] || [ "$pgid" = "$SELF_PGID" ]; then
       s_dim "  skip pid $pid: pgid is shared with this shell (${pgid:-unknown})"
       continue
+    fi
+    # Recycled-pid defense: never trust a recorded row blindly. A recycled
+    # pid virtually never keeps its recorded pgid, and a changed command
+    # line is the other tell. (On Git Bash pgid_for is empty — no-op.)
+    current_pgid="$(pgid_for "$pid")"
+    if [ -n "$current_pgid" ] && [ "$current_pgid" != "$pgid" ]; then
+      s_dim "  skip pid $pid: group changed since it was recorded (pid recycled?)"
+      continue
+    fi
+    if [ -n "${command_label:-}" ]; then
+      current_cmd="$(command_for "$pid")"
+      case "$current_cmd" in
+        ''|*"$command_label"*) ;;
+        *)
+          s_dim "  skip pid $pid: command changed since it was recorded (pid recycled?)"
+          continue
+          ;;
+      esac
     fi
     if [ -n "$keep_pgid" ] && [ "$pgid" = "$keep_pgid" ]; then
       s_dim "  keep pgid $pgid: ${purpose:-$command_label}"

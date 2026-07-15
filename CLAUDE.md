@@ -56,8 +56,8 @@ grepping for \r lies); if a working copy shows w/crlf, fix via `rm` +
 **Conventions:** lowercase conventional commits (feat:/fix:/docs:/style:).
 LF endings enforced via .gitattributes — scripts must never pick up CRLF.
 
-**Known backlog:** ledger pgid-recycling defense; no CI (shellcheck would be a
-good addition). Cleanup areas researched (2026-07) but deliberately deferred:
+**Known backlog:** no CI (shellcheck would be a good addition). Cleanup areas
+researched (2026-07) but deliberately deferred:
 ml/gpu audit category (jupyter, ollama/vllm, tensorboard, nvidia-smi VRAM
 orphans), docker debris, and agent harness-state cleanup (old
 transcripts/scratchpads, temp browser profiles).
