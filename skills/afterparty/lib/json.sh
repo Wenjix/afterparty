@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # json.sh - shared JSON Lines helpers, sourced (not executed) by the lib
 # scripts that support --json: audit-git.sh, audit-processes.sh,
 # process-ledger.sh. Pure tr/sed, no jq. Each finding is one compact object

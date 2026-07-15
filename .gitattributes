@@ -3,6 +3,7 @@
 *.md text eol=lf
 *.json text eol=lf
 *.svg text eol=lf
+*.yml text eol=lf
 bin/afterparty text eol=lf
 skills/afterparty/bin/afterparty text eol=lf
 *.png binary

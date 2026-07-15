@@ -47,8 +47,9 @@ mechanics when you touch them.
 macOS/Linux. Under Git Bash, `rg` and `lsof` are missing and `ps` lacks -Ao, so
 process audits print loud warnings and mostly-empty reports — expected, not a bug.
 `afterparty git` IS fully testable here (git works; note it emits C:/ paths while
-$PWD is /c/ — never compare them). Verify with `bash -n`, dry runs, and
-`claude plugin validate .`; real kill behavior is only testable on macOS/Linux.
+$PWD is /c/ — never compare them). Verify with `bash -n`, `bash tests/run.sh`
+(tests/test-kill.sh self-skips here), and `claude plugin validate .`; real kill
+behavior is covered by CI's ubuntu job (tests/test-kill.sh — live processes).
 Check line endings with `git ls-files --eol` (MSYS grep silently strips CR, so
 grepping for \r lies); if a working copy shows w/crlf, fix via `rm` +
 `git checkout --`.
@@ -56,8 +57,9 @@ grepping for \r lies); if a working copy shows w/crlf, fix via `rm` +
 **Conventions:** lowercase conventional commits (feat:/fix:/docs:/style:).
 LF endings enforced via .gitattributes — scripts must never pick up CRLF.
 
-**Known backlog:** no CI (shellcheck would be a good addition). Cleanup areas
-researched (2026-07) but deliberately deferred:
+**Known backlog:** shellcheck advisory findings (CI runs `--severity=error`
+blocking; full severity is advisory-only for now). Cleanup areas researched
+(2026-07) but deliberately deferred:
 ml/gpu audit category (jupyter, ollama/vllm, tensorboard, nvidia-smi VRAM
 orphans), docker debris, and agent harness-state cleanup (old
 transcripts/scratchpads, temp browser profiles).

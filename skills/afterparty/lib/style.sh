@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # style.sh - shared terminal styling, sourced (not executed) by every lib
 # script. Styling is ADDITIVE and TTY-gated: pipes, --json, report.md, and
 # NO_COLOR always get the legacy plain bytes (that plain output is a contract

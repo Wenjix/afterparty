@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # protect.sh - shared protect list, sourced (not executed) by
 # process-ledger.sh and audit-processes.sh so both use the same regex.
 # Never signal these: editors, agent runtimes, and IDE-managed MCP servers whose
