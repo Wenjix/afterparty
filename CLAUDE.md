@@ -15,9 +15,17 @@ mechanics when you touch them.
 - The skill is a memory hook: keep SKILL.md tiny (~250 words max). Its frontmatter
   description is trigger-only, and the quoted phrases are search keywords — never
   remove them.
-- The scripts are the machinery: dry-run by default, kill by process group
-  (SIGTERM then SIGKILL), protect-list lives ONLY in
-  skills/afterparty/lib/protect.sh (shared — don't duplicate it).
+- The scripts are the machinery: dry-run by default. Two kill disciplines,
+  both deliberate: ledger/audit paths kill by process group (SIGTERM then
+  SIGKILL) and skip any group containing a protected process
+  (pgid_has_protected); devclean's orphan cleanup signals PIDs instead —
+  orphans may share groups with unrelated processes, so group-kill would be
+  riskier there. Orphan-targeting of MCP/agent processes is devclean's
+  feature, not a protect-list violation. The protect list + its helpers live
+  ONLY in skills/afterparty/lib/protect.sh (shared — don't duplicate).
+- devclean --disk age-gates Codex session transcripts (CODEX_SESSION_AGE_DAYS,
+  30 like Claude Code's default retention): transcripts are resume history
+  and the audit trail of agent work — only stale YYYY/MM/DD date-folders go.
 - Three mutation paths: `stop --kill` stops ledger-recorded groups;
   `audit --kill tests|dev|browser` kills by pattern category; `git --clean`
   applies only the safe git subset (worktree prune, clean stale worktrees,
