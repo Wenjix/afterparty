@@ -5,33 +5,42 @@
 <h1 align="center">Afterparty</h1>
 
 <p align="center">
-  A skill that makes agents clean up after the party.
+  Agents throw the party. Afterparty handles the morning after.
 </p>
 
 <p align="center">
   <img src="./assets/afterparty-terminal.svg" alt="Afterparty dry-run audit ending in the damage-report card" width="860">
 </p>
 
-Afterparty is for the boring mess that coding agents leave behind: localhost
-servers, test watchers, orphaned MCP processes, browser automation, build
-artifacts, and dev caches.
+Every agent session ends the same way: the transcript closes, and the lights
+come up on whatever it left running. A dev server squatting on
+`localhost:3000`. A Vitest watcher nobody is watching. A headless Chrome with
+no owner. Worktrees and `claude/*` branches no one is coming back for, and a
+gigabyte of `.next` and `node_modules/.cache` that will rebuild itself the
+moment anyone asks.
 
-The design is intentionally split:
+Afterparty walks the venue, writes down everything it finds, and touches
+nothing until you say so.
 
-- **The skill is memory.** It tells the agent when to run cleanup.
-- **The script is machinery.** It audits, reports, and only acts after review.
+## Why Afterparty
 
-No giant prompt cleanup ritual. No guessing from `ps` after the fact. Run the
-script, inspect the dry run, then choose whether to apply anything.
-
-## Requirements
-
-- macOS or Linux with bash. On Windows, run under Git Bash or WSL.
-- [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for process matching;
-  the audit falls back to `grep -E` when it is missing.
-- `lsof` (optional) for the localhost listener report.
-- macOS-only devclean steps (`launchctl` agents, Xcode caches, iOS simulators)
-  are skipped on other platforms.
+- **One audit, the whole mess.** Processes, ports, watchers, automation
+  browsers, git session litter, rebuildable artifacts, dev caches — one
+  command, one report.
+- **It reports to the next agent, not just to you.** `--json` emits JSON
+  Lines, and `audit --report` persists a Markdown report — so the next
+  session starts by reading what the last one left running instead of
+  starting yet another server on `localhost:3000`.
+- **Dry-run isn't a mode, it's the default.** Every mutation hides behind an
+  explicit flag — `--kill`, `--clean`, `--apply` — scoped to exactly what the
+  dry run showed you.
+- **Nothing important dies.** Editors, shells, Codex, and shared MCP servers
+  sit on a protect list that every kill path checks before every signal.
+- **No prompt rituals, no `ps` archaeology.** Cleanup is a script you can
+  read, with a dry run you can inspect, not a wall of instructions the agent
+  half-remembers.
+- **Tested where it counts.** CI runs the suite on Linux and Windows, and the
+  kill paths are exercised against live processes — not mocks.
 
 ## Install
 
@@ -42,25 +51,33 @@ script, inspect the dry run, then choose whether to apply anything.
 /plugin install afterparty@afterparty
 ```
 
-The plugin also ships a `SessionEnd` hook — when a session ends it runs
-`afterparty audit --report`, so the leftovers report is already on disk when
-the next session starts — and a `/afterparty` slash command to run the audit
-on demand (`/afterparty clean` walks the gated cleanup paths).
+The plugin does two things a bare skill can't:
+
+- a `SessionEnd` hook runs `afterparty audit --report` when a session ends,
+  so the leftovers report is already on disk when the next session starts;
+- a `/afterparty` slash command runs the audit on demand
+  (`/afterparty clean` walks the gated cleanup paths).
 
 ### As a plain agent skill
 
-Afterparty follows the [Agent Skills](https://agentskills.io) standard. The
-skill folder is self-contained — `SKILL.md` plus the scripts it runs — so
-copying it installs everything. For Claude Code:
+Afterparty follows the [Agent Skills](https://agentskills.io) standard, and
+the skill folder is self-contained — `SKILL.md` plus every script it runs,
+with commands anchored to `${CLAUDE_SKILL_DIR}` so they work from whatever
+project the agent happens to be in. Copying the folder is the whole install.
+For Claude Code:
 
 ```bash
 cp -r skills/afterparty ~/.claude/skills/
 ```
 
-Other Agent Skills-compatible tools (OpenCode, Goose, Amp, Cursor, Gemini CLI,
-and more) install the same way: drop `skills/afterparty/` into that agent's
-skills directory. Note: claude.ai web sessions load the skill instructions but
-cannot execute the bundled bash scripts.
+OpenCode, Goose, Amp, Cursor, Gemini CLI, and other Agent Skills-compatible
+tools install the same way: drop `skills/afterparty/` into that agent's
+skills directory. (claude.ai web sessions load the skill's instructions but
+cannot execute the bundled scripts.)
+
+The skill itself stays tiny by design. It is the *when* — a memory hook that
+reminds the agent cleanup is due. The scripts are the *how*, and they are the
+only thing that ever acts.
 
 ### As a standalone CLI
 
@@ -70,7 +87,7 @@ cd afterparty
 bin/afterparty audit
 ```
 
-Or add the `bin` directory to your shell path:
+Or put `bin` on your path:
 
 ```bash
 export PATH="$PWD/bin:$PATH"
@@ -79,121 +96,98 @@ afterparty audit
 
 ## Commands
 
+Every command reports first. The right-hand column is the only way anything
+gets touched.
+
+| Command | Reports | Acts with |
+| --- | --- | --- |
+| `afterparty audit` | recorded processes, dev servers, watchers, browsers, git litter | `--kill tests\|dev\|browser` |
+| `afterparty stop` | ledger-recorded process groups | `--kill` |
+| `afterparty git` | stale worktrees, agent branches, lock files, conflict litter | `--clean` |
+| `afterparty artifacts` | rebuildable build/cache output | `--clean` |
+| `afterparty devclean` | orphans, plus `--deep` / `--optimize` / `--disk` targets | `--apply` |
+
+The bookkeeping commands — `list`, `add`, `prune`, `doctor` — only ever touch
+Afterparty's own ledger, never your system.
+
 ```bash
-afterparty list
-afterparty list --json
-afterparty audit
-afterparty audit --kill tests,dev
-afterparty audit --json
-afterparty audit --report
+afterparty audit                   # the everything report
+afterparty audit --json            # same findings, as JSON Lines
+afterparty audit --report          # persist the report for the next session
+afterparty audit --kill tests,dev  # kill stray watchers and dev servers
 afterparty add --pid <PID> --kind dev --port <PORT> --purpose "<why>" -- <command>
-afterparty stop
-afterparty stop --kill
-afterparty prune
-afterparty git
-afterparty git --clean
-afterparty artifacts
-afterparty artifacts --clean
-afterparty devclean
-afterparty devclean --deep
-afterparty devclean --optimize
-afterparty devclean --disk
-afterparty devclean --apply
-afterparty doctor
+afterparty list --json             # the ledger, for machines
+afterparty stop --kill             # stop everything the ledger recorded
+afterparty prune                   # drop dead ledger entries
+afterparty git --clean             # apply the safe git subset
+afterparty artifacts --clean       # delete rebuildable artifacts
+afterparty devclean --disk         # report the big disk offenders
+afterparty doctor                  # check the environment
 ```
 
-Everything risky is dry-run first. `stop` reports what it would stop unless you
-pass `--kill`. `audit` reports unless you pass `--kill <tests|dev|browser>`.
-`git` reports session leftovers unless you pass `--clean`. `artifacts` reports
-reclaimable build/cache output unless you pass `--clean`. `devclean` reports
-safe orphan/deep/optimize/disk targets unless you pass `--apply`.
+There are two kill paths, and they answer different questions. `stop --kill`
+stops what Afterparty *recorded*: process groups from the ledger, where
+ownership is already established. `audit --kill <tests|dev|browser>` handles
+the strays nobody recorded, matched by category pattern — pass
+`--keep <pgid>` to spare one.
 
-There are two kill paths: `stop --kill` stops process groups previously
-recorded in the ledger, while `audit --kill <tests|dev|browser>` kills stray
-processes matched by category pattern (pass `--keep <pgid>` to spare one).
+## Reports that outlive the session
 
-Audits speak agent, too. `--json` on `audit`, `list`, and `git` emits one JSON
-object per finding (JSON Lines). `audit --report` saves the report for the
-next session: to `report.md` at the repo root when the repo gitignores that
-name, otherwise to `~/.cache/agent-processes/report.md` — so a cleanup tool
-never litters your repos. Add `report.md` to a repo's `.gitignore` to opt in
-to per-repo reports.
+The morning-after report is the point, so it comes in three shapes:
 
-### Style
+- **Styled**, on an interactive terminal — for you (see [Style](#style)).
+- **JSON Lines**, via `--json` on `audit`, `list`, and `git` — one JSON
+  object per finding, for agents and scripts.
+- **Persisted**, via `audit --report` — written to `report.md` at the repo
+  root *only* when the repo already gitignores that name (a cleanup tool must
+  not litter your repos), otherwise to `~/.cache/agent-processes/report.md`.
+  Add `report.md` to a repo's `.gitignore` to opt in to per-repo reports. The
+  plugin's `SessionEnd` hook leans on this.
 
-On an interactive terminal, audits end with a little reward: color, glyph
-headers, and a finale card — a damage report when leftovers exist, confetti
-when the house is spotless, a receipt after a cleanup. Pipes, `--json`, and
-`report.md` always get plain text; `NO_COLOR` is honored; and
-`AFTERPARTY_STYLE=always|never|auto` overrides everything (precedence:
-`AFTERPARTY_STYLE` > `NO_COLOR` > tty detection).
+## The ledger
 
-## What It Tracks
+`afterparty add` records long-running processes in
+`~/.cache/agent-processes/ledger.tsv` — repo root, cwd, PID, PGID, kind,
+port, purpose, and command. Think of it as a note taped to the process: the
+next agent can see what is running *and why* before spinning up a duplicate.
 
-`afterparty add` records long-running processes in:
-
-```text
-~/.cache/agent-processes/ledger.tsv
-```
-
-Each entry includes repo root, cwd, PID, PGID, kind, port, purpose, and command.
-That means the next agent can see what is running and why before starting yet
-another server on `localhost:3000`.
-
-## What It Audits
+## The audit
 
 `afterparty audit` reports:
 
-- recorded agent-owned processes
+- processes recorded in the ledger
 - localhost listeners that look like dev servers
 - test/watch runners such as Vitest, Jest, and pytest
-- frontend/backend dev servers such as Next, Vite, Turbo, Bun, Uvicorn, and Rails
+- frontend/backend dev servers such as Next, Vite, Turbo, Bun, Uvicorn, and
+  Rails
 - automation browsers
 - git session litter: stale worktrees, agent branches, conflict files, stashes
-- protected processes that should not be killed
+- protected processes it will refuse to kill
 
-Afterparty protects editors, Codex, shells, and shared MCP servers such as
-`playwright-mcp` and `chrome-devtools-mcp`.
+The protect list covers editors, Codex, shells, and shared MCP servers such
+as `playwright-mcp` and `chrome-devtools-mcp`.
 
-## Git Cleanup
+## Git cleanup
 
-Agent fleets work through worktrees and branches, then vanish. `afterparty git`
-reports what they left behind, and `--clean` applies only the safe subset:
+Agent fleets work through worktrees and branches, then vanish. `afterparty
+git` reports what they left behind; `--clean` applies only the provably safe
+subset:
 
 - prune worktree admin data whose directory is already gone
-- remove **clean** worktrees idle past `--age` days (default 7; never `--force`)
-- delete agent-named branches (`claude/*`, `codex/*`, `cursor/*`, ...) that are
-  **merged** into HEAD (`-d`, never `-D`)
+- remove **clean** worktrees idle past `--age` days (default 7; never
+  `--force`)
+- delete agent-named branches (`claude/*`, `codex/*`, `cursor/*`, ...) that
+  are **merged** into HEAD (`-d`, never `-D`)
 - remove a `.git/index.lock` older than 60 minutes
-- delete **untracked** merge-conflict litter (`*.orig`, `*.rej`, `*.BACKUP.*`, ...)
+- delete **untracked** merge-conflict litter (`*.orig`, `*.rej`,
+  `*.BACKUP.*`, ...)
 
-Unmerged branches, dirty worktrees, and stashes are report-only, always — the
-report names the manual command instead of guessing for you.
+Unmerged branches, dirty worktrees, and stashes are report-only, always. For
+those, the report names the exact manual command instead of guessing for you.
 
-## Devclean Mode
+## Artifacts
 
-`afterparty devclean` borrows the useful shape of `devclean`: safe orphan
-cleanup, explicit deep cleanup, optimize mode, and disk mode.
-
-```bash
-afterparty devclean
-afterparty devclean --deep
-afterparty devclean --optimize
-afterparty devclean --disk
-```
-
-It is conservative by default. It does not treat every `crashpad_handler` as a
-safe orphan because normal active apps on macOS use those helpers. Crashpad file
-cleanup and crash reporter settings live behind `--optimize`, where you can
-review the exact targets first. Codex session transcripts are age-gated: only
-date folders older than 30 days are cleaned (they power resume and record what
-agents did). Tuning flags: `--documents-root DIR` and `--project-maxdepth N`
-scope the `--disk` project scan, and `--no-repo-artifacts` skips the
-current-repo artifact pass.
-
-## Artifact Cleanup
-
-`afterparty artifacts` reports rebuildable repo artifacts:
+`afterparty artifacts` reports rebuildable repo output:
 
 - `.turbo`, `.vite`, `.cache`, `node_modules/.cache`
 - `.next`, `dist`, `build`, `out`, `.output`
@@ -202,28 +196,83 @@ current-repo artifact pass.
 
 It skips git-tracked paths and nested git repositories.
 
-## Agent Skill
+## Devclean
 
-The reusable agent memory hook lives in:
+`afterparty devclean` borrows its shape from the `devclean` utility: safe
+orphan cleanup by default, with explicit escalation modes.
 
-```text
-skills/afterparty/SKILL.md
+```bash
+afterparty devclean            # safe orphan cleanup
+afterparty devclean --deep     # deep cleanup targets
+afterparty devclean --optimize # crashpad files, crash-reporter settings
+afterparty devclean --disk     # the big disk offenders
 ```
 
-The skill folder bundles the `bin/` and `lib/` scripts it runs, and its
-commands are anchored with `${CLAUDE_SKILL_DIR}` so they work from any project
-the agent happens to be in. The skill should stay small. The script does the
-work.
+It is conservative on purpose. It does not treat every `crashpad_handler` as
+a safe orphan — active apps on macOS use those helpers — so crashpad cleanup
+lives behind `--optimize`, where you review the exact targets first. Codex
+session transcripts are age-gated: only date folders older than 30 days
+(tunable via `CODEX_SESSION_AGE_DAYS`) are eligible, because transcripts
+power resume and are the audit trail of what your agents actually did. Scope
+the `--disk` project scan with `--documents-root DIR` and
+`--project-maxdepth N`, and skip the current-repo artifact pass with
+`--no-repo-artifacts`.
 
-## Safety Model
+## Style
 
-- Dry-run by default.
-- Kill by process group only after ownership is clear.
-- Prefer SIGTERM, then SIGKILL only for stragglers.
-- Never kill the editor, Codex, the user's shell, or shared MCP servers unless
-  the script proves they are safe orphaned targets.
-- Delete only known rebuildable artifacts.
+Finish an audit on an interactive terminal and there is a small reward at the
+end: color, glyph headers, and a finale card — a **damage report** when
+leftovers exist, **confetti** when the house is spotless, a **receipt** after
+a cleanup. Styling is strictly additive: pipes, `--json`, and `report.md`
+always get byte-stable plain text, `NO_COLOR` is honored, and
+`AFTERPARTY_STYLE=always|never|auto` overrides everything (precedence:
+`AFTERPARTY_STYLE` > `NO_COLOR` > tty detection).
+
+## Safety model
+
+- Dry-run by default; mutations only behind explicit flags.
+- Two kill disciplines, both deliberate. Ledger and audit kills go by process
+  group — SIGTERM first, SIGKILL only for stragglers — and skip any group
+  containing a protected process. Devclean's orphan cleanup signals
+  individual PIDs instead, because orphans can share a group with unrelated
+  processes, and group-kill would take those out too.
+- The protect list — editors, Codex, shells, shared MCP servers — is checked
+  before every signal.
+- Artifacts: delete only known rebuildable output, skipping git-tracked paths
+  and nested repos.
+- Git: apply only the safe subset; everything ambiguous stays report-only,
+  with the manual command spelled out.
+
+## Requirements
+
+- macOS or Linux with bash. On Windows, run under Git Bash or WSL.
+- [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for process
+  matching; the audit falls back to `grep -E` when it is missing.
+- `lsof` (optional) for the localhost listener report.
+- macOS-only devclean steps (`launchctl` agents, Xcode caches, iOS
+  simulators) are skipped on other platforms.
+
+## Development
+
+```bash
+bash -n bin/afterparty     # syntax check
+bash tests/run.sh          # test suite
+claude plugin validate .   # plugin manifests
+```
+
+CI runs the suite on Ubuntu and Windows. The Ubuntu job exercises the kill
+paths against live processes (`tests/test-kill.sh`), and shellcheck runs at
+`--severity=error`.
+
+## Lineage
+
+Afterparty began as a fork of
+[Agent-Broom](https://github.com/Kevin-Liu-01/Agent-Broom) by Kevin Liu — the
+process ledger, the audit/stop split, and the dry-run-first discipline
+started there, and the LICENSE retains his copyright line. The devclean mode
+borrows its shape from the `devclean` utility. The plugin packaging, git
+cleanup, JSON and report output, styling layer, and test suite grew here.
 
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).
