@@ -5,22 +5,20 @@
 <h1 align="center">Afterparty</h1>
 
 <p align="center">
-  Agents throw the party. Afterparty handles the morning after.
+  Cleanup for the mess coding agents leave behind.
 </p>
 
 <p align="center">
   <img src="./assets/afterparty-terminal.svg" alt="Afterparty dry-run audit ending in the damage-report card" width="860">
 </p>
 
-Every agent session ends the same way: the transcript closes, and the lights
-come up on whatever it left running. A dev server squatting on
-`localhost:3000`. A Vitest watcher nobody is watching. A headless Chrome with
-no owner. Worktrees and `claude/*` branches no one is coming back for, and a
-gigabyte of `.next` and `node_modules/.cache` that will rebuild itself the
-moment anyone asks.
+An agent session ends and leaves things behind: a dev server still bound to
+`localhost:3000`, a Vitest watcher no one is watching, a headless Chrome with
+no owner, worktrees and `claude/*` branches no one will return to, and a
+gigabyte of `.next` and `node_modules/.cache`.
 
-Afterparty walks the venue, writes down everything it finds, and touches
-nothing until you say so.
+Afterparty finds all of it, reports exactly what it found, and changes
+nothing until you approve.
 
 ## Why Afterparty
 
@@ -34,11 +32,12 @@ nothing until you say so.
 - **Dry-run isn't a mode, it's the default.** Every mutation hides behind an
   explicit flag — `--kill`, `--clean`, `--apply` — scoped to exactly what the
   dry run showed you.
-- **Nothing important dies.** Editors, shells, Codex, and shared MCP servers
-  sit on a protect list that every kill path checks before every signal.
-- **No prompt rituals, no `ps` archaeology.** Cleanup is a script you can
-  read, with a dry run you can inspect, not a wall of instructions the agent
-  half-remembers.
+- **Protected processes are never killed.** Editors, shells, Codex, and
+  shared MCP servers sit on a protect list that every kill path checks
+  before every signal.
+- **No prompt rituals, no guessing from `ps` output.** Cleanup is a script
+  you can read, with a dry run you can inspect, not a wall of instructions
+  the agent half-remembers.
 - **Tested where it counts.** CI runs the suite on Linux and Windows, and the
   kill paths are exercised against live processes — not mocks.
 
@@ -111,7 +110,7 @@ The bookkeeping commands — `list`, `add`, `prune`, `doctor` — only ever touc
 Afterparty's own ledger, never your system.
 
 ```bash
-afterparty audit                   # the everything report
+afterparty audit                   # full dry-run report
 afterparty audit --json            # same findings, as JSON Lines
 afterparty audit --report          # persist the report for the next session
 afterparty audit --kill tests,dev  # kill stray watchers and dev servers
@@ -121,7 +120,7 @@ afterparty stop --kill             # stop everything the ledger recorded
 afterparty prune                   # drop dead ledger entries
 afterparty git --clean             # apply the safe git subset
 afterparty artifacts --clean       # delete rebuildable artifacts
-afterparty devclean --disk         # report the big disk offenders
+afterparty devclean --disk         # report disk-heavy targets
 afterparty doctor                  # check the environment
 ```
 
@@ -133,7 +132,7 @@ the strays nobody recorded, matched by category pattern — pass
 
 ## Reports that outlive the session
 
-The morning-after report is the point, so it comes in three shapes:
+The post-session report is the point, so it comes in three shapes:
 
 - **Styled**, on an interactive terminal — for you (see [Style](#style)).
 - **JSON Lines**, via `--json` on `audit`, `list`, and `git` — one JSON
@@ -148,8 +147,8 @@ The morning-after report is the point, so it comes in three shapes:
 
 `afterparty add` records long-running processes in
 `~/.cache/agent-processes/ledger.tsv` — repo root, cwd, PID, PGID, kind,
-port, purpose, and command. Think of it as a note taped to the process: the
-next agent can see what is running *and why* before spinning up a duplicate.
+port, purpose, and command. The result: the next agent can see what is
+running *and why* before spinning up a duplicate.
 
 ## The audit
 
@@ -205,7 +204,7 @@ orphan cleanup by default, with explicit escalation modes.
 afterparty devclean            # safe orphan cleanup
 afterparty devclean --deep     # deep cleanup targets
 afterparty devclean --optimize # crashpad files, crash-reporter settings
-afterparty devclean --disk     # the big disk offenders
+afterparty devclean --disk     # disk-heavy caches and artifacts
 ```
 
 It is conservative on purpose. It does not treat every `crashpad_handler` as
@@ -220,10 +219,9 @@ the `--disk` project scan with `--documents-root DIR` and
 
 ## Style
 
-Finish an audit on an interactive terminal and there is a small reward at the
-end: color, glyph headers, and a finale card — a **damage report** when
-leftovers exist, **confetti** when the house is spotless, a **receipt** after
-a cleanup. Styling is strictly additive: pipes, `--json`, and `report.md`
+On an interactive terminal, audits end with color, glyph headers, and a
+finale card — a **damage report** when leftovers exist, **confetti** when
+nothing is left, a **receipt** after a cleanup. Styling is strictly additive: pipes, `--json`, and `report.md`
 always get byte-stable plain text, `NO_COLOR` is honored, and
 `AFTERPARTY_STYLE=always|never|auto` overrides everything (precedence:
 `AFTERPARTY_STYLE` > `NO_COLOR` > tty detection).
@@ -266,12 +264,15 @@ paths against live processes (`tests/test-kill.sh`), and shellcheck runs at
 
 ## Lineage
 
-Afterparty began as a fork of
-[Agent-Broom](https://github.com/Kevin-Liu-01/Agent-Broom) by Kevin Liu — the
-process ledger, the audit/stop split, and the dry-run-first discipline
-started there, and the LICENSE retains his copyright line. The devclean mode
-borrows its shape from the `devclean` utility. The plugin packaging, git
-cleanup, JSON and report output, styling layer, and test suite grew here.
+Afterparty combines my own cleanup skills and methods with
+[Agent-Broom](https://github.com/Kevin-Liu-01/Agent-Broom) by Kevin Liu.
+The project began as a fork of Agent-Broom, which contributed the
+foundation — the process ledger, the audit/stop split, and the dry-run-first
+discipline — and the LICENSE retains Kevin Liu's copyright line. On that
+base I built out my own methods: the git session cleanup, the devclean
+policies, the agent-facing JSON and report output, the plugin packaging,
+the styling layer, and the test suite. The devclean mode borrows its shape
+from the `devclean` utility.
 
 ## License
 
