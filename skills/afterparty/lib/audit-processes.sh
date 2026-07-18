@@ -172,7 +172,7 @@ KILL_CATS="" KEEP="" JSON=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --kill) KILL_CATS="${2:-}"; shift 2 ;;
-    --keep) KEEP="${2:-}"; shift 2 ;;
+    --keep|--keep-pgid) KEEP="${2:-}"; shift 2 ;;
     --json) JSON=1; shift ;;
     -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;

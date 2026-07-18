@@ -7,8 +7,8 @@
 #   process-ledger.sh add --pid 123 --kind dev --port 3000 --purpose "verify UI" -- pnpm dev website
 #   process-ledger.sh list
 #   process-ledger.sh list --json       # JSON Lines (one object per row)
-#   process-ledger.sh stop              # dry run for current repo
-#   process-ledger.sh stop --kill       # stop recorded live groups for current repo
+#   process-ledger.sh stop              # dry run for current repo (--all: every repo)
+#   process-ledger.sh stop --kill       # stop recorded live groups (--keep <pgid> spares one)
 #   process-ledger.sh prune             # drop dead entries for current repo
 set -uo pipefail
 
@@ -213,7 +213,7 @@ stop_entries() {
       --all) all_roots=1; shift ;;
       --root) want_root="$(workspace_root "${2:?}")"; shift 2 ;;
       --kind) want_kind="${2:?}"; shift 2 ;;
-      --keep-pgid) keep_pgid="${2:?}"; shift 2 ;;
+      --keep-pgid|--keep) keep_pgid="${2:?}"; shift 2 ;;
       -h|--help) usage; exit 0 ;;
       *) echo "unknown stop arg: $1" >&2; exit 2 ;;
     esac

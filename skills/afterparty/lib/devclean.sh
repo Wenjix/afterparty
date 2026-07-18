@@ -64,7 +64,12 @@ MODE_C="$C_YEL"
 if [ "$DRY_RUN" -eq 0 ]; then MODE_C="$C_RED"; fi
 N_PROC=0
 N_OPT=0   # optimize findings/actions: crash reporters, crashpad files, agents
-CODEX_SESSION_AGE_DAYS=30   # matches Claude Code's default transcript retention
+# Age gate for Codex session transcripts; default matches Claude Code's
+# default transcript retention. Override via the environment.
+CODEX_SESSION_AGE_DAYS="${CODEX_SESSION_AGE_DAYS:-30}"
+case "$CODEX_SESSION_AGE_DAYS" in
+  ''|*[!0-9]*) echo "CODEX_SESSION_AGE_DAYS wants a whole number of days" >&2; exit 2 ;;
+esac
 
 human_mb() {
   awk -v kb="${1:-0}" 'BEGIN { printf "%.1f MB", kb / 1024 }'

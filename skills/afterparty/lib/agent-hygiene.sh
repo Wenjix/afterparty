@@ -4,10 +4,10 @@
 # prompt text.
 #
 # Usage:
-#   agent-hygiene.sh list [--json]
+#   agent-hygiene.sh list [--json] [--all]
 #   agent-hygiene.sh audit [--kill <tests|dev|browser>] [--keep <pgid>] [--json] [--report]
 #   agent-hygiene.sh add --pid 123 --kind dev --port 3000 --purpose "verify UI" -- pnpm dev website
-#   agent-hygiene.sh stop [--kill]
+#   agent-hygiene.sh stop [--kill] [--keep <pgid>] [--all]
 #   agent-hygiene.sh prune
 #   agent-hygiene.sh git [--clean] [--age <days>] [--root <dir>] [--json]
 #   agent-hygiene.sh artifacts [clean-artifacts args...]
