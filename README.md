@@ -126,7 +126,9 @@ afterparty doctor                  # every dry-run report in one pass
 ```
 
 The ledger commands (`list`, `stop`, `prune`) scope to the current repo by
-default; pass `--all` to cover every repo, or `--root <dir>` for another.
+default; pass `--all` to cover every repo, or `--root <dir>` for another
+(`git` and `artifacts` accept `--root` too). `list` and `stop` can also
+filter by `--kind`.
 
 There are two kill paths, and they answer different questions. `stop --kill`
 stops what Afterparty *recorded*: process groups from the ledger, where
@@ -147,12 +149,16 @@ The post-session report is the point, so it comes in three shapes:
   Add `report.md` to a repo's `.gitignore` to opt in to per-repo reports. The
   plugin's `SessionEnd` hook leans on this.
 
+One rule ties them together: `--json` is strictly report-only. It refuses to
+combine with `--kill`, and `audit --report` and `--json` are mutually
+exclusive.
+
 ## The ledger
 
 `afterparty add` records long-running processes in
-`~/.cache/agent-processes/ledger.tsv` — repo root, cwd, PID, PGID, kind,
-port, purpose, and command. The result: the next agent can see what is
-running *and why* before spinning up a duplicate.
+`~/.cache/agent-processes/ledger.tsv` — timestamp, repo root, cwd, PID,
+PGID, kind, port, purpose, and command. The result: the next agent can see
+what is running *and why* before spinning up a duplicate.
 
 ## The audit
 
@@ -179,8 +185,9 @@ subset:
 - prune worktree admin data whose directory is already gone
 - remove **clean** worktrees idle past `--age` days (default 7; never
   `--force`)
-- delete agent-named branches (`claude/*`, `codex/*`, `cursor/*`, ...) that
-  are **merged** into HEAD (`-d`, never `-D`)
+- delete agent-named branches (`claude`, `codex`, `cursor`, `copilot`,
+  `aider`, `agent` prefixes, slash- or dash-separated) that are **merged**
+  into HEAD (`-d`, never `-D`)
 - remove a `.git/index.lock` older than 60 minutes
 - delete **untracked** merge-conflict litter (`*.orig`, `*.rej`,
   `*.BACKUP.*`, ...)
@@ -190,14 +197,19 @@ those, the report names the exact manual command instead of guessing for you.
 
 ## Artifacts
 
-`afterparty artifacts` reports rebuildable repo output:
+`afterparty artifacts` reports rebuildable repo output, grouped the way the
+report prints it:
 
-- `.turbo`, `.vite`, `.cache`, `node_modules/.cache`
-- `.next`, `dist`, `build`, `out`, `.output`
-- `*.tsbuildinfo`, `.eslintcache`
-- `coverage`, `test-results`, `playwright-report`
+- **Caches** — `.turbo`, `.vite`, `.cache`, `.parcel-cache`,
+  `.rollup.cache`, `node_modules/.cache`, `*.tsbuildinfo`, `.eslintcache`
+- **Build outputs** — `.next`, `dist`, `build`, `out`, `.output`,
+  `.svelte-kit`, `.astro`, `storybook-static`
+- **Test artifacts** — `coverage`, `.nyc_output`, `test-results`,
+  `playwright-report`, `.playwright-mcp`, `.vitest`
 
-It skips git-tracked paths and nested git repositories.
+It skips git-tracked paths and nested git repositories, and never descends
+into a matched directory. `--caches-only` keeps build outputs; `--root <dir>`
+points it at another repo.
 
 ## Devclean
 
@@ -206,10 +218,16 @@ orphan cleanup by default, with explicit escalation modes.
 
 ```bash
 afterparty devclean            # safe orphan cleanup
-afterparty devclean --deep     # deep cleanup targets
+afterparty devclean --deep     # heavy daemon audit
 afterparty devclean --optimize # crashpad files, crash-reporter settings
 afterparty devclean --disk     # disk-heavy caches and artifacts
 ```
+
+`--disk` covers global dev caches (npm, pnpm, Gradle, pub, CocoaPods —
+plus Xcode caches on macOS), Codex sessions and logs, project artifacts
+under `--documents-root`, and the current repo's artifact pass. `--apply`
+also answers to `--kill` and `--clean` — whichever mutation verb you reach
+for works — and `--dry-run` forces the default.
 
 It is conservative on purpose. It does not treat every `crashpad_handler` as
 a safe orphan — active apps on macOS use those helpers — so crashpad cleanup

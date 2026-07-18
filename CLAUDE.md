@@ -22,10 +22,15 @@ mechanics when you touch them.
   orphans may share groups with unrelated processes, so group-kill would be
   riskier there. Orphan-targeting of MCP/agent processes is devclean's
   feature, not a protect-list violation. The protect list + its helpers live
-  ONLY in skills/afterparty/lib/protect.sh (shared — don't duplicate).
+  ONLY in skills/afterparty/lib/protect.sh (shared — don't duplicate). It
+  covers bare interactive shells via an end-anchored pattern — argumented
+  `sh -c` wrappers inside target groups must stay killable.
 - devclean --disk age-gates Codex session transcripts (CODEX_SESSION_AGE_DAYS,
-  30 like Claude Code's default retention): transcripts are resume history
-  and the audit trail of agent work — only stale YYYY/MM/DD date-folders go.
+  env-overridable, default 30 like Claude Code's retention): transcripts are
+  resume history and the audit trail of agent work — only stale YYYY/MM/DD
+  date-folders go. pnpm store maintenance also lives in devclean --disk, as
+  `pnpm store prune` ONLY — the store is shared across projects, never rm -rf
+  it; artifacts deliberately has no --deep flag anymore.
 - Three mutation paths: `stop --kill` stops ledger-recorded groups;
   `audit --kill tests|dev|browser` kills by pattern category; `git --clean`
   applies only the safe git subset (worktree prune, clean stale worktrees,
