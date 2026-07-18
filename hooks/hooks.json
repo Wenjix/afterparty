@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty\" audit --report",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

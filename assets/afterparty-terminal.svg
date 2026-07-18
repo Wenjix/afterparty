@@ -1,0 +1,40 @@
+<svg width="860" height="620" viewBox="0 0 860 620" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,SFMono-Regular,Consolas,Menlo,monospace" font-size="14" xml:space="preserve">
+  <title>Afterparty audit in a terminal</title>
+  <desc>A dry-run afterparty audit ending in the damage-report finale card.</desc>
+  <rect x="1" y="1" width="858" height="618" rx="14" fill="#151226" stroke="#2B1B4D" stroke-width="2"/>
+  <path d="M1 15 A14 14 0 0 1 15 1 H845 A14 14 0 0 1 859 15 V44 H1 Z" fill="#1d1833"/>
+  <circle cx="26" cy="23" r="6" fill="#ff5f56"/>
+  <circle cx="48" cy="23" r="6" fill="#ffbd2e"/>
+  <circle cx="70" cy="23" r="6" fill="#27c93f"/>
+  <text x="92" y="28" fill="#8a84a8" font-size="12">afterparty audit</text>
+
+  <g fill="#cfcbe4">
+    <text x="36" y="80" fill="#FF6AC1" font-weight="bold">🎉 afterparty — last call</text>
+    <text x="36" y="100" fill="#8a84a8">   let's see what the session left behind</text>
+
+    <text x="36" y="140"><tspan fill="#F3F99D" font-weight="bold">DRY RUN</tspan> — headcount only, nobody gets kicked out yet</text>
+
+    <text x="36" y="180" fill="#9AEDFE" font-weight="bold">● Test / watch runners (usually safe to kill)</text>
+    <text x="36" y="200" fill="#8a84a8">    PID     PPID   PGID    %CPU   ELAPSED    COMMAND</text>
+    <text x="36" y="220">    4242    1      4242    12.3   02:13:07   vitest --watch</text>
+
+    <text x="36" y="260" fill="#9AEDFE" font-weight="bold">● Dev servers (keep the one you are actively using)</text>
+    <text x="36" y="280" fill="#8a84a8">    (none)</text>
+
+    <text x="36" y="320" fill="#9AEDFE" font-weight="bold">● Worktrees</text>
+    <text x="36" y="340" fill="#F3F99D">    would remove ../wt-refactor (clean, idle 12d, agent/refactor)</text>
+
+    <text x="36" y="380" fill="#9AEDFE" font-weight="bold">● Agent branches</text>
+    <text x="36" y="400" fill="#F3F99D">    would delete branch claude/fix-tests (merged into HEAD, last commit 9d ago)</text>
+
+    <text x="36" y="440" fill="#FF6AC1">╭──────────────────────────────────────────────</text>
+    <text x="36" y="460"><tspan fill="#FF6AC1">│</tspan>  <tspan fill="#F3F99D" font-weight="bold">🧹 the damage</tspan></text>
+    <text x="36" y="480"><tspan fill="#FF6AC1">│</tspan>     1 stray process still partying</text>
+    <text x="36" y="500"><tspan fill="#FF6AC1">│</tspan>     2 git leftovers</text>
+    <text x="36" y="520" fill="#FF6AC1">│</text>
+    <text x="36" y="540"><tspan fill="#FF6AC1">│</tspan>     closing time:</text>
+    <text x="36" y="560"><tspan fill="#FF6AC1">│</tspan>       <tspan fill="#9AEDFE">afterparty audit --kill tests,dev</tspan></text>
+    <text x="36" y="580"><tspan fill="#FF6AC1">│</tspan>       <tspan fill="#9AEDFE">afterparty git --clean</tspan></text>
+    <text x="36" y="600" fill="#FF6AC1">╰──────────────────────────────────────────────</text>
+  </g>
+</svg>

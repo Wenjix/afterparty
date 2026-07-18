@@ -1,0 +1,41 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Afterparty confetti logo</title>
+  <desc>A dark rounded-square badge with a glowing broom-sweep arc launching a burst of confetti.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="512" x2="512" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2B1B4D"/>
+      <stop offset="1" stop-color="#141126"/>
+    </linearGradient>
+    <linearGradient id="arc" x1="92" y1="428" x2="356" y2="232" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF3E3"/>
+      <stop offset="1" stop-color="#F59B38"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="14" y="14" width="484" height="484" rx="112" fill="url(#bg)"/>
+
+  <!-- broom-sweep motion echo, then the sweep arc itself -->
+  <path d="M78 450 C 186 442, 288 374, 342 254" fill="none" stroke="#F59B38" stroke-width="12" stroke-linecap="round" opacity="0.35"/>
+  <path d="M92 428 C 200 420, 302 352, 356 232" fill="none" stroke="url(#arc)" stroke-width="30" stroke-linecap="round"/>
+
+  <!-- confetti burst: cone from the arc head toward the upper right -->
+  <g>
+    <!-- cream sticks at the launch point -->
+    <rect x="-2" y="-11" width="4" height="22" fill="#FFF3E3" transform="translate(348 208) rotate(60)"/>
+    <rect x="-2" y="-11" width="4" height="22" fill="#FFF3E3" transform="translate(376 222) rotate(-55)"/>
+    <!-- squares -->
+    <rect x="-20" y="-9" width="40" height="18" fill="#E754A6" transform="translate(328 142) rotate(-24)"/>
+    <rect x="-17" y="-8" width="34" height="16" fill="#4CC9F0" transform="translate(244 168) rotate(31)"/>
+    <rect x="-15" y="-7" width="30" height="14" fill="#6EE7B7" transform="translate(210 112) rotate(18)"/>
+    <rect x="-13" y="-6" width="26" height="12" fill="#FFB454" transform="translate(424 214) rotate(-40)"/>
+    <!-- dots -->
+    <circle r="16" fill="#FFB454" transform="translate(300 84)"/>
+    <circle r="13" fill="#E754A6" transform="translate(410 120)"/>
+    <circle r="10" fill="#4CC9F0" transform="translate(386 196)"/>
+    <circle r="8" fill="#6EE7B7" transform="translate(466 104)"/>
+    <!-- torn triangles -->
+    <path d="M0 0 L34 10 L8 30 Z" fill="#6EE7B7" transform="translate(346 52) rotate(12)"/>
+    <path d="M0 0 L34 10 L8 30 Z" fill="#4CC9F0" transform="translate(432 146) rotate(-28)"/>
+    <path d="M0 0 L34 10 L8 30 Z" fill="#E754A6" transform="translate(282 116) rotate(40)"/>
+  </g>
+</svg>
