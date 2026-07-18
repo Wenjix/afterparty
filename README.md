@@ -32,9 +32,9 @@ nothing until you approve.
 - **Dry-run isn't a mode, it's the default.** Every mutation hides behind an
   explicit flag — `--kill`, `--clean`, `--apply` — scoped to exactly what the
   dry run showed you.
-- **Protected processes are never killed.** Editors, shells, Codex, and
-  shared MCP servers sit on a protect list that every kill path checks
-  before every signal.
+- **Protected processes are never killed.** Editors, interactive shells,
+  Codex, and shared MCP servers sit on a protect list that every kill path
+  checks before every signal.
 - **No prompt rituals, no guessing from `ps` output.** Cleanup is a script
   you can read, with a dry run you can inspect, not a wall of instructions
   the agent half-remembers.
@@ -106,8 +106,9 @@ gets touched.
 | `afterparty artifacts` | rebuildable build/cache output | `--clean` |
 | `afterparty devclean` | orphans, plus `--deep` / `--optimize` / `--disk` targets | `--apply` |
 
-The bookkeeping commands — `list`, `add`, `prune`, `doctor` — only ever touch
-Afterparty's own ledger, never your system.
+The bookkeeping commands — `list`, `add`, `prune` — only ever touch
+Afterparty's own ledger, never your system. `doctor` runs every dry-run
+report in one pass and changes nothing.
 
 ```bash
 afterparty audit                   # full dry-run report
@@ -116,19 +117,22 @@ afterparty audit --report          # persist the report for the next session
 afterparty audit --kill tests,dev  # kill stray watchers and dev servers
 afterparty add --pid <PID> --kind dev --port <PORT> --purpose "<why>" -- <command>
 afterparty list --json             # the ledger, for machines
-afterparty stop --kill             # stop everything the ledger recorded
-afterparty prune                   # drop dead ledger entries
+afterparty stop --kill             # stop this repo's recorded groups
+afterparty prune                   # drop this repo's dead ledger entries
 afterparty git --clean             # apply the safe git subset
 afterparty artifacts --clean       # delete rebuildable artifacts
 afterparty devclean --disk         # report disk-heavy targets
-afterparty doctor                  # check the environment
+afterparty doctor                  # every dry-run report in one pass
 ```
+
+The ledger commands (`list`, `stop`, `prune`) scope to the current repo by
+default; pass `--all` to cover every repo, or `--root <dir>` for another.
 
 There are two kill paths, and they answer different questions. `stop --kill`
 stops what Afterparty *recorded*: process groups from the ledger, where
 ownership is already established. `audit --kill <tests|dev|browser>` handles
-the strays nobody recorded, matched by category pattern — pass
-`--keep <pgid>` to spare one.
+the strays nobody recorded, matched by category pattern. Both accept
+`--keep <pgid>` to spare a group.
 
 ## Reports that outlive the session
 
@@ -163,8 +167,8 @@ running *and why* before spinning up a duplicate.
 - git session litter: stale worktrees, agent branches, conflict files, stashes
 - protected processes it will refuse to kill
 
-The protect list covers editors, Codex, shells, and shared MCP servers such
-as `playwright-mcp` and `chrome-devtools-mcp`.
+The protect list covers editors, interactive shells, Codex, and shared MCP
+servers such as `playwright-mcp` and `chrome-devtools-mcp`.
 
 ## Git cleanup
 
@@ -211,7 +215,8 @@ It is conservative on purpose. It does not treat every `crashpad_handler` as
 a safe orphan — active apps on macOS use those helpers — so crashpad cleanup
 lives behind `--optimize`, where you review the exact targets first. Codex
 session transcripts are age-gated: only date folders older than 30 days
-(tunable via `CODEX_SESSION_AGE_DAYS`) are eligible, because transcripts
+(override with the `CODEX_SESSION_AGE_DAYS` environment variable) are
+eligible, because transcripts
 power resume and are the audit trail of what your agents actually did. Scope
 the `--disk` project scan with `--documents-root DIR` and
 `--project-maxdepth N`, and skip the current-repo artifact pass with
@@ -234,8 +239,8 @@ always get byte-stable plain text, `NO_COLOR` is honored, and
   containing a protected process. Devclean's orphan cleanup signals
   individual PIDs instead, because orphans can share a group with unrelated
   processes, and group-kill would take those out too.
-- The protect list — editors, Codex, shells, shared MCP servers — is checked
-  before every signal.
+- The protect list — editors, interactive shells, Codex, shared MCP
+  servers — is checked before every signal.
 - Artifacts: delete only known rebuildable output, skipping git-tracked paths
   and nested repos.
 - Git: apply only the safe subset; everything ambiguous stays report-only,
