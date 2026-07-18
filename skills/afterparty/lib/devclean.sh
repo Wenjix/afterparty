@@ -441,6 +441,29 @@ clean_codex_sessions() {
   done
 }
 
+# pnpm's store is content-addressed and shared by every pnpm project, so
+# rm -rf (the clean_dir treatment) would evict packages live repos still
+# link to. `pnpm store prune` drops only unreferenced packages — that is the
+# only action ever taken here. Dry run reports the store size as context;
+# apply counts the actually-freed space toward the disk total.
+clean_pnpm_store() {
+  command -v pnpm >/dev/null 2>&1 || return 0
+  local store kb_before kb_after freed
+  store="$(pnpm store path 2>/dev/null)"
+  [ -n "$store" ] && [ -d "$store" ] || return 0
+  kb_before="$(size_kb "$store")"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    s_would "  would run pnpm store prune (store: $(human_mb "${kb_before:-0}"))"
+    return 0
+  fi
+  pnpm store prune >/dev/null 2>&1
+  kb_after="$(size_kb "$store")"
+  freed=$(( ${kb_before:-0} - ${kb_after:-0} ))
+  [ "$freed" -lt 0 ] && freed=0
+  DISK_TOTAL_KB=$((DISK_TOTAL_KB + freed))
+  s_ok "  pruned pnpm store: freed $(human_mb "$freed") (now $(human_mb "${kb_after:-0}"))"
+}
+
 clean_fvm_incomplete() {
   local base ver_dir ver_name
   for base in "$HOME/fvm/versions" "$HOME/.fvm/versions"; do
@@ -490,6 +513,7 @@ run_disk() {
   clean_dir "CocoaPods repos" "$HOME/.cocoapods/repos"
   clean_dir "Pub cache" "$HOME/.pub-cache"
   clean_dir "npm cache" "$HOME/.npm"
+  clean_pnpm_store
 
   s_hdr "AI tool caches"
   clean_dir "Gemini browser recordings" "$HOME/.gemini/antigravity/browser_recordings"

@@ -7,7 +7,6 @@
 #   clean-artifacts.sh [--root DIR]          # report reclaimable space (dry run)
 #   clean-artifacts.sh --clean [--root DIR]  # delete caches + build outputs
 #   clean-artifacts.sh --clean --caches-only # delete caches only, keep build outputs
-#   clean-artifacts.sh --clean --deep        # also run `pnpm store prune`
 #
 # Safety: only well-known artifact paths are touched; node_modules/.git/nested
 # repos are pruned; matched dirs are not descended into (no double counting);
@@ -19,14 +18,13 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/style.sh"
 
 ROOT="$PWD"
-DO_CLEAN=0 CACHES_ONLY=0 DEEP=0
+DO_CLEAN=0 CACHES_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --root) ROOT="${2:?}"; shift 2 ;;
     --clean) DO_CLEAN=1; shift ;;
     --caches-only) CACHES_ONLY=1; shift ;;
-    --deep) DEEP=1; shift ;;
-    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -131,10 +129,6 @@ process "Caches (.turbo/.vite/.cache/*.tsbuildinfo)" "${caches[@]:-}"
 process "Test artifacts (coverage/test-results/playwright)" "${tests[@]:-}"
 
 printf '\nReclaimable total: %s MB%s\n' "$((TOTAL_KB / 1024))" "$([ "$DO_CLEAN" -eq 1 ] && echo ' (freed)' || echo '')"
-
-if [ "$DO_CLEAN" -eq 1 ] && [ "$DEEP" -eq 1 ] && command -v pnpm >/dev/null 2>&1; then
-  s_hdr "pnpm store prune"; pnpm store prune 2>&1 | tail -3
-fi
 
 # Finale card (styled standalone runs only; devclean/doctor suppress it).
 if cards_on; then

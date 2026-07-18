@@ -217,7 +217,9 @@ lives behind `--optimize`, where you review the exact targets first. Codex
 session transcripts are age-gated: only date folders older than 30 days
 (override with the `CODEX_SESSION_AGE_DAYS` environment variable) are
 eligible, because transcripts
-power resume and are the audit trail of what your agents actually did. Scope
+power resume and are the audit trail of what your agents actually did. The
+shared pnpm store is pruned (`pnpm store prune`, unreferenced packages
+only), never deleted outright — other projects still link into it. Scope
 the `--disk` project scan with `--documents-root DIR` and
 `--project-maxdepth N`, and skip the current-repo artifact pass with
 `--no-repo-artifacts`.
