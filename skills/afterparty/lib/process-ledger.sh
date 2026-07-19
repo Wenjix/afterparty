@@ -189,7 +189,7 @@ list_entries() {
       [ "$jcpu" = "-" ] && jcpu=""
       json_row "$(json_kv section ledger)" "$(json_kv status "$status")" \
         "$(json_kvn pid "$pid")" "$(json_kvn pgid "${pgid:-}")" "$(json_kv kind "$kind")" \
-        "$(json_kvz port "${port:-}")" "$(json_kvz cpu "$jcpu")" "$(json_kv purpose "${purpose:-}")" \
+        "$(json_kvn port "${port:-}")" "$(json_kvz cpu "$jcpu")" "$(json_kv purpose "${purpose:-}")" \
         "$(json_kv command "${command_label:-}")" "$(json_kv root "$root")" "$(json_kv ts "$ts")"
     else
       rc=""; rr=""

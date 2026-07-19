@@ -104,6 +104,11 @@ applied_kv() {
 }
 
 CHECKED_OUT_BRANCHES=""
+# Branches whose worktrees this run removes or prunes (or, in dry run, would).
+# audit_branches treats them as no longer checked out — worktrees are handled
+# first, so --clean converges in one pass; if a removal actually failed the
+# branch is not freed, and `git branch -d` backstops regardless.
+FREED_BRANCHES=""
 N_PRUNABLE=0 N_WT=0 N_BRANCH=0 N_LOCK=0 N_LITTER=0 LITTER_BYTES=0 N_STASH=0
 
 # --- worktrees -----------------------------------------------------------------
@@ -125,7 +130,7 @@ wt_row() {  # path branch head main state dirty age_days action [applied [error]
 audit_worktrees() {
   hdr "Worktrees"
   local line wt_path="" wt_head="" wt_branch="" wt_locked=0 wt_prunable=0 seen_main=0
-  local prune_list="" remove_err
+  local prune_list="" prune_branches="" remove_err
 
   flush_wt() {
     [ -n "$wt_path" ] || return 0
@@ -148,9 +153,11 @@ audit_worktrees() {
       if [ "$DO_CLEAN" -eq 1 ]; then
         prune_list="$prune_list$path
 "
+        [ -n "$branch" ] && prune_branches="$prune_branches $branch"
       else
         say_would "  would prune $path (directory gone; admin data only)"
         wt_row "$path" "$branch" "$head" 0 prunable "" "" prune 0
+        [ -n "$branch" ] && FREED_BRANCHES="$FREED_BRANCHES $branch"
       fi
       return 0
     fi
@@ -202,6 +209,7 @@ audit_worktrees() {
         N_WT=$((N_WT + 1))
         say_ok "  removed $path (clean, idle ${age}d)"
         wt_row "$path" "$branch" "$head" 0 stale 0 "$age" remove 1
+        [ -n "$branch" ] && FREED_BRANCHES="$FREED_BRANCHES $branch"
       else
         warn "worktree remove failed for $path: $remove_err (files may be open — close them and re-run)"
         wt_row "$path" "$branch" "$head" 0 stale 0 "$age" remove 0 "$remove_err"
@@ -210,7 +218,9 @@ audit_worktrees() {
       N_WT=$((N_WT + 1))
       say_would "  would remove $path (clean, idle ${age}d, ${branch:-detached})"
       wt_row "$path" "$branch" "$head" 0 stale 0 "$age" remove 0
+      [ -n "$branch" ] && FREED_BRANCHES="$FREED_BRANCHES $branch"
     fi
+    return 0
   }
 
   while IFS= read -r line; do
@@ -237,6 +247,7 @@ audit_worktrees() {
       prune_ok=0
       warn "worktree prune failed: $prune_err"
     fi
+    [ "$prune_ok" -eq 1 ] && FREED_BRANCHES="$FREED_BRANCHES$prune_branches"
     while IFS= read -r p; do
       [ -n "$p" ] || continue
       if [ "$prune_ok" -eq 1 ]; then
@@ -281,6 +292,9 @@ audit_branches() {
     printf '%s\n' "$merged_list" | grep -Fqx -- "$name" && merged=1
     checked_out=0
     case " $CHECKED_OUT_BRANCHES " in *" $name "*) checked_out=1 ;; esac
+    if [ "$checked_out" -eq 1 ]; then
+      case " $FREED_BRANCHES " in *" $name "*) checked_out=0 ;; esac
+    fi
     age="$(age_days_of "$cts")"
 
     if [ "$merged" -eq 0 ]; then

@@ -49,6 +49,8 @@ echo "$OUT" | grep -q 'DRY RUN'                              || fail "banner mis
 echo "$OUT" | grep -q 'would remove .*wt-stale'              || fail "wt-stale not a remove candidate"
 echo "$OUT" | grep -q 'would prune .*wt-gone'                || fail "wt-gone not prunable"
 echo "$OUT" | grep -q 'would delete branch claude/done'      || fail "claude/done not deletable"
+echo "$OUT" | grep -q 'would delete branch agent/stale'      || fail "agent/stale not predicted deletable (its worktree would be removed)"
+echo "$OUT" | grep -q 'would delete branch agent/gone'       || fail "agent/gone not predicted deletable (its worktree would be pruned)"
 echo "$OUT" | grep -q 'unmerged: codex-wip'                  || fail "codex-wip not report-only"
 echo "$OUT" | grep -q 'would remove a.orig'                  || fail "a.orig missing"
 echo "$OUT" | grep -q 'b.rej'                                || fail "b.rej missing"
@@ -91,16 +93,16 @@ git rev-parse -q --verify codex-wip  >/dev/null 2>&1   || fail "codex-wip was de
 [ -f tracked.orig ]                                    || fail "tracked.orig was deleted"
 [ ! -f .git/index.lock ]                               || fail "aged index.lock survived --clean"
 [ "$(git stash list | wc -l | tr -d ' ')" = "1" ]      || fail "stash was dropped"
-pass "--clean applied safe subset only"
+git rev-parse -q --verify agent/stale >/dev/null 2>&1  && fail "agent/stale survived first clean (worktree removed same run)"
+git rev-parse -q --verify agent/gone  >/dev/null 2>&1  && fail "agent/gone survived first clean (worktree pruned same run)"
+pass "--clean applied safe subset only, converging in one pass"
 
-# ---------- second clean converges (branches freed by worktree removal) ----------
+# ---------- repeat cleans are idempotent no-ops ----------
 bash "$LIB/audit-git.sh" --clean >/dev/null 2>&1; RC=$?
 [ "$RC" -eq 0 ] || fail "second clean exit=$RC"
-git rev-parse -q --verify agent/stale >/dev/null 2>&1 && fail "agent/stale survived second clean"
-git rev-parse -q --verify agent/gone  >/dev/null 2>&1 && fail "agent/gone survived second clean"
 bash "$LIB/audit-git.sh" --clean >/dev/null 2>&1; RC=$?
 [ "$RC" -eq 0 ] || fail "third (idempotent) clean exit=$RC"
-pass "repeat --clean converges and stays exit 0"
+pass "repeat --clean stays a no-op at exit 0"
 
 # ---------- fresh lock is protected ----------
 touch .git/index.lock
