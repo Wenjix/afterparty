@@ -640,6 +640,11 @@ if cards_on; then
   s_card_open
   if [ "$DRY_RUN" -eq 0 ]; then
     s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty devclean --apply${C_RESET}"
+    segs="$(s_segments \
+      "$([ "$N_PROC" -gt 0 ] && echo "$G_OK $(s_n "$N_PROC" 'proc' 'procs')")" \
+      "$([ "$N_OPT" -gt 0 ] && echo "$G_OK $N_OPT tidied")" \
+      "$([ "$DISK_TOTAL_KB" -gt 0 ] && echo "$(human_mb "$DISK_TOTAL_KB") freed")")"
+    if [ -n "$segs" ]; then s_card_line "   $segs"; fi
     if [ "$N_PROC" -eq 0 ] && [ "$DISK_TOTAL_KB" -eq 0 ] && [ "$N_OPT" -eq 0 ]; then
       s_card_line "   nothing needed doing — already spotless ✨"
     else
@@ -651,6 +656,11 @@ if cards_on; then
     fi
   elif [ "$N_PROC" -gt 0 ] || [ "$DISK_TOTAL_KB" -gt 0 ] || [ "$N_OPT" -gt 0 ]; then
     s_card_line "${C_BOLD}${C_YEL}🧹 the damage — devclean${C_RESET}"
+    segs="$(s_segments \
+      "$([ "$N_PROC" -gt 0 ] && echo "$G_ACT $(s_n "$N_PROC" 'proc' 'procs')")" \
+      "$([ "$N_OPT" -gt 0 ] && echo "$G_ACT $N_OPT to tidy")" \
+      "$([ "$DISK_TOTAL_KB" -gt 0 ] && echo "$(human_mb "$DISK_TOTAL_KB") reclaimable")")"
+    s_card_line "   $segs"
     [ "$N_PROC" -gt 0 ] && s_card_line "   $(s_n "$N_PROC" 'orphaned process still partying' 'orphaned processes still partying')"
     [ "$N_OPT" -gt 0 ] && s_card_line "   $(s_n "$N_OPT" 'optimize target to tidy' 'optimize targets to tidy')"
     [ "$DISK_TOTAL_KB" -gt 0 ] && s_card_line "   $(human_mb "$DISK_TOTAL_KB") of caches to haul out"

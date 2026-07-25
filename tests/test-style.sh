@@ -109,6 +109,7 @@ OUT="$(AFTERPARTY_STYLE=always bash "$LIB/audit-git.sh" --root "$GITFIX" 2>/dev/
 printf '%s\n' "$OUT" | grep -qF '▸ would remove foo.orig' || fail "S1: styled would-line missing ▸"
 printf '%s\n' "$OUT" | grep -qF '⊘ left alone:' || fail "S1: young index.lock decision missing ⊘"
 printf '%s\n' "$OUT" | grep -qF '⊘ main:' && fail "S1: main-worktree policy line must stay glyph-free"
+printf '%s\n' "$OUT" | grep -qF '▸ 1 would-clean' || fail "S1: git damage card missing segment line"
 pass "S1: git glyphs (styled) + gitfix plain stability"
 
 # ---------- S2: ledger stop — ⊘ on skip decision lines ----------
@@ -118,6 +119,7 @@ printf '2026-07-14T00:00:00Z\t%s\t%s\t%s\t\tdev\t\t\tsleepx\n' \
 AGENT_PROCESS_LEDGER="$LED_SKIP" eq stopskip bash "$LIB/process-ledger.sh" stop
 OUT="$(AFTERPARTY_STYLE=always AGENT_PROCESS_LEDGER="$LED_SKIP" bash "$LIB/process-ledger.sh" stop 2>/dev/null)"
 printf '%s\n' "$OUT" | grep -qF '⊘ skip pid' || fail "S2: ledger skip decision missing ⊘"
+printf '%s\n' "$OUT" | grep -qF '1 skipped' || fail "S2: ledger-clear card missing skipped segment"
 pass "S2: stop skip glyphs (styled) + plain stability"
 
 # ---------- S3: artifacts — ⊘ on git-tracked skip ----------
@@ -138,6 +140,7 @@ OUT="$(AFTERPARTY_STYLE=always bash "$LIB/clean-artifacts.sh" --root "$ARTFIX" 2
 printf '%s\n' "$OUT" | grep -qF '█' || fail "S4: category meter bars missing in styled mode"
 printf '%s\n' "$OUT" | grep -qF "${ESC}[32m" || fail "S4: small size cell not green-tinted"
 printf '%s\n' "$OUT" | grep -q 'Reclaimable total:' || fail "S4: total line lost in styled mode"
+printf '%s\n' "$OUT" | grep -qF '▸ 1 path' || fail "S4: artifacts damage card missing segment line"
 pass "S4: artifacts meters + size tints (styled)"
 
 echo

@@ -34,7 +34,7 @@ case "$*" in
   *-Ao\ pgid=*) printf '99999\n' ;;
   *-Ao\ pid=*) exit 0 ;;
   *-p\ 41234*|*-p\ 51234*) exit 0 ;;
-  *) exit 0 ;;
+  *) exit 1 ;;
 esac
 PS
 cat > "$SHIM/pgrep" <<'PG'
@@ -95,7 +95,18 @@ printf '%s\n' "$OUT" | grep -qF '█' || fail "P4: styled disk meters missing"
 printf '%s\n' "$OUT" | grep -qF 'Gradle caches' || fail "P4: meter row label missing"
 printf '%s\n' "$OUT" | grep -qF 'would clean Gradle caches:' && fail "P4: styled dry-run should buffer rows into meters, not stream them"
 printf '%s\n' "$OUT" | grep -q 'Global disk reclaimable:' || fail "P4: global total line lost in styled mode"
+printf '%s\n' "$OUT" | grep -qF '▸ 1 proc' || fail "P4: devclean damage card missing proc segment"
+printf '%s\n' "$OUT" | grep -qF '2.0 MB reclaimable' || fail "P4: devclean damage card missing reclaimable segment"
 pass "P4: devclean disk meters (styled dry-run) + plain streaming"
+
+# ---------- P5: composite audit damage card carries measured segments ----------
+BIN="$REPO/bin/afterparty"
+FAKELED="$T/ledger.tsv"
+printf '2026-07-14T00:00:00Z\t%s\t%s\t999999\t999999\tdev\t3000\tverify UI\tpnpm dev\n' \
+  "$(git -C "$REPO" rev-parse --show-toplevel)" "$REPO" > "$FAKELED"
+OUT="$(AFTERPARTY_STYLE=always AGENT_PROCESS_LEDGER="$FAKELED" "$BIN" audit 2>/dev/null)"
+printf '%s\n' "$OUT" | grep -qF '▸ 1 stray' || fail "P5: composite damage card missing stray segment"
+pass "P5: composite audit segment line"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi

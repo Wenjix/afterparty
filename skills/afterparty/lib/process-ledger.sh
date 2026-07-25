@@ -204,7 +204,7 @@ list_entries() {
 }
 
 stop_entries() {
-  local do_kill=0 all_roots=0 want_root want_kind="" keep_pgid="" __row ts root cwd pid pgid kind port purpose command_label groups="" group current_pgid current_cmd
+  local do_kill=0 all_roots=0 want_root want_kind="" keep_pgid="" __row ts root cwd pid pgid kind port purpose command_label groups="" group current_pgid current_cmd n_skip=0 n_keep=0 n_prot=0 segs
   want_root="$(workspace_root "$PWD")"
 
   while [ $# -gt 0 ]; do
@@ -235,6 +235,7 @@ stop_entries() {
     is_live "$pid" || continue
     if [ -z "$pgid" ] || [ "$pgid" = "$SELF_PGID" ]; then
       s_skip "  skip pid $pid: pgid is shared with this shell (${pgid:-unknown})"
+      n_skip=$((n_skip + 1))
       continue
     fi
     # Recycled-pid defense: never trust a recorded row blindly. A recycled
@@ -243,6 +244,7 @@ stop_entries() {
     current_pgid="$(pgid_for "$pid")"
     if [ -n "$current_pgid" ] && [ "$current_pgid" != "$pgid" ]; then
       s_skip "  skip pid $pid: group changed since it was recorded (pid recycled?)"
+      n_skip=$((n_skip + 1))
       continue
     fi
     if [ -n "${command_label:-}" ]; then
@@ -251,22 +253,26 @@ stop_entries() {
         ''|*"$command_label"*) ;;
         *)
           s_skip "  skip pid $pid: command changed since it was recorded (pid recycled?)"
+          n_skip=$((n_skip + 1))
           continue
           ;;
       esac
     fi
     if [ -n "$keep_pgid" ] && [ "$pgid" = "$keep_pgid" ]; then
       s_skip "  keep pgid $pgid: ${purpose:-$command_label}"
+      n_keep=$((n_keep + 1))
       continue
     fi
     if is_protected_pid "$pid"; then
       s_skip "  protect pid $pid pgid $pgid: $(command_for "$pid")"
+      n_prot=$((n_prot + 1))
       continue
     fi
     # The recorded pid may be fine while a protected sibling shares its
     # group — never signal the whole group in that case.
     if pgid_has_protected "$pgid"; then
       s_skip "  protect pgid $pgid: shares its group with a protected process"
+      n_prot=$((n_prot + 1))
       continue
     fi
     case " $groups " in *" $pgid "*) continue ;; esac
@@ -284,6 +290,11 @@ stop_entries() {
       echo
       s_card_open
       s_card_line "${C_BOLD}${C_GRN}✨ ledger clear — nobody left on the tab${C_RESET}"
+      segs="$(s_segments \
+        "$([ "$n_prot" -gt 0 ] && echo "$G_SKIP $n_prot protected")" \
+        "$([ "$n_keep" -gt 0 ] && echo "$n_keep kept")" \
+        "$([ "$n_skip" -gt 0 ] && echo "$n_skip skipped")")"
+      if [ -n "$segs" ]; then s_card_line "   $segs"; fi
       s_card_line "   see you next session 🎉"
       s_card_close
     fi
@@ -297,6 +308,12 @@ stop_entries() {
       echo
       s_card_open
       s_card_line "${C_BOLD}${C_YEL}🧹 the damage — ledger${C_RESET}"
+      segs="$(s_segments \
+        "$G_ACT $N_GROUPS would-kill" \
+        "$([ "$n_prot" -gt 0 ] && echo "$G_SKIP $n_prot protected")" \
+        "$([ "$n_keep" -gt 0 ] && echo "$n_keep kept")" \
+        "$([ "$n_skip" -gt 0 ] && echo "$n_skip skipped")")"
+      s_card_line "   $segs"
       s_card_line "   $(s_n "$N_GROUPS" 'recorded process group still on the tab' 'recorded process groups still on the tab')"
       s_card_line
       s_card_line "   closing time: ${C_CYAN}afterparty stop --kill${C_RESET}"
@@ -322,6 +339,10 @@ stop_entries() {
     echo
     s_card_open
     s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty stop --kill${C_RESET}"
+    segs="$(s_segments \
+      "$([ "$N_SENT" -gt 0 ] && echo "$G_OK $N_SENT sent home")" \
+      "$([ "$n_prot" -gt 0 ] && echo "$G_SKIP $n_prot protected")")"
+    if [ -n "$segs" ]; then s_card_line "   $segs"; fi
     if [ "$N_SENT" -gt 0 ]; then
       s_card_line "   $(s_n "$N_SENT" 'process group sent home' 'process groups sent home')"
     else

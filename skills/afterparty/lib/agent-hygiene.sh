@@ -25,8 +25,9 @@ usage() {
 
 # The one finale card for the composite audit, fed by the children's tally.
 print_finale_card() {
-  local killed found live gitf bytes stashes listeners
+  local killed found live gitf bytes stashes listeners prot segs
   killed="$(tally_get procs.killed)"
+  prot="$(tally_get procs.protected)"
   found="$(tally_get procs.found)"
   live="$(tally_get ledger.live)"
   gitf="$(tally_get git.findings)"
@@ -37,6 +38,12 @@ print_finale_card() {
   s_card_open
   if [ "$killed" -gt 0 ]; then
     s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty audit --kill${C_RESET}"
+    segs="$(s_segments \
+      "$G_OK $killed killed" \
+      "$([ "$prot" -gt 0 ] && echo "$G_SKIP $prot protected")" \
+      "$([ "$gitf" -gt 0 ] && echo "$G_ACT $(s_n "$gitf" 'git leftover' 'git leftovers')")" \
+      "$([ "$live" -gt 0 ] && echo "$G_ACT $live on the tab")")"
+    s_card_line "   $segs"
     s_card_line "   $(s_n "$killed" 'process group shown the door' 'process groups shown the door')"
     if [ "$gitf" -gt 0 ]; then
       s_card_line "   still on the tab: $(s_n "$gitf" 'git leftover' 'git leftovers')"
@@ -48,6 +55,12 @@ print_finale_card() {
     s_card_line "   thanks for partying responsibly 🎉"
   elif [ $((found + live + gitf)) -gt 0 ]; then
     s_card_line "${C_BOLD}${C_YEL}🧹 the damage${C_RESET}"
+    segs="$(s_segments \
+      "$([ "$found" -gt 0 ] && echo "$G_ACT $(s_n "$found" 'stray' 'strays')")" \
+      "$([ "$live" -gt 0 ] && echo "$G_ACT $live on the tab")" \
+      "$([ "$gitf" -gt 0 ] && echo "$G_ACT $(s_n "$gitf" 'git leftover' 'git leftovers')")" \
+      "$([ "$listeners" -gt 0 ] && echo "$(s_n "$listeners" 'listener' 'listeners')")")"
+    s_card_line "   $segs"
     if [ "$found" -gt 0 ]; then
       s_card_line "   $(s_n "$found" 'stray process still partying' 'stray processes still partying')"
     fi
