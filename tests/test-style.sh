@@ -133,5 +133,12 @@ OUT="$(AFTERPARTY_STYLE=always bash "$LIB/clean-artifacts.sh" --root "$ARTFIX" 2
 printf '%s\n' "$OUT" | grep -qF '⊘ skip (git-tracked): .cache' || fail "S3: artifacts skip decision missing ⊘"
 pass "S3: artifacts skip glyphs (styled) + plain stability"
 
+# ---------- S4: artifacts styled size tints + category share meters ----------
+OUT="$(AFTERPARTY_STYLE=always bash "$LIB/clean-artifacts.sh" --root "$ARTFIX" 2>/dev/null)"
+printf '%s\n' "$OUT" | grep -qF '█' || fail "S4: category meter bars missing in styled mode"
+printf '%s\n' "$OUT" | grep -qF "${ESC}[32m" || fail "S4: small size cell not green-tinted"
+printf '%s\n' "$OUT" | grep -q 'Reclaimable total:' || fail "S4: total line lost in styled mode"
+pass "S4: artifacts meters + size tints (styled)"
+
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi
