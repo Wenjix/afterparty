@@ -378,6 +378,42 @@ size_kb() {
   du -sk "$1" 2>/dev/null | awk '{print int($1)}'
 }
 
+# Styled DRY-RUN buffers each disk section's rows and redraws them as
+# share-of-section meters at the section boundary (disk_flush). Plain output
+# and --apply keep streaming the legacy lines: plain is a byte contract
+# (tests grep piped "would clean ..." lines) and apply must narrate
+# destructive work live, not after the fact. Buffer appends must run in the
+# main shell — the clean_* helpers already do (find via process substitution).
+DISK_BUF=()
+disk_buffering() { [ "$STYLE_ON" -eq 1 ] && [ "$DRY_RUN" -eq 1 ]; }
+disk_flush() {
+  disk_buffering || return 0
+  [ "${#DISK_BUF[@]}" -gt 0 ] || return 0
+  local row type kb label detail total=0
+  for row in ${DISK_BUF[@]+"${DISK_BUF[@]}"}; do
+    IFS=$'\t' read -r type kb label detail <<< "$row"
+    [ "$type" = meter ] && total=$((total + kb))
+  done
+  for row in ${DISK_BUF[@]+"${DISK_BUF[@]}"}; do
+    IFS=$'\t' read -r type kb label detail <<< "$row"
+    if [ "$type" = meter ]; then
+      if [ -n "$detail" ]; then
+        printf '  %-26.26s %s %s  %s%s%s\n' "$label" \
+          "$(s_sevcell "$kb" 102400 1048576 "$(s_meter "$kb" "$total")")" \
+          "$(s_sevcell "$kb" 102400 1048576 "$(printf '%9s' "$(s_kb "$kb")")")" \
+          "$C_DIM" "$detail" "$C_RESET"
+      else
+        printf '  %-26.26s %s %s\n' "$label" \
+          "$(s_sevcell "$kb" 102400 1048576 "$(s_meter "$kb" "$total")")" \
+          "$(s_sevcell "$kb" 102400 1048576 "$(printf '%9s' "$(s_kb "$kb")")")"
+      fi
+    else
+      s_would "  $detail"
+    fi
+  done
+  DISK_BUF=()
+}
+
 clean_dir() {
   local label="$1" target="$2" kb
   [ -d "$target" ] || return 0
@@ -387,7 +423,11 @@ clean_dir() {
   DISK_TOTAL_KB=$((DISK_TOTAL_KB + kb))
 
   if [ "$DRY_RUN" -eq 1 ]; then
-    s_would "  would clean $label: $target ($(human_mb "$kb"))"
+    if disk_buffering; then
+      DISK_BUF+=("$(printf 'meter\t%s\t%s\t%s' "$kb" "$label" "$target")")
+    else
+      s_would "  would clean $label: $target ($(human_mb "$kb"))"
+    fi
   else
     rm -rf "$target"
     s_ok "  cleaned $label: $target ($(human_mb "$kb"))"
@@ -428,7 +468,11 @@ clean_find() {
   [ "$found" -gt 0 ] || return 0
   DISK_TOTAL_KB=$((DISK_TOTAL_KB + total))
   if [ "$DRY_RUN" -eq 1 ]; then
-    s_would "  would clean $found $label dirs ($(human_mb "$total"))"
+    if disk_buffering; then
+      DISK_BUF+=("$(printf 'meter\t%s\t%s\t' "$total" "${found}× $label")")
+    else
+      s_would "  would clean $found $label dirs ($(human_mb "$total"))"
+    fi
   else
     s_ok "  cleaned $found $label dirs ($(human_mb "$total"))"
   fi
@@ -466,7 +510,13 @@ clean_pnpm_store() {
   [ -n "$store" ] && [ -d "$store" ] || return 0
   kb_before="$(size_kb "$store")"
   if [ "$DRY_RUN" -eq 1 ]; then
-    s_would "  would run pnpm store prune (store: $(human_mb "${kb_before:-0}"))"
+    # Store size is context, not reclaimable space — buffer a bar-less note
+    # row so it never inflates the section's meter shares.
+    if disk_buffering; then
+      DISK_BUF+=("$(printf 'note\t0\t\twould run pnpm store prune (store: %s)' "$(human_mb "${kb_before:-0}")")")
+    else
+      s_would "  would run pnpm store prune (store: $(human_mb "${kb_before:-0}"))"
+    fi
     return 0
   fi
   pnpm store prune >/dev/null 2>&1
@@ -520,6 +570,7 @@ run_disk() {
     s_dim "  (not macOS)"
   fi
 
+  disk_flush
   s_hdr "Cross-platform developer caches"
   clean_dir "Gradle caches" "$HOME/.gradle/caches"
   clean_dir "Gradle wrapper" "$HOME/.gradle/wrapper"
@@ -528,12 +579,14 @@ run_disk() {
   clean_dir "npm cache" "$HOME/.npm"
   clean_pnpm_store
 
+  disk_flush
   s_hdr "AI tool caches"
   clean_dir "Gemini browser recordings" "$HOME/.gemini/antigravity/browser_recordings"
   clean_codex_sessions
   clean_dir "Codex logs" "$HOME/.codex/log"
   clean_fvm_incomplete
 
+  disk_flush
   s_hdr "Project artifacts under $DOCUMENTS_ROOT"
   clean_find "project build/" "$DOCUMENTS_ROOT" "build" \
     "pubspec.yaml" "build.gradle" "build.gradle.kts" "Makefile" "CMakeLists.txt"
@@ -541,14 +594,25 @@ run_disk() {
   clean_find "project .gradle/" "$DOCUMENTS_ROOT" ".gradle" "build.gradle" "build.gradle.kts" "settings.gradle"
   clean_find "project node_modules/" "$DOCUMENTS_ROOT" "node_modules" "package.json"
 
+  disk_flush
   run_repo_artifacts
 
   echo
   if [ "$DISK_TOTAL_KB" -gt 0 ]; then
-    if [ "$DRY_RUN" -eq 1 ]; then
-      echo "Global disk reclaimable: $(human_mb "$DISK_TOTAL_KB")"
+    if [ "$STYLE_ON" -eq 1 ]; then
+      # Styled total tints the figure; the else-branch keeps the exact
+      # legacy bytes.
+      if [ "$DRY_RUN" -eq 1 ]; then
+        printf 'Global disk reclaimable: %s\n' "$(s_sevcell "$DISK_TOTAL_KB" 102400 1048576 "$(human_mb "$DISK_TOTAL_KB")")"
+      else
+        printf 'Global disk reclaimed: %s\n' "$(s_sevcell "$DISK_TOTAL_KB" 102400 1048576 "$(human_mb "$DISK_TOTAL_KB")")"
+      fi
     else
-      echo "Global disk reclaimed: $(human_mb "$DISK_TOTAL_KB")"
+      if [ "$DRY_RUN" -eq 1 ]; then
+        echo "Global disk reclaimable: $(human_mb "$DISK_TOTAL_KB")"
+      else
+        echo "Global disk reclaimed: $(human_mb "$DISK_TOTAL_KB")"
+      fi
     fi
   else
     echo "No significant global dev caches found."

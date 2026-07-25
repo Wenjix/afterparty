@@ -77,5 +77,25 @@ grep -q "$ESC" "$T/d-a" && fail "P3: ANSI leaked into piped devclean table"
 grep -q 'count: 1; rss: 2048.0 MB' "$T/d-a" || fail "P3: rss footer wrong or missing"
 pass "P3: devclean rss severity styled + plain stable"
 
+# ---------- P4: devclean --disk styled meters, plain keeps streaming ----------
+# Fixture HOME with one 2 MB Gradle cache; failing pnpm shim keeps the pnpm
+# pass inert and fast; empty documents root skips the project scan.
+DH="$T/diskhome"
+mkdir -p "$DH/.gradle/caches"
+dd if=/dev/zero of="$DH/.gradle/caches/blob" bs=1024 count=2048 2>/dev/null
+printf '#!/usr/bin/env bash\nexit 1\n' > "$SHIM/pnpm"
+chmod +x "$SHIM/pnpm"
+HOME="$DH" bash "$LIB/devclean.sh" --disk --no-repo-artifacts --documents-root "$DH/docs" > "$T/k-a" 2>/dev/null
+HOME="$DH" AFTERPARTY_STYLE=never bash "$LIB/devclean.sh" --disk --no-repo-artifacts --documents-root "$DH/docs" > "$T/k-b" 2>/dev/null
+diff -q "$T/k-a" "$T/k-b" >/dev/null || fail "P4: plain disk drift (auto vs never)"
+grep -qF 'would clean Gradle caches:' "$T/k-a" || fail "P4: plain disk row lost its streaming text"
+grep -qF '█' "$T/k-a" && fail "P4: meters leaked into plain output"
+OUT="$(HOME="$DH" AFTERPARTY_STYLE=always bash "$LIB/devclean.sh" --disk --no-repo-artifacts --documents-root "$DH/docs" 2>/dev/null)"
+printf '%s\n' "$OUT" | grep -qF '█' || fail "P4: styled disk meters missing"
+printf '%s\n' "$OUT" | grep -qF 'Gradle caches' || fail "P4: meter row label missing"
+printf '%s\n' "$OUT" | grep -qF 'would clean Gradle caches:' && fail "P4: styled dry-run should buffer rows into meters, not stream them"
+printf '%s\n' "$OUT" | grep -q 'Global disk reclaimable:' || fail "P4: global total line lost in styled mode"
+pass "P4: devclean disk meters (styled dry-run) + plain streaming"
+
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi
