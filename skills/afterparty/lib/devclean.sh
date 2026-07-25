@@ -168,6 +168,7 @@ terminate_pids() {
     kill -TERM "$pid" 2>/dev/null && s_kill "  SIGTERM -> pid $pid"
   done
 
+  s_heartbeat "waiting up to 2s for PIDs to exit"
   waited=0
   while [ "$waited" -lt 4 ]; do
     remaining=""
@@ -418,6 +419,7 @@ clean_dir() {
   local label="$1" target="$2" kb
   [ -d "$target" ] || return 0
   [ -L "$target" ] && return 0
+  s_heartbeat "sizing up $target"
   kb="$(size_kb "$target")"
   [ "${kb:-0}" -ge 1024 ] || return 0
   DISK_TOTAL_KB=$((DISK_TOTAL_KB + kb))
@@ -440,6 +442,7 @@ clean_find() {
   parent_files=("$@")
   [ -d "$scan_dir" ] || return 0
 
+  s_heartbeat "scanning $scan_dir for $dir_name dirs"
   while IFS= read -r -d '' d; do
     [ -n "$d" ] || continue
     [ -L "$d" ] && continue
@@ -508,6 +511,7 @@ clean_pnpm_store() {
   local store kb_before kb_after freed
   store="$(pnpm store path 2>/dev/null)"
   [ -n "$store" ] && [ -d "$store" ] || return 0
+  s_heartbeat "sizing up pnpm store"
   kb_before="$(size_kb "$store")"
   if [ "$DRY_RUN" -eq 1 ]; then
     # Store size is context, not reclaimable space — buffer a bar-less note

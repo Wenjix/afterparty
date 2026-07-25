@@ -329,6 +329,7 @@ stop_entries() {
       s_kill "  SIGTERM -> pgid $group"
     fi
   done
+  s_heartbeat "waiting 2s for stragglers"
   sleep 2
   for group in $groups; do
     if pgid_exists "$group"; then

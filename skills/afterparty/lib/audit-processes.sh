@@ -133,6 +133,7 @@ kill_group() {
     ok=0
     s_kill "  SIGTERM -> pgid $pg"
   fi
+  s_heartbeat "waiting 2s for stragglers"
   sleep 2
   if ps -Ao pgid= 2>/dev/null | tr -d ' ' | match_q "^${pg}$"; then
     kill -KILL -"$pg" 2>/dev/null && s_kill "  SIGKILL -> pgid $pg (straggler)"

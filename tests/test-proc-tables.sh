@@ -99,6 +99,13 @@ printf '%s\n' "$OUT" | grep -qF '▸ 1 proc' || fail "P4: devclean damage card m
 printf '%s\n' "$OUT" | grep -qF '2.0 MB reclaimable' || fail "P4: devclean damage card missing reclaimable segment"
 pass "P4: devclean disk meters (styled dry-run) + plain streaming"
 
+# ---------- P6: heartbeats announce slow scans, styled stderr only ----------
+ERR="$(HOME="$DH" AFTERPARTY_STYLE=always bash "$LIB/devclean.sh" --disk --no-repo-artifacts --documents-root "$DH/docs" 2>&1 >/dev/null)"
+printf '%s\n' "$ERR" | grep -qF '◐ sizing up' || fail "P6: heartbeat missing on styled stderr"
+HOME="$DH" bash "$LIB/devclean.sh" --disk --no-repo-artifacts --documents-root "$DH/docs" 2>"$T/hb-e" >/dev/null
+grep -qF '◐' "$T/hb-e" && fail "P6: heartbeat leaked into piped stderr"
+pass "P6: heartbeats (styled stderr only)"
+
 # ---------- P5: composite audit damage card carries measured segments ----------
 BIN="$REPO/bin/afterparty"
 FAKELED="$T/ledger.tsv"
