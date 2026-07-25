@@ -63,7 +63,7 @@ list_matches() {
 # Print a human report for a category. Sets LAST_N to the row count so the
 # caller can tally findings.
 report() {
-  local label="$1" re="$2" rows hc="" hr=""
+  local label="$1" re="$2" rows hc="" hr="" line pid ppid pgid cpu et
   rows=$(list_matches "$re" || true)
   LAST_N=0
   [ -n "$rows" ] && LAST_N=$(printf '%s\n' "$rows" | grep -c .)
@@ -74,9 +74,25 @@ report() {
   fi
   if [ "$STYLE_ON" -eq 1 ]; then hc="$C_DIM"; hr="$C_RESET"; fi
   printf '  %s%-7s %-7s %-7s %-6s %-10s %s%s\n' "$hc" PID PPID PGID %CPU ELAPSED COMMAND "$hr"
-  echo "$rows" | while IFS= read -r line; do
-    echo "$line" | awk '{printf "  %-7s %-7s %-7s %-6s %-10s ", $1,$2,$3,$4,$5; for(i=6;i<=NF && i<=14;i++) printf "%s ", $i; print ""}'
-  done
+  if [ "$STYLE_ON" -eq 1 ]; then
+    # Styled rows render in bash so %CPU can carry a severity tint and
+    # ELAPSED reads as "1d 2h"; the plain awk path below stays byte-exact.
+    echo "$rows" | while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      # shellcheck disable=SC2086
+      set -- $line
+      [ $# -ge 6 ] || continue
+      pid="$1" ppid="$2" pgid="$3" cpu="$4" et="$5"
+      shift 5
+      printf '  %-7s %-7s %-7s %s %-10s %s\n' "$pid" "$ppid" "$pgid" \
+        "$(s_sevcell "$cpu" 10 50 "$(printf '%-6s' "$cpu")")" \
+        "$(s_etime "$et")" "${*:1:9}"
+    done
+  else
+    echo "$rows" | while IFS= read -r line; do
+      echo "$line" | awk '{printf "  %-7s %-7s %-7s %-6s %-10s ", $1,$2,$3,$4,$5; for(i=6;i<=NF && i<=14;i++) printf "%s ", $i; print ""}'
+    done
+  fi
 }
 
 report_localhost() {

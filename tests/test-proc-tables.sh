@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Process-table rendering tests using a fake ps/pgrep/lsof PATH shim, so the
+# tables are deterministic on every machine (Git Bash included, where real
+# `ps` lacks -Ao). DRY-RUN ONLY: the canned pids must never be signalled, so
+# no --kill/--apply runs in here, ever.
+set -uo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LIB="$REPO/skills/afterparty/lib"
+ESC=$'\033'
+FAILS=0
+fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
+pass() { echo "ok: $*"; }
+
+T="$(mktemp -d)"
+trap 'cd /; rm -rf "$T"' EXIT
+cd "$REPO" || exit 1
+
+# ---------- PATH shim: canned process world ----------
+# One stray vitest (pid 41234, 87.3 %cpu, up 1d2h) and one orphaned
+# next-server (pid 51234, 2 GB rss). pgid 99999 is "our" shell's group.
+SHIM="$T/shim"
+mkdir -p "$SHIM"
+cat > "$SHIM/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  *pid,ppid,pgid,%cpu,etime,command*)
+    printf '41234 1 41234 87.3 1-02:03:04 node /repo/node_modules/.bin/vitest --watch\n' ;;
+  *-o\ pid=,ppid=,pgid=,rss=,%cpu=,etime=,command=*)
+    printf '51234 1 51234 2097152 1.0 03:04:05 next-server /app\n' ;;
+  *-o\ rss=*) printf '2097152\n' ;;
+  *-o\ pgid=*-p*|*-o\ pgid=\ -p*) printf '99999\n' ;;
+  *-eo\ ppid=,pid=,command=*) printf '1 51234 next-server /app\n' ;;
+  *-Ao\ pgid=*) printf '99999\n' ;;
+  *-Ao\ pid=*) exit 0 ;;
+  *-p\ 41234*|*-p\ 51234*) exit 0 ;;
+  *) exit 0 ;;
+esac
+PS
+cat > "$SHIM/pgrep" <<'PG'
+#!/usr/bin/env bash
+# devclean orphan scan: always report the canned next-server orphan.
+printf '51234\n'
+PG
+cat > "$SHIM/lsof" <<'LS'
+#!/usr/bin/env bash
+exit 1
+LS
+chmod +x "$SHIM/ps" "$SHIM/pgrep" "$SHIM/lsof"
+export PATH="$SHIM:$PATH"
+
+# ---------- P1: audit-processes styled table (severity + humanized etime) ----------
+OUT="$(AFTERPARTY_STYLE=always bash "$LIB/audit-processes.sh" 2>/dev/null)"
+printf '%s\n' "$OUT" | grep -q 'vitest --watch' || fail "P1: canned vitest row missing entirely"
+printf '%s\n' "$OUT" | grep -qF "${ESC}[31m87.3" || fail "P1: 87.3 %cpu cell not red"
+printf '%s\n' "$OUT" | grep -qF '1d 2h' || fail "P1: etime not humanized in styled table"
+printf '%s\n' "$OUT" | grep -qF '1-02:03:04' && fail "P1: raw etime leaked into styled table"
+pass "P1: audit-processes styled severity + etime"
+
+# ---------- P2: audit-processes plain table byte-stable, raw etime ----------
+bash "$LIB/audit-processes.sh" > "$T/p-a" 2>/dev/null
+AFTERPARTY_STYLE=never bash "$LIB/audit-processes.sh" > "$T/p-b" 2>/dev/null
+diff -q "$T/p-a" "$T/p-b" >/dev/null || fail "P2: plain drift (auto vs never)"
+grep -q "$ESC" "$T/p-a" && fail "P2: ANSI leaked into piped table"
+grep -qF '1-02:03:04' "$T/p-a" || fail "P2: plain table lost raw etime"
+grep -qF '1d 2h' "$T/p-a" && fail "P2: humanized etime leaked into plain table"
+pass "P2: audit-processes plain table stable"
+
+# ---------- P3: devclean styled RSS severity, plain stable ----------
+OUT="$(HOME="$T/h" AFTERPARTY_STYLE=always bash "$LIB/devclean.sh" 2>/dev/null)"
+printf '%s\n' "$OUT" | grep -q 'next-server' || fail "P3: canned orphan row missing entirely"
+printf '%s\n' "$OUT" | grep -qF "${ESC}[31m2097152" || fail "P3: 2 GB rss cell not red"
+HOME="$T/h" bash "$LIB/devclean.sh" > "$T/d-a" 2>/dev/null
+HOME="$T/h" AFTERPARTY_STYLE=never bash "$LIB/devclean.sh" > "$T/d-b" 2>/dev/null
+diff -q "$T/d-a" "$T/d-b" >/dev/null || fail "P3: devclean plain drift (auto vs never)"
+grep -q "$ESC" "$T/d-a" && fail "P3: ANSI leaked into piped devclean table"
+grep -q 'count: 1; rss: 2048.0 MB' "$T/d-a" || fail "P3: rss footer wrong or missing"
+pass "P3: devclean rss severity styled + plain stable"
+
+echo
+if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi

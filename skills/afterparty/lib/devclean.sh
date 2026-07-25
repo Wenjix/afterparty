@@ -127,7 +127,7 @@ pids_by_pattern() {
 }
 
 print_process_table() {
-  local pids="$1" pid rss total=0 count=0 hc="" hr=""
+  local pids="$1" pid rss total=0 count=0 hc="" hr="" line
   [ -n "$pids" ] || return 1
 
   if [ "$STYLE_ON" -eq 1 ]; then hc="$C_DIM"; hr="$C_RESET"; fi
@@ -136,8 +136,21 @@ print_process_table() {
     rss="$(rss_kb_for "$pid")"
     total=$((total + ${rss:-0}))
     count=$((count + 1))
-    ps -o pid=,ppid=,pgid=,rss=,%cpu=,etime=,command= -p "$pid" 2>/dev/null \
-      | awk '{printf "  %-7s %-7s %-7s %-8s %-6s %-10s ", $1,$2,$3,$4,$5,$6; for(i=7;i<=NF;i++) printf "%s ", $i; print ""}'
+    line="$(ps -o pid=,ppid=,pgid=,rss=,%cpu=,etime=,command= -p "$pid" 2>/dev/null)"
+    [ -n "$line" ] || continue
+    if [ "$STYLE_ON" -eq 1 ]; then
+      # Styled rows render in bash so RSS carries a severity tint; the plain
+      # awk path below stays byte-exact.
+      # shellcheck disable=SC2086
+      set -- $line
+      [ $# -ge 7 ] || continue
+      printf '  %-7s %-7s %-7s %s %-6s %-10s ' "$1" "$2" "$3" \
+        "$(s_sevcell "$4" 262144 1048576 "$(printf '%-8s' "$4")")" "$5" "$6"
+      shift 6
+      printf '%s\n' "$*"
+    else
+      printf '%s\n' "$line" | awk '{printf "  %-7s %-7s %-7s %-8s %-6s %-10s ", $1,$2,$3,$4,$5,$6; for(i=7;i<=NF;i++) printf "%s ", $i; print ""}'
+    fi
   done
   echo "  count: $count; rss: $(human_mb "$total")"
 }
