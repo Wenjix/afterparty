@@ -70,6 +70,7 @@ say()       { [ "$JSON" -eq 1 ] || echo "$@"; }
 say_would() { [ "$JSON" -eq 1 ] || s_would "$@"; }
 say_ok()    { [ "$JSON" -eq 1 ] || s_ok "$@"; }
 say_dim()   { [ "$JSON" -eq 1 ] || s_dim "$@"; }
+say_skip()  { [ "$JSON" -eq 1 ] || s_skip "$@"; }
 hdr()       { [ "$JSON" -eq 1 ] || s_hdr "$1"; }
 warn()      { s_warn "$*"; }
 
@@ -163,13 +164,13 @@ audit_worktrees() {
     fi
 
     if [ "$locked" -eq 1 ]; then
-      say_dim "  locked: $path — left alone"
+      say_skip "  locked: $path — left alone"
       wt_row "$path" "$branch" "$head" 0 locked "" "" report
       return 0
     fi
 
     if [ "$path" = "$ROOT" ]; then
-      say_dim "  current: $path — not a removal candidate"
+      say_skip "  current: $path — not a removal candidate"
       wt_row "$path" "$branch" "$head" 0 current "" "" report
       return 0
     fi
@@ -191,7 +192,7 @@ audit_worktrees() {
     fi
 
     if [ "$age" -le "$AGE_DAYS" ]; then
-      say_dim "  active: $path (${branch:-detached}, idle ${age}d) — keeping"
+      say_skip "  active: $path (${branch:-detached}, idle ${age}d) — keeping"
       wt_row "$path" "$branch" "$head" 0 active "$dirty" "$age" keep
       return 0
     fi
@@ -356,7 +357,7 @@ $COMMON_DIR/index.lock"
     ts="$(mtime_epoch "$lock")"
     m="$(age_mins_of "$ts")"
     if [ "$m" -lt "$LOCK_AGE_MIN" ]; then
-      say_dim "  left alone: $lock (${m}m old — a git process may still be running)"
+      say_skip "  left alone: $lock (${m}m old — a git process may still be running)"
       lk_row "$lock" "$m" keep
       continue
     fi

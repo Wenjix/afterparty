@@ -262,7 +262,7 @@ for cat in $KILL_CATS; do
     # The listing filtered protected rows, but a protected process may share
     # this group — never signal the whole group in that case.
     if pgid_has_protected "$pg"; then
-      s_dim "  protect pgid $pg: shares its group with a protected process"
+      s_skip "  protect pgid $pg: shares its group with a protected process"
       continue
     fi
     kill_group "$pg" && N_KILLED=$((N_KILLED + 1))

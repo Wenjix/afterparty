@@ -109,7 +109,7 @@ process() {
   for p in "${paths[@]}"; do
     [ -n "$p" ] && [ -e "$p" ] || continue
     rel="${p#"$ROOT"/}"
-    if is_tracked "$rel"; then s_dim "  skip (git-tracked): $rel"; continue; fi
+    if is_tracked "$rel"; then s_skip "  skip (git-tracked): $rel"; continue; fi
     if [ "$printed" -eq 0 ]; then s_hdr "$label"; printed=1; fi
     kb=$(du -sk "$p" 2>/dev/null | awk '{print $1}'); TOTAL_KB=$((TOTAL_KB + ${kb:-0}))
     N_PATHS=$((N_PATHS + 1))

@@ -234,7 +234,7 @@ stop_entries() {
     row_matches "$want_root" "$all_roots" "$want_kind" "$root" "$kind" || continue
     is_live "$pid" || continue
     if [ -z "$pgid" ] || [ "$pgid" = "$SELF_PGID" ]; then
-      s_dim "  skip pid $pid: pgid is shared with this shell (${pgid:-unknown})"
+      s_skip "  skip pid $pid: pgid is shared with this shell (${pgid:-unknown})"
       continue
     fi
     # Recycled-pid defense: never trust a recorded row blindly. A recycled
@@ -242,7 +242,7 @@ stop_entries() {
     # line is the other tell. (On Git Bash pgid_for is empty — no-op.)
     current_pgid="$(pgid_for "$pid")"
     if [ -n "$current_pgid" ] && [ "$current_pgid" != "$pgid" ]; then
-      s_dim "  skip pid $pid: group changed since it was recorded (pid recycled?)"
+      s_skip "  skip pid $pid: group changed since it was recorded (pid recycled?)"
       continue
     fi
     if [ -n "${command_label:-}" ]; then
@@ -250,23 +250,23 @@ stop_entries() {
       case "$current_cmd" in
         ''|*"$command_label"*) ;;
         *)
-          s_dim "  skip pid $pid: command changed since it was recorded (pid recycled?)"
+          s_skip "  skip pid $pid: command changed since it was recorded (pid recycled?)"
           continue
           ;;
       esac
     fi
     if [ -n "$keep_pgid" ] && [ "$pgid" = "$keep_pgid" ]; then
-      s_dim "  keep pgid $pgid: ${purpose:-$command_label}"
+      s_skip "  keep pgid $pgid: ${purpose:-$command_label}"
       continue
     fi
     if is_protected_pid "$pid"; then
-      s_dim "  protect pid $pid pgid $pgid: $(command_for "$pid")"
+      s_skip "  protect pid $pid pgid $pgid: $(command_for "$pid")"
       continue
     fi
     # The recorded pid may be fine while a protected sibling shares its
     # group — never signal the whole group in that case.
     if pgid_has_protected "$pgid"; then
-      s_dim "  protect pgid $pgid: shares its group with a protected process"
+      s_skip "  protect pgid $pgid: shares its group with a protected process"
       continue
     fi
     case " $groups " in *" $pgid "*) continue ;; esac
