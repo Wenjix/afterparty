@@ -246,7 +246,13 @@ the `--disk` project scan with `--documents-root DIR` and
 
 On an interactive terminal, audits end with color, glyph headers, and a
 finale card — a **damage report** when leftovers exist, **confetti** when
-nothing is left, a **receipt** after a cleanup. Styling is strictly additive: pipes, `--json`, and `report.md`
+nothing is left, a **receipt** after a cleanup. Styled mode also carries an
+instrument layer: severity tints on CPU/RSS/size cells (green → yellow →
+red), humanized elapsed times (`1d 2h`, not `1-02:03:04`), `▸`/`✓`/`⊘`
+state glyphs on pending/done/skipped lines, share-of-total meters in
+`artifacts` and `devclean --disk` dry runs, a one-line `│`-joined segment
+summary in every finale card, and dim `◐` heartbeat lines on stderr before
+slow scans and kill waits. Styling is strictly additive: pipes, `--json`, and `report.md`
 always get byte-stable plain text, `NO_COLOR` is honored, and
 `AFTERPARTY_STYLE=always|never|auto` overrides everything (precedence:
 `AFTERPARTY_STYLE` > `NO_COLOR` > tty detection).
