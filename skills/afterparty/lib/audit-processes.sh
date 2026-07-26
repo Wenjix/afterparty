@@ -79,8 +79,9 @@ report() {
     # ELAPSED reads as "1d 2h"; the plain awk path below stays byte-exact.
     echo "$rows" | while IFS= read -r line; do
       [ -n "$line" ] || continue
+      # set -f: a COMMAND field containing * must never glob against cwd.
       # shellcheck disable=SC2086
-      set -- $line
+      set -f; set -- $line; set +f
       [ $# -ge 6 ] || continue
       pid="$1" ppid="$2" pgid="$3" cpu="$4" et="$5"
       shift 5

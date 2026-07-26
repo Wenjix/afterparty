@@ -56,9 +56,10 @@ mechanics when you touch them.
   styled DRY-RUN buffers rows into share-of-section meters; plain must keep
   streaming the legacy lines (test-review-fixes C1 greps them) and --apply
   always streams so destructive work narrates live. Kill paths tally
-  procs.protected for the composite receipt; dry-run listings filter
-  protected processes before counting, so card segments claim ⊘ only on
-  kill paths. tests/test-proc-tables.sh fakes ps/pgrep/lsof on PATH for
+  procs.protected for the composite receipt; audit's dry-run listings
+  filter protected processes before counting, so audit/composite segments
+  claim ⊘ only on kill paths — stop measures protect decisions in both
+  modes, so its dry-run cards may carry ⊘. tests/test-proc-tables.sh fakes ps/pgrep/lsof on PATH for
   deterministic tables everywhere — dry-run only, never --kill/--apply
   under the shim.
 

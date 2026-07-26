@@ -250,7 +250,7 @@ nothing is left, a **receipt** after a cleanup. Styled mode also carries an
 instrument layer: severity tints on CPU/RSS/size cells (green → yellow →
 red), humanized elapsed times (`1d 2h`, not `1-02:03:04`), `▸`/`✓`/`⊘`
 state glyphs on pending/done/skipped lines, share-of-total meters in
-`artifacts` and `devclean --disk` dry runs, a one-line `│`-joined segment
+`artifacts` runs and `devclean --disk` dry runs, a one-line `│`-joined segment
 summary in every finale card, and dim `◐` heartbeat lines on stderr before
 slow scans and kill waits. Styling is strictly additive: pipes, `--json`, and `report.md`
 always get byte-stable plain text, `NO_COLOR` is honored, and

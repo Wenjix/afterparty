@@ -166,7 +166,7 @@ if cards_on; then
     s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty artifacts --clean${C_RESET}"
     segs="$(s_segments \
       "$([ "$N_PATHS" -gt 0 ] && echo "$G_OK $N_PATHS swept")" \
-      "$([ "$TOTAL_KB" -gt 0 ] && echo "$((TOTAL_KB / 1024)) MB freed")")"
+      "$([ "$TOTAL_KB" -ge 1024 ] && echo "$((TOTAL_KB / 1024)) MB freed")")"
     if [ -n "$segs" ]; then s_card_line "   $segs"; fi
     if [ "$N_PATHS" -gt 0 ]; then
       s_card_line "   swept $(s_n "$N_PATHS" 'path' 'paths') — $((TOTAL_KB / 1024)) MB back on the shelf"
@@ -179,7 +179,7 @@ if cards_on; then
     s_card_line "${C_BOLD}${C_YEL}🧹 the damage — artifacts${C_RESET}"
     segs="$(s_segments \
       "$G_ACT $(s_n "$N_PATHS" 'path' 'paths')" \
-      "$((TOTAL_KB / 1024)) MB")"
+      "$([ "$TOTAL_KB" -ge 1024 ] && echo "$((TOTAL_KB / 1024)) MB")")"
     s_card_line "   $segs"
     s_card_line "   $(s_n "$N_PATHS" 'path' 'paths') of cups and confetti to pick up ($((TOTAL_KB / 1024)) MB)"
     s_card_line

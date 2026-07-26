@@ -141,8 +141,9 @@ print_process_table() {
     if [ "$STYLE_ON" -eq 1 ]; then
       # Styled rows render in bash so RSS carries a severity tint; the plain
       # awk path below stays byte-exact.
+      # set -f: a COMMAND field containing * must never glob against cwd.
       # shellcheck disable=SC2086
-      set -- $line
+      set -f; set -- $line; set +f
       [ $# -ge 7 ] || continue
       printf '  %-7s %-7s %-7s %s %-6s %-10s ' "$1" "$2" "$3" \
         "$(s_sevcell "$4" 262144 1048576 "$(printf '%-8s' "$4")")" "$5" "$6"
