@@ -85,6 +85,38 @@ echo "$OUT" | grep -q 'afterparty — last call' || fail "A7: banner missing"
 ls "${TMPDIR:-/tmp}"/afterparty-tally.* >/dev/null 2>&1 && fail "A7: tally tmp files left behind"
 pass "A7: composite audit (one card, banner, tally cleaned)"
 
+# ---------- A7b: protected-only composite kill gets a truthful receipt ----------
+# Fake only the OS process boundary. The matching group has a protected
+# cursor-server sibling, and its deliberately nonexistent PGID could not
+# signal a real process even if the guard regressed.
+PROT_SHIM="$T/protected-shim"
+mkdir -p "$PROT_SHIM"
+cat > "$PROT_SHIM/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  *pid,ppid,pgid,%cpu,etime,command*)
+    printf '2147483000 1 2147483000 1.0 00:10 nodemon /tmp/fake\n' ;;
+  *-Ao\ pgid=,command=*)
+    printf '2147483000 cursor-server\n' ;;
+  *-o\ pgid=*-p*|*-o\ pgid=\ -p*)
+    printf '999999999\n' ;;
+  *-Ao\ pid=*)
+    exit 0 ;;
+  *)
+    exit 1 ;;
+esac
+PS
+chmod +x "$PROT_SHIM/ps"
+PROT_LEDGER="$T/protected-ledger.tsv"
+: > "$PROT_LEDGER"
+OUT="$(PATH="$PROT_SHIM:$PATH" AFTERPARTY_STYLE=always \
+  AGENT_PROCESS_LEDGER="$PROT_LEDGER" "$BIN" audit --kill dev 2>/dev/null)"
+printf '%s\n' "$OUT" | grep -qF '⊘ 1 protected' \
+  || fail "A7b: protected-only composite receipt lost protected count"
+printf '%s\n' "$OUT" | grep -qF 'spotless — nobody crashed on your couch' \
+  && fail "A7b: protected-only composite kill rendered a false spotless card"
+pass "A7b: protected-only composite kill receipt"
+
 # ---------- A8: stop styled ----------
 OUT="$(AFTERPARTY_STYLE=always AGENT_PROCESS_LEDGER="$LEDGER" bash "$LIB/process-ledger.sh" stop 2>/dev/null)"
 echo "$OUT" | grep -q 'DRY RUN' || fail "A8: stop styled lost DRY RUN"

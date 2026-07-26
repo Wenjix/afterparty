@@ -36,15 +36,19 @@ print_finale_card() {
   listeners="$(tally_get procs.listeners)"
   echo
   s_card_open
-  if [ "$killed" -gt 0 ]; then
+  if [ "$killed" -gt 0 ] || [ "$prot" -gt 0 ]; then
     s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty audit --kill${C_RESET}"
     segs="$(s_segments \
-      "$G_OK $killed killed" \
+      "$([ "$killed" -gt 0 ] && echo "$G_OK $killed killed")" \
       "$([ "$prot" -gt 0 ] && echo "$G_SKIP $prot protected")" \
       "$([ "$gitf" -gt 0 ] && echo "$G_ACT $(s_n "$gitf" 'git leftover' 'git leftovers')")" \
       "$([ "$live" -gt 0 ] && echo "$G_ACT $live on the tab")")"
     s_card_line "   $segs"
-    s_card_line "   $(s_n "$killed" 'process group shown the door' 'process groups shown the door')"
+    if [ "$killed" -gt 0 ]; then
+      s_card_line "   $(s_n "$killed" 'process group shown the door' 'process groups shown the door')"
+    else
+      s_card_line "   nothing stopped — $(s_n "$prot" 'group was protected' 'groups were protected')"
+    fi
     if [ "$gitf" -gt 0 ]; then
       s_card_line "   still on the tab: $(s_n "$gitf" 'git leftover' 'git leftovers')"
     fi
