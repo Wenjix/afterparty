@@ -116,12 +116,12 @@ report_localhost() {
   echo "$rows" | awk '{print "  " $0}'
 }
 
-# Distinct pgids for a category, minus any in the keep-list.
+# Distinct candidate pgids for a category. The caller applies --keep so styled
+# output can narrate that per-item decision.
 pgids_for() {
-  local re="$1" keep="$2"
+  local re="$1"
   list_matches "$re" | awk '{print $3}' | sort -u | while read -r pg; do
     [ -z "$pg" ] && continue
-    case ",$keep," in *",$pg,"*) continue ;; esac
     echo "$pg"
   done
 }
@@ -282,12 +282,24 @@ for cat in $KILL_CATS; do
   if [ -z "$re" ]; then echo "unknown category: $cat (use tests|dev|browser)" >&2; exit 2; fi
   s_lead "$C_RED" "Killing category '$cat' — last call (keep: ${KEEP:-none})" \
     "Killing category '$cat' (keep: ${KEEP:-none})"
-  pgs=$(pgids_for "$re" "$KEEP")
+  pgs=$(pgids_for "$re")
   if [ -z "$pgs" ]; then s_dim "  nothing to kill"; continue; fi
   # pgids_for emits one pgid per line; the surrounding loop runs under
   # IFS=',' so word-splitting would glue them into one token — read by line.
+  actionable=0
   while IFS= read -r pg; do
     [ -n "$pg" ] || continue
+    case ",$KEEP," in
+      *",$pg,"*)
+        # Plain output historically collapsed an all-kept category to
+        # "nothing to kill"; only styled mode gains the per-item decision.
+        if [ "$STYLE_ON" -eq 1 ]; then
+          s_skip "  keep pgid $pg: requested via --keep"
+        fi
+        continue
+        ;;
+    esac
+    actionable=1
     # The listing filtered protected rows, but a protected process may share
     # this group — never signal the whole group in that case.
     if pgid_has_protected "$pg"; then
@@ -297,6 +309,9 @@ for cat in $KILL_CATS; do
     fi
     kill_group "$pg" && N_KILLED=$((N_KILLED + 1))
   done <<< "$pgs"
+  if [ "$actionable" -eq 0 ] && [ "$STYLE_ON" -eq 0 ]; then
+    s_dim "  nothing to kill"
+  fi
 done
 unset IFS
 s_ok "done"

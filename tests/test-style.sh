@@ -117,6 +117,34 @@ printf '%s\n' "$OUT" | grep -qF 'spotless — nobody crashed on your couch' \
   && fail "A7b: protected-only composite kill rendered a false spotless card"
 pass "A7b: protected-only composite kill receipt"
 
+# ---------- A7c: explicit keep is visible only in styled output ----------
+# Reuse the impossible PGID fixture above. The public CLI must route keep
+# before the protected-group guard and must never reach the signal path.
+SIGNAL_MARKER="$T/keep-signal-path"
+cat > "$PROT_SHIM/sleep" <<'SLEEP'
+#!/usr/bin/env bash
+: "${AFTERPARTY_TEST_SIGNAL_MARKER:?}"
+printf 'signal path entered\n' >> "$AFTERPARTY_TEST_SIGNAL_MARKER"
+SLEEP
+chmod +x "$PROT_SHIM/sleep"
+OUT="$(PATH="$PROT_SHIM:$PATH" AFTERPARTY_STYLE=always \
+  AFTERPARTY_TEST_SIGNAL_MARKER="$SIGNAL_MARKER" \
+  AGENT_PROCESS_LEDGER="$PROT_LEDGER" \
+  "$BIN" audit --kill dev --keep 2147483000 2>/dev/null)"
+printf '%s\n' "$OUT" | grep -qF '⊘ keep pgid 2147483000: requested via --keep' \
+  || fail "A7c: styled explicit keep decision missing"
+[ ! -e "$SIGNAL_MARKER" ] \
+  || fail "A7c: explicitly kept pgid reached the signal path"
+
+OUT="$(PATH="$PROT_SHIM:$PATH" bash \
+  "$LIB/audit-processes.sh" --kill dev --keep 2147483000 2>/dev/null)"
+EXPECTED="$(printf '%s\n' \
+  "Killing category 'dev' (keep: 2147483000)" \
+  "  nothing to kill" \
+  "done")"
+[ "$OUT" = "$EXPECTED" ] || fail "A7c: explicit keep changed legacy plain output"
+pass "A7c: explicit keep decision styled, legacy plain output stable"
+
 # ---------- A8: stop styled ----------
 OUT="$(AFTERPARTY_STYLE=always AGENT_PROCESS_LEDGER="$LEDGER" bash "$LIB/process-ledger.sh" stop 2>/dev/null)"
 echo "$OUT" | grep -q 'DRY RUN' || fail "A8: stop styled lost DRY RUN"
