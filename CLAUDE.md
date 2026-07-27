@@ -47,6 +47,21 @@ mechanics when you touch them.
   cards are additive, styled-mode only. Composite `audit` collects child
   counters via the AFTERPARTY_TALLY file; AFTERPARTY_CARD=0 suppresses
   cards (doctor, nested calls).
+- The styled instrument layer rides style.sh helpers exclusively: s_sevcell
+  severity cells (NEUTRAL table rows only — never inside whole-line
+  s_would/s_kill tints; pad-then-color, ANSI inside %-Ns breaks alignment),
+  s_etime, s_meter, s_segments card lines, s_heartbeat (STYLE_ERR-gated
+  stderr). s_skip (⊘) marks per-item skip/keep/protect DECISIONS; s_dim
+  stays for noise — "(none)", tips, legends, policy lines. devclean --disk
+  styled DRY-RUN buffers rows into share-of-section meters; plain must keep
+  streaming the legacy lines (test-review-fixes C1 greps them) and --apply
+  always streams so destructive work narrates live. Kill paths tally
+  procs.protected for the composite receipt; audit's dry-run listings
+  filter protected processes before counting, so audit/composite segments
+  claim ⊘ only on kill paths — stop measures protect decisions in both
+  modes, so its dry-run cards may carry ⊘. tests/test-proc-tables.sh fakes ps/pgrep/lsof on PATH for
+  deterministic tables everywhere — dry-run only, never --kill/--apply
+  under the shim.
 
 **Environment gotcha:** I develop on Windows 11 but the scripts are bash targeting
 macOS/Linux. Under Git Bash, `rg` and `lsof` are missing and `ps` lacks -Ao, so

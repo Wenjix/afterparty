@@ -25,11 +25,14 @@ printf '2026-07-14T00:00:00Z\t%s\t%s\t999999\t999999\tdev\t3000\tverify UI\tpnpm
 # Piped auto output must equal AFTERPARTY_STYLE=never output byte-for-byte.
 # Only deterministic commands qualify (process listings embed live cpu/etime).
 eq() { # name command...
-  local name="$1"; shift
+  local name="$1" gl; shift
   "$@" > "$T/a-$name" 2>/dev/null
   AFTERPARTY_STYLE=never "$@" > "$T/b-$name" 2>/dev/null
   diff -q "$T/a-$name" "$T/b-$name" >/dev/null || fail "plain drift (auto vs never): $name"
   grep -q "$ESC" "$T/a-$name" && fail "ANSI leaked into piped auto output: $name"
+  for gl in '▸' '✓' '⊘' '█' '░' '◐'; do
+    grep -qF -- "$gl" "$T/a-$name" && fail "glyph leaked into piped auto output: $name ($gl)"
+  done
 }
 eq git bash "$LIB/audit-git.sh"
 eq artifacts bash "$LIB/clean-artifacts.sh"
@@ -93,6 +96,52 @@ OUT="$(AFTERPARTY_STYLE=always AGENT_PROCESS_LEDGER="$LEDGER" "$BIN" doctor 2>/d
 N_CARDS="$(printf '%s\n' "$OUT" | grep -c '╭' || true)"
 [ "$N_CARDS" = "0" ] || fail "A9: doctor should show 0 cards, got $N_CARDS"
 pass "A9: doctor card-free"
+
+# ---------- S1: git — ▸ on would-lines, ⊘ on skip decisions, plain stable ----------
+# Deterministic fixture: one untracked litter file + a fresh (young) index.lock.
+GITFIX="$T/gitfix"
+git init -qb main "$GITFIX" 2>/dev/null || git init -q "$GITFIX"
+git -C "$GITFIX" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+echo x > "$GITFIX/foo.orig"
+touch "$GITFIX/.git/index.lock"
+eq gitfix bash "$LIB/audit-git.sh" --root "$GITFIX"
+OUT="$(AFTERPARTY_STYLE=always bash "$LIB/audit-git.sh" --root "$GITFIX" 2>/dev/null)"
+printf '%s\n' "$OUT" | grep -qF '▸ would remove foo.orig' || fail "S1: styled would-line missing ▸"
+printf '%s\n' "$OUT" | grep -qF '⊘ left alone:' || fail "S1: young index.lock decision missing ⊘"
+printf '%s\n' "$OUT" | grep -qF '⊘ main:' && fail "S1: main-worktree policy line must stay glyph-free"
+printf '%s\n' "$OUT" | grep -qF '▸ 1 would-clean' || fail "S1: git damage card missing segment line"
+pass "S1: git glyphs (styled) + gitfix plain stability"
+
+# ---------- S2: ledger stop — ⊘ on skip decision lines ----------
+LED_SKIP="$T/ledger-skip.tsv"
+printf '2026-07-14T00:00:00Z\t%s\t%s\t%s\t\tdev\t\t\tsleepx\n' \
+  "$(git -C "$REPO" rev-parse --show-toplevel)" "$REPO" "$$" > "$LED_SKIP"
+AGENT_PROCESS_LEDGER="$LED_SKIP" eq stopskip bash "$LIB/process-ledger.sh" stop
+OUT="$(AFTERPARTY_STYLE=always AGENT_PROCESS_LEDGER="$LED_SKIP" bash "$LIB/process-ledger.sh" stop 2>/dev/null)"
+printf '%s\n' "$OUT" | grep -qF '⊘ skip pid' || fail "S2: ledger skip decision missing ⊘"
+printf '%s\n' "$OUT" | grep -qF '1 skipped' || fail "S2: ledger-clear card missing skipped segment"
+pass "S2: stop skip glyphs (styled) + plain stability"
+
+# ---------- S3: artifacts — ⊘ on git-tracked skip ----------
+ARTFIX="$T/artfix"
+git init -qb main "$ARTFIX" 2>/dev/null || git init -q "$ARTFIX"
+mkdir -p "$ARTFIX/.cache" "$ARTFIX/dist"
+echo keep > "$ARTFIX/.cache/keep.txt"
+git -C "$ARTFIX" -c core.autocrlf=false add .cache/keep.txt
+git -C "$ARTFIX" -c user.email=t@t -c user.name=t commit -qm init
+dd if=/dev/zero of="$ARTFIX/dist/blob" bs=1024 count=200 2>/dev/null
+eq artfix bash "$LIB/clean-artifacts.sh" --root "$ARTFIX"
+OUT="$(AFTERPARTY_STYLE=always bash "$LIB/clean-artifacts.sh" --root "$ARTFIX" 2>/dev/null)"
+printf '%s\n' "$OUT" | grep -qF '⊘ skip (git-tracked): .cache' || fail "S3: artifacts skip decision missing ⊘"
+pass "S3: artifacts skip glyphs (styled) + plain stability"
+
+# ---------- S4: artifacts styled size tints + category share meters ----------
+OUT="$(AFTERPARTY_STYLE=always bash "$LIB/clean-artifacts.sh" --root "$ARTFIX" 2>/dev/null)"
+printf '%s\n' "$OUT" | grep -qF '█' || fail "S4: category meter bars missing in styled mode"
+printf '%s\n' "$OUT" | grep -qF "${ESC}[32m" || fail "S4: small size cell not green-tinted"
+printf '%s\n' "$OUT" | grep -q 'Reclaimable total:' || fail "S4: total line lost in styled mode"
+printf '%s\n' "$OUT" | grep -qF '▸ 1 path' || fail "S4: artifacts damage card missing segment line"
+pass "S4: artifacts meters + size tints (styled)"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi

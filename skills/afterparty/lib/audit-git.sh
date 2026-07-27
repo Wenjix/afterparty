@@ -70,6 +70,7 @@ say()       { [ "$JSON" -eq 1 ] || echo "$@"; }
 say_would() { [ "$JSON" -eq 1 ] || s_would "$@"; }
 say_ok()    { [ "$JSON" -eq 1 ] || s_ok "$@"; }
 say_dim()   { [ "$JSON" -eq 1 ] || s_dim "$@"; }
+say_skip()  { [ "$JSON" -eq 1 ] || s_skip "$@"; }
 hdr()       { [ "$JSON" -eq 1 ] || s_hdr "$1"; }
 warn()      { s_warn "$*"; }
 
@@ -163,13 +164,13 @@ audit_worktrees() {
     fi
 
     if [ "$locked" -eq 1 ]; then
-      say_dim "  locked: $path — left alone"
+      say_skip "  locked: $path — left alone"
       wt_row "$path" "$branch" "$head" 0 locked "" "" report
       return 0
     fi
 
     if [ "$path" = "$ROOT" ]; then
-      say_dim "  current: $path — not a removal candidate"
+      say_skip "  current: $path — not a removal candidate"
       wt_row "$path" "$branch" "$head" 0 current "" "" report
       return 0
     fi
@@ -191,7 +192,7 @@ audit_worktrees() {
     fi
 
     if [ "$age" -le "$AGE_DAYS" ]; then
-      say_dim "  active: $path (${branch:-detached}, idle ${age}d) — keeping"
+      say_skip "  active: $path (${branch:-detached}, idle ${age}d) — keeping"
       wt_row "$path" "$branch" "$head" 0 active "$dirty" "$age" keep
       return 0
     fi
@@ -356,7 +357,7 @@ $COMMON_DIR/index.lock"
     ts="$(mtime_epoch "$lock")"
     m="$(age_mins_of "$ts")"
     if [ "$m" -lt "$LOCK_AGE_MIN" ]; then
-      say_dim "  left alone: $lock (${m}m old — a git process may still be running)"
+      say_skip "  left alone: $lock (${m}m old — a git process may still be running)"
       lk_row "$lock" "$m" keep
       continue
     fi
@@ -453,11 +454,15 @@ audit_stashes() {
 
 # --- finale card (styled standalone runs only) ---------------------------------------
 print_git_card() {
-  local total=$((N_PRUNABLE + N_WT + N_BRANCH + N_LOCK + N_LITTER))
+  local total=$((N_PRUNABLE + N_WT + N_BRANCH + N_LOCK + N_LITTER)) segs
   echo
   s_card_open
   if [ "$DO_CLEAN" -eq 1 ]; then
     s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty git --clean${C_RESET}"
+    segs="$(s_segments \
+      "$([ "$total" -gt 0 ] && echo "$G_OK $total cleaned")" \
+      "$([ "$N_STASH" -gt 0 ] && echo "$(s_n "$N_STASH" 'stash' 'stashes')")")"
+    if [ -n "$segs" ]; then s_card_line "   $segs"; fi
     if [ "$total" -eq 0 ]; then
       s_card_line "   nothing needed doing — already spotless ✨"
     else
@@ -471,6 +476,10 @@ print_git_card() {
     fi
   elif [ "$total" -gt 0 ]; then
     s_card_line "${C_BOLD}${C_YEL}🧹 the damage — git${C_RESET}"
+    segs="$(s_segments \
+      "$G_ACT $total would-clean" \
+      "$([ "$N_STASH" -gt 0 ] && echo "$(s_n "$N_STASH" 'stash' 'stashes')")")"
+    s_card_line "   $segs"
     [ "$N_PRUNABLE" -gt 0 ] && s_card_line "   $(s_n "$N_PRUNABLE" 'prunable worktree entry' 'prunable worktree entries')"
     [ "$N_WT" -gt 0 ] && s_card_line "   $(s_n "$N_WT" 'stale worktree ready to go' 'stale worktrees ready to go')"
     [ "$N_BRANCH" -gt 0 ] && s_card_line "   $(s_n "$N_BRANCH" 'merged agent branch to delete' 'merged agent branches to delete')"

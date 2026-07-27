@@ -63,7 +63,7 @@ list_matches() {
 # Print a human report for a category. Sets LAST_N to the row count so the
 # caller can tally findings.
 report() {
-  local label="$1" re="$2" rows hc="" hr=""
+  local label="$1" re="$2" rows hc="" hr="" line pid ppid pgid cpu et
   rows=$(list_matches "$re" || true)
   LAST_N=0
   [ -n "$rows" ] && LAST_N=$(printf '%s\n' "$rows" | grep -c .)
@@ -74,9 +74,26 @@ report() {
   fi
   if [ "$STYLE_ON" -eq 1 ]; then hc="$C_DIM"; hr="$C_RESET"; fi
   printf '  %s%-7s %-7s %-7s %-6s %-10s %s%s\n' "$hc" PID PPID PGID %CPU ELAPSED COMMAND "$hr"
-  echo "$rows" | while IFS= read -r line; do
-    echo "$line" | awk '{printf "  %-7s %-7s %-7s %-6s %-10s ", $1,$2,$3,$4,$5; for(i=6;i<=NF && i<=14;i++) printf "%s ", $i; print ""}'
-  done
+  if [ "$STYLE_ON" -eq 1 ]; then
+    # Styled rows render in bash so %CPU can carry a severity tint and
+    # ELAPSED reads as "1d 2h"; the plain awk path below stays byte-exact.
+    echo "$rows" | while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      # set -f: a COMMAND field containing * must never glob against cwd.
+      # shellcheck disable=SC2086
+      set -f; set -- $line; set +f
+      [ $# -ge 6 ] || continue
+      pid="$1" ppid="$2" pgid="$3" cpu="$4" et="$5"
+      shift 5
+      printf '  %-7s %-7s %-7s %s %-10s %s\n' "$pid" "$ppid" "$pgid" \
+        "$(s_sevcell "$cpu" 10 50 "$(printf '%-6s' "$cpu")")" \
+        "$(s_etime "$et")" "${*:1:9}"
+    done
+  else
+    echo "$rows" | while IFS= read -r line; do
+      echo "$line" | awk '{printf "  %-7s %-7s %-7s %-6s %-10s ", $1,$2,$3,$4,$5; for(i=6;i<=NF && i<=14;i++) printf "%s ", $i; print ""}'
+    done
+  fi
 }
 
 report_localhost() {
@@ -117,6 +134,7 @@ kill_group() {
     ok=0
     s_kill "  SIGTERM -> pgid $pg"
   fi
+  s_heartbeat "waiting 2s for stragglers"
   sleep 2
   if ps -Ao pgid= 2>/dev/null | tr -d ' ' | match_q "^${pg}$"; then
     kill -KILL -"$pg" 2>/dev/null && s_kill "  SIGKILL -> pgid $pg (straggler)"
@@ -195,7 +213,7 @@ fi
 # Finale cards (styled standalone runs only; the composite router owns the
 # card when AFTERPARTY_TALLY is set).
 print_procs_card() {
-  local total=$((N_TESTS + N_DEV + N_BROWSER)) cats=""
+  local total=$((N_TESTS + N_DEV + N_BROWSER)) cats="" segs
   echo
   s_card_open
   if [ "$total" -gt 0 ]; then
@@ -203,6 +221,12 @@ print_procs_card() {
     [ "$N_DEV" -gt 0 ] && cats="${cats:+$cats,}dev"
     [ "$N_BROWSER" -gt 0 ] && cats="${cats:+$cats,}browser"
     s_card_line "${C_BOLD}${C_YEL}🧹 the damage — processes${C_RESET}"
+    segs="$(s_segments \
+      "$([ "$N_TESTS" -gt 0 ] && echo "$G_ACT $N_TESTS tests")" \
+      "$([ "$N_DEV" -gt 0 ] && echo "$G_ACT $N_DEV dev")" \
+      "$([ "$N_BROWSER" -gt 0 ] && echo "$G_ACT $N_BROWSER browser")" \
+      "$([ "$N_LISTEN" -gt 0 ] && echo "$(s_n "$N_LISTEN" 'listener' 'listeners')")")"
+    s_card_line "   $segs"
     [ "$N_TESTS" -gt 0 ] && s_card_line "   $(s_n "$N_TESTS" 'test runner still running laps' 'test runners still running laps')"
     [ "$N_DEV" -gt 0 ] && s_card_line "   $(s_n "$N_DEV" 'dev server still serving' 'dev servers still serving')"
     [ "$N_BROWSER" -gt 0 ] && s_card_line "   $(s_n "$N_BROWSER" 'automation browser nobody closed' 'automation browsers nobody closed')"
@@ -218,9 +242,14 @@ print_procs_card() {
 }
 
 print_procs_receipt() {
+  local segs
   echo
   s_card_open
   s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty audit --kill $KILL_CATS${C_RESET}"
+  segs="$(s_segments \
+    "$([ "$N_KILLED" -gt 0 ] && echo "$G_OK $N_KILLED killed")" \
+    "$([ "$N_PROT" -gt 0 ] && echo "$G_SKIP $N_PROT protected")")"
+  if [ -n "$segs" ]; then s_card_line "   $segs"; fi
   if [ "$N_KILLED" -gt 0 ]; then
     s_card_line "   $(s_n "$N_KILLED" 'process group shown the door' 'process groups shown the door')"
   else
@@ -246,7 +275,7 @@ if [ -z "$KILL_CATS" ]; then
   exit 0
 fi
 
-N_KILLED=0
+N_KILLED=0 N_PROT=0
 IFS=','
 for cat in $KILL_CATS; do
   re=$(category_re "$cat")
@@ -262,7 +291,8 @@ for cat in $KILL_CATS; do
     # The listing filtered protected rows, but a protected process may share
     # this group — never signal the whole group in that case.
     if pgid_has_protected "$pg"; then
-      s_dim "  protect pgid $pg: shares its group with a protected process"
+      s_skip "  protect pgid $pg: shares its group with a protected process"
+      N_PROT=$((N_PROT + 1))
       continue
     fi
     kill_group "$pg" && N_KILLED=$((N_KILLED + 1))
@@ -271,4 +301,5 @@ done
 unset IFS
 s_ok "done"
 tally_add procs.killed "$N_KILLED"
+tally_add procs.protected "$N_PROT"
 if cards_on; then print_procs_receipt; fi
