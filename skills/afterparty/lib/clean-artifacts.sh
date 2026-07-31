@@ -116,7 +116,7 @@ process() {
     if [ "$STYLE_ON" -eq 1 ]; then
       # Size cell carries a severity tint (100 MB warn / 1 GB hot); the plain
       # branch below keeps the exact legacy bytes.
-      printf '  %s %s\n' "$(s_sevcell "${kb:-0}" 102400 1048576 "$(printf '%-6s' "$(human "$p")")")" "$rel"
+      printf '  %s %s\n' "$(s_sizecell "${kb:-0}" "$(printf '%-6s' "$(human "$p")")")" "$rel"
     else
       printf '  %-6s %s\n' "$(human "$p")" "$rel"
     fi
@@ -148,11 +148,11 @@ if [ "$STYLE_ON" -eq 1 ]; then
       mkb="${mpair#*:}"
       [ "$mkb" -gt 0 ] || continue
       printf '  %-7s %s %s\n' "${mpair%%:*}" "$(s_meter "$mkb" "$TOTAL_KB")" \
-        "$(s_sevcell "$mkb" 102400 1048576 "$(s_kb "$mkb")")"
+        "$(s_sizecell "$mkb" "$(s_kb "$mkb")")"
     done
   fi
   printf '\nReclaimable total: %s MB%s\n' \
-    "$(s_sevcell "$TOTAL_KB" 102400 1048576 "$((TOTAL_KB / 1024))")" \
+    "$(s_sizecell "$TOTAL_KB" "$((TOTAL_KB / 1024))")" \
     "$([ "$DO_CLEAN" -eq 1 ] && echo ' (freed)' || echo '')"
 else
   printf '\nReclaimable total: %s MB%s\n' "$((TOTAL_KB / 1024))" "$([ "$DO_CLEAN" -eq 1 ] && echo ' (freed)' || echo '')"

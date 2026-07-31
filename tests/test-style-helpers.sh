@@ -34,6 +34,14 @@ OUT="$(pln s_sevcell 55 10 50 '87.3  ')x"
 [ "$OUT" = '87.3  x' ] || fail "H2: plain must pass padded text through byte-exact"
 pass "H2: s_sevcell"
 
+# ---------- H2b: s_sizecell owns the shared 100 MB / 1 GB policy ----------
+case "$(sty s_sizecell 102399 'small')"  in *"$ESC[32m"*) : ;; *) fail "H2b: <100 MB must be green" ;; esac
+case "$(sty s_sizecell 102400 'warn')"   in *"$ESC[33m"*) : ;; *) fail "H2b: 100 MB must be yellow" ;; esac
+case "$(sty s_sizecell 1048576 'hot')"   in *"$ESC[31m"*) : ;; *) fail "H2b: 1 GB must be red" ;; esac
+OUT="$(pln s_sizecell 1048576 'hot  ')x"
+[ "$OUT" = 'hot  x' ] || fail "H2b: plain must pass padded text through byte-exact"
+pass "H2b: s_sizecell"
+
 # ---------- H3: s_meter share bars, styled only ----------
 [ "$(sty s_meter 512 1024 12)"  = '██████░░░░░░' ] || fail "H3: half fills 6 of 12"
 [ "$(sty s_meter 1 1024 12)"    = '█░░░░░░░░░░░' ] || fail "H3: nonzero share shows >=1 cell"
@@ -78,6 +86,10 @@ OUT="$(sty s_heartbeat 'sizing up x' 2>/dev/null)x"
 [ "$OUT" = 'x' ] || fail "H7: heartbeat must not touch stdout"
 ERR="$(pln s_heartbeat 'sizing up x' 2>&1 >/dev/null)x"
 [ "$ERR" = 'x' ] || fail "H7: plain mode heartbeat silent"
+ERR="$(AFTERPARTY_STYLE=always bash -c \
+  '. "$1"; STYLE_ON=0; STYLE_ERR=1; s_heartbeat "sizing up x"' \
+  _ "$STYLE" 2>&1 >/dev/null)x"
+[ "$ERR" = 'x' ] || fail "H7: stdout-only pipeline state must stay silent"
 pass "H7: s_heartbeat"
 
 echo

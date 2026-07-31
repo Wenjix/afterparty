@@ -139,14 +139,16 @@ print_process_table() {
     line="$(ps -o pid=,ppid=,pgid=,rss=,%cpu=,etime=,command= -p "$pid" 2>/dev/null)"
     [ -n "$line" ] || continue
     if [ "$STYLE_ON" -eq 1 ]; then
-      # Styled rows render in bash so RSS carries a severity tint; the plain
-      # awk path below stays byte-exact.
+      # Styled rows render in bash so RSS/CPU carry severity tints and
+      # ELAPSED is humanized; the plain awk path below stays byte-exact.
       # set -f: a COMMAND field containing * must never glob against cwd.
       # shellcheck disable=SC2086
       set -f; set -- $line; set +f
       [ $# -ge 7 ] || continue
-      printf '  %-7s %-7s %-7s %s %-6s %-10s ' "$1" "$2" "$3" \
-        "$(s_sevcell "$4" 262144 1048576 "$(printf '%-8s' "$4")")" "$5" "$6"
+      printf '  %-7s %-7s %-7s %s %s %-10s ' "$1" "$2" "$3" \
+        "$(s_sevcell "$4" 262144 1048576 "$(printf '%-8s' "$4")")" \
+        "$(s_sevcell "$5" 10 50 "$(printf '%-6s' "$5")")" \
+        "$(s_etime "$6")"
       shift 6
       printf '%s\n' "$*"
     else
@@ -401,13 +403,13 @@ disk_flush() {
     if [ "$type" = meter ]; then
       if [ -n "$detail" ]; then
         printf '  %-26.26s %s %s  %s%s%s\n' "$label" \
-          "$(s_sevcell "$kb" 102400 1048576 "$(s_meter "$kb" "$total")")" \
-          "$(s_sevcell "$kb" 102400 1048576 "$(printf '%9s' "$(s_kb "$kb")")")" \
+          "$(s_sizecell "$kb" "$(s_meter "$kb" "$total")")" \
+          "$(s_sizecell "$kb" "$(printf '%9s' "$(s_kb "$kb")")")" \
           "$C_DIM" "$detail" "$C_RESET"
       else
         printf '  %-26.26s %s %s\n' "$label" \
-          "$(s_sevcell "$kb" 102400 1048576 "$(s_meter "$kb" "$total")")" \
-          "$(s_sevcell "$kb" 102400 1048576 "$(printf '%9s' "$(s_kb "$kb")")")"
+          "$(s_sizecell "$kb" "$(s_meter "$kb" "$total")")" \
+          "$(s_sizecell "$kb" "$(printf '%9s' "$(s_kb "$kb")")")"
       fi
     else
       s_would "  $detail"
@@ -608,9 +610,9 @@ run_disk() {
       # Styled total tints the figure; the else-branch keeps the exact
       # legacy bytes.
       if [ "$DRY_RUN" -eq 1 ]; then
-        printf 'Global disk reclaimable: %s\n' "$(s_sevcell "$DISK_TOTAL_KB" 102400 1048576 "$(human_mb "$DISK_TOTAL_KB")")"
+        printf 'Global disk reclaimable: %s\n' "$(s_sizecell "$DISK_TOTAL_KB" "$(human_mb "$DISK_TOTAL_KB")")"
       else
-        printf 'Global disk reclaimed: %s\n' "$(s_sevcell "$DISK_TOTAL_KB" 102400 1048576 "$(human_mb "$DISK_TOTAL_KB")")"
+        printf 'Global disk reclaimed: %s\n' "$(s_sizecell "$DISK_TOTAL_KB" "$(human_mb "$DISK_TOTAL_KB")")"
       fi
     else
       if [ "$DRY_RUN" -eq 1 ]; then

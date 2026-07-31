@@ -27,7 +27,7 @@ case "$*" in
   *pid,ppid,pgid,%cpu,etime,command*)
     printf '41234 1 41234 87.3 1-02:03:04 node /repo/node_modules/.bin/vitest --watch\n' ;;
   *-o\ pid=,ppid=,pgid=,rss=,%cpu=,etime=,command=*)
-    printf '51234 1 51234 2097152 1.0 03:04:05 next-server /app\n' ;;
+    printf '51234 1 51234 2097152 87.3 03:04:05 next-server /app\n' ;;
   *-o\ rss=*) printf '2097152\n' ;;
   *-o\ pgid=*-p*|*-o\ pgid=\ -p*) printf '99999\n' ;;
   *-eo\ ppid=,pid=,command=*) printf '1 51234 next-server /app\n' ;;
@@ -70,11 +70,16 @@ pass "P2: audit-processes plain table stable"
 OUT="$(HOME="$T/h" AFTERPARTY_STYLE=always bash "$LIB/devclean.sh" 2>/dev/null)"
 printf '%s\n' "$OUT" | grep -q 'next-server' || fail "P3: canned orphan row missing entirely"
 printf '%s\n' "$OUT" | grep -qF "${ESC}[31m2097152" || fail "P3: 2 GB rss cell not red"
+printf '%s\n' "$OUT" | grep -qF "${ESC}[31m87.3" || fail "P3: 87.3 %cpu cell not red"
+printf '%s\n' "$OUT" | grep -qF '3h 4m' || fail "P3: etime not humanized in styled table"
+printf '%s\n' "$OUT" | grep -qF '03:04:05' && fail "P3: raw etime leaked into styled table"
 HOME="$T/h" bash "$LIB/devclean.sh" > "$T/d-a" 2>/dev/null
 HOME="$T/h" AFTERPARTY_STYLE=never bash "$LIB/devclean.sh" > "$T/d-b" 2>/dev/null
 diff -q "$T/d-a" "$T/d-b" >/dev/null || fail "P3: devclean plain drift (auto vs never)"
 grep -q "$ESC" "$T/d-a" && fail "P3: ANSI leaked into piped devclean table"
 grep -q 'count: 1; rss: 2048.0 MB' "$T/d-a" || fail "P3: rss footer wrong or missing"
+grep -qF '03:04:05' "$T/d-a" || fail "P3: plain table lost raw etime"
+grep -qF '3h 4m' "$T/d-a" && fail "P3: humanized etime leaked into plain table"
 pass "P3: devclean rss severity styled + plain stable"
 
 # ---------- P4: devclean --disk styled meters, plain keeps streaming ----------

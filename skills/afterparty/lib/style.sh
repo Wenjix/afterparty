@@ -122,6 +122,17 @@ s_sevcell() {  # VALUE WARN HOT TEXT...
   printf '%s%s%s' "$c" "$*" "${c:+$C_RESET}"
 }
 
+# Shared size-severity policy: green below 100 MB, yellow from 100 MB, red
+# from 1 GB. Keep the thresholds here so artifact and dev-cache views cannot
+# drift apart.
+S_SIZE_WARN_KB=102400
+S_SIZE_HOT_KB=1048576
+s_sizecell() {  # VALUE TEXT...
+  local v="$1"
+  shift
+  s_sevcell "$v" "$S_SIZE_WARN_KB" "$S_SIZE_HOT_KB" "$@"
+}
+
 # Humanize ps etime ([[dd-]hh:]mm:ss): "1-02:03:04" -> "1d 2h", "03:04:05" ->
 # "3h 4m", "13:05" -> "13m", "00:42" -> "42s". Plain mode and unparseable
 # input pass through unchanged, so misuse can never drift the contract.
@@ -183,7 +194,7 @@ s_segments() {
 # cursor tricks. Styled stderr only; piped/plain runs and report.md stay
 # silent exactly as before.
 s_heartbeat() {
-  [ "$STYLE_ERR" -eq 1 ] || return 0
+  [ "$STYLE_ON" -eq 1 ] && [ "$STYLE_ERR" -eq 1 ] || return 0
   printf '%s%s %s …%s\n' "$C_DIM" "$G_WAIT" "$*" "$C_RESET" >&2
 }
 
