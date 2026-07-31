@@ -2,9 +2,9 @@
 
 **What this is:** My cleanup tool for the mess coding agents leave behind,
 developed independently in this repo (single-root history), shipped three ways:
-Claude Code plugin (.claude-plugin/ manifests + hooks/hooks.json SessionEnd
-hook), self-contained Agent Skill (skills/afterparty/ bundles SKILL.md + bin +
-lib, commands anchored with $CLAUDE_SKILL_DIR), and standalone CLI (root
+Claude Code plugin (.claude-plugin/ manifests + asynchronous SessionEnd and
+lightweight SessionStart hooks), self-contained Agent Skill
+(skills/afterparty/ bundles SKILL.md + VERSION + LICENSE + bin + lib, commands anchored with $CLAUDE_SKILL_DIR), and standalone CLI (root
 bin/afterparty wrapper). The LICENSE deliberately retains an earlier author's
 copyright line — the code began as an MIT derivative — so never remove it. I'm
 iterating on this partly to learn Claude plugin development — explain plugin
@@ -36,10 +36,22 @@ mechanics when you touch them.
   applies only the safe git subset (worktree prune, clean stale worktrees,
   merged agent branches, aged index.lock, untracked conflict litter) —
   unmerged branches, dirty worktrees, and stashes stay report-only.
+- Mutation receipts are postcondition-based: signal delivery and `rm` return
+  codes are not enough. Confirm the process/group is absent or the target path
+  disappeared, count partial failures, return nonzero, and append the outcome
+  through lib/journal.sh. Never journal dry runs.
+- Private mutable state is centralized in lib/state.sh. Reports are
+  workspace-keyed unless a repo opts into gitignored report.md; ledger add and
+  prune mutations must hold the portable lock. Preserve 0700/0600 modes where
+  the platform supports them.
+- Filesystem mutation boundaries are physical, not merely lexical: reject
+  HOME symlink escapes, never select the artifact scan root itself, and route
+  every artifact collector through the nested-repository guard.
 - Agent-facing output: `--json` on audit/list/git emits JSON Lines (helpers
   live in skills/afterparty/lib/json.sh, sourced like protect.sh).
   `audit --report` writes report.md at the repo root ONLY when the repo
-  gitignores it (litter guard), else `~/.cache/agent-processes/report.md`;
+  gitignores it and no unrelated file owns that path (litter/clobber guard),
+  else a workspace-keyed cache report;
   the plugin's SessionEnd hook relies on this.
 - Terminal styling lives ONLY in skills/afterparty/lib/style.sh, gated on
   TTY / NO_COLOR / AFTERPARTY_STYLE=always|never|auto. Plain (piped) and
@@ -78,6 +90,9 @@ grepping for \r lies); if a working copy shows w/crlf, fix via `rm` +
 
 **Conventions:** lowercase conventional commits (feat:/fix:/docs:/style:).
 LF endings enforced via .gitattributes — scripts must never pick up CRLF.
+`skills/afterparty/VERSION` is the canonical release version; synchronize the
+plugin manifest and SKILL metadata, bundle the root license, and update
+CHANGELOG.md in the same change.
 
 **Known backlog:** shellcheck advisory findings (CI runs `--severity=error`
 blocking; full severity is advisory-only for now). Cleanup areas researched

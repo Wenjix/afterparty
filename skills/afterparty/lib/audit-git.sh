@@ -16,7 +16,7 @@
 #   audit-git.sh --json             # JSON Lines output (one object per finding)
 #
 # Not a git repo: prints a note and exits 0 (safe for hooks in any cwd).
-# Exit codes: 0 ok (even with findings) · 2 usage error.
+# Exit codes: 0 ok (even with findings) · 1 partial cleanup failure · 2 usage.
 set -uo pipefail
 
 # --- constants ---------------------------------------------------------------
@@ -26,6 +26,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/json.sh"
 # TTY-gated styling + finale cards (plain passthrough on pipes).
 . "$DIR/style.sh"
+# Private local record of confirmed mutation outcomes.
+. "$DIR/journal.sh"
 
 # Branch names owned by coding agents. Extend here to cover more tools.
 AGENT_BRANCH_RE='^(claude|codex|cursor|copilot|aider|agent)[/-]'
@@ -57,6 +59,8 @@ IS_BARE="$(g rev-parse --is-bare-repository 2>/dev/null)"
 # Normalize to the worktree top-level so paths compare against git-emitted
 # paths (on Windows git says C:/... while $PWD says /c/... — never mix them).
 [ "$IS_BARE" = "true" ] || ROOT="$(g rev-parse --show-toplevel)"
+AFTERPARTY_JOURNAL_WORKSPACE="$ROOT"
+AFTERPARTY_JOURNAL_WORKSPACE_INITIALIZED=1
 GIT_DIR="$(g rev-parse --absolute-git-dir)"
 COMMON_DIR="$(g rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "$GIT_DIR")"
 HAS_COMMITS=0
@@ -110,7 +114,7 @@ CHECKED_OUT_BRANCHES=""
 # first, so --clean converges in one pass; if a removal actually failed the
 # branch is not freed, and `git branch -d` backstops regardless.
 FREED_BRANCHES=""
-N_PRUNABLE=0 N_WT=0 N_BRANCH=0 N_LOCK=0 N_LITTER=0 LITTER_BYTES=0 N_STASH=0
+N_PRUNABLE=0 N_WT=0 N_BRANCH=0 N_LOCK=0 N_LITTER=0 LITTER_BYTES=0 N_STASH=0 N_FAILED=0
 
 # --- worktrees -----------------------------------------------------------------
 wt_row() {  # path branch head main state dirty age_days action [applied [error]]
@@ -131,7 +135,7 @@ wt_row() {  # path branch head main state dirty age_days action [applied [error]
 audit_worktrees() {
   hdr "Worktrees"
   local line wt_path="" wt_head="" wt_branch="" wt_locked=0 wt_prunable=0 seen_main=0
-  local prune_list="" prune_branches="" remove_err
+  local prune_list="" remove_err
 
   flush_wt() {
     [ -n "$wt_path" ] || return 0
@@ -152,9 +156,7 @@ audit_worktrees() {
     if [ "$prunable" -eq 1 ]; then
       N_PRUNABLE=$((N_PRUNABLE + 1))
       if [ "$DO_CLEAN" -eq 1 ]; then
-        prune_list="$prune_list$path
-"
-        [ -n "$branch" ] && prune_branches="$prune_branches $branch"
+        prune_list="${prune_list}${path}"$'\t'"${branch}"$'\n'
       else
         say_would "  would prune $path (directory gone; admin data only)"
         wt_row "$path" "$branch" "$head" 0 prunable "" "" prune 0
@@ -206,14 +208,17 @@ audit_worktrees() {
     if [ "$DO_CLEAN" -eq 1 ]; then
       # Never --force: git itself refuses dirty/locked worktrees, which is the
       # final guard against races between our check and the remove.
-      if remove_err="$(g worktree remove "$path" 2>&1)"; then
+      if remove_err="$(g worktree remove "$path" 2>&1)" && [ ! -e "$path" ]; then
         N_WT=$((N_WT + 1))
         say_ok "  removed $path (clean, idle ${age}d)"
         wt_row "$path" "$branch" "$head" 0 stale 0 "$age" remove 1
+        journal_action git.worktree.remove "$path" succeeded "idle_days=$age"
         [ -n "$branch" ] && FREED_BRANCHES="$FREED_BRANCHES $branch"
       else
+        N_FAILED=$((N_FAILED + 1))
         warn "worktree remove failed for $path: $remove_err (files may be open — close them and re-run)"
         wt_row "$path" "$branch" "$head" 0 stale 0 "$age" remove 0 "$remove_err"
+        journal_action git.worktree.remove "$path" failed "${remove_err:-target still exists}"
       fi
     else
       N_WT=$((N_WT + 1))
@@ -243,19 +248,30 @@ audit_worktrees() {
   if [ "$DO_CLEAN" -eq 1 ] && [ "$N_PRUNABLE" -gt 0 ]; then
     # prune only touches admin data under .git/worktrees whose directories
     # are gone — always safe.
-    local prune_ok=1 prune_err="" p
+    local prune_ok=1 prune_err="" p pruned_branch after_prune=""
     if ! prune_err="$(g worktree prune 2>&1)"; then
       prune_ok=0
       warn "worktree prune failed: $prune_err"
+    elif ! after_prune="$(g worktree list --porcelain 2>/dev/null)"; then
+      prune_ok=0
+      prune_err="could not verify worktree admin data after prune"
+      warn "$prune_err"
     fi
-    [ "$prune_ok" -eq 1 ] && FREED_BRANCHES="$FREED_BRANCHES$prune_branches"
-    while IFS= read -r p; do
+    N_PRUNABLE=0
+    while IFS=$'\t' read -r p pruned_branch; do
       [ -n "$p" ] || continue
-      if [ "$prune_ok" -eq 1 ]; then
+      if [ "$prune_ok" -eq 1 ] \
+          && ! printf '%s\n' "$after_prune" | grep -Fqx -- "worktree $p"; then
+        N_PRUNABLE=$((N_PRUNABLE + 1))
         say_ok "  pruned $p (admin data)"
-        wt_row "$p" "" "" 0 prunable "" "" prune 1
+        wt_row "$p" "$pruned_branch" "" 0 prunable "" "" prune 1
+        journal_action git.worktree.prune "$p" succeeded "admin data removed"
+        [ -z "$pruned_branch" ] || FREED_BRANCHES="$FREED_BRANCHES $pruned_branch"
       else
-        wt_row "$p" "" "" 0 prunable "" "" prune 0 "$prune_err"
+        N_FAILED=$((N_FAILED + 1))
+        [ -n "$prune_err" ] || prune_err="worktree entry still present after prune"
+        wt_row "$p" "$pruned_branch" "" 0 prunable "" "" prune 0 "$prune_err"
+        journal_action git.worktree.prune "$p" failed "$prune_err"
       fi
     done <<< "$prune_list"
   fi
@@ -283,7 +299,7 @@ audit_branches() {
     say_dim "  (no commits yet — skipping)"
     return 0
   fi
-  local merged_list name cts merged checked_out age ahead found=0 del_err
+  local merged_list name cts merged checked_out age ahead found=0 del_err ref_rc delete_ok
   merged_list="$(g for-each-ref refs/heads --merged HEAD --format='%(refname:short)' 2>/dev/null)"
 
   while read -r name cts; do
@@ -314,13 +330,26 @@ audit_branches() {
     if [ "$DO_CLEAN" -eq 1 ]; then
       # -d only, never -D: git refuses if the branch is not fully merged or
       # is checked out somewhere, which backstops our own checks.
+      delete_ok=0
       if del_err="$(g branch -d "$name" 2>&1)"; then
+        g show-ref --verify --quiet "refs/heads/$name"
+        ref_rc=$?
+        case "$ref_rc" in
+          1) delete_ok=1 ;;
+          0) del_err="branch still exists after git branch -d" ;;
+          *) del_err="could not verify branch deletion (show-ref exit $ref_rc)" ;;
+        esac
+      fi
+      if [ "$delete_ok" -eq 1 ]; then
         N_BRANCH=$((N_BRANCH + 1))
         say_ok "  deleted branch $name (merged, last commit ${age}d ago)"
         br_row "$name" 1 0 "$age" "" delete 1
+        journal_action git.branch.delete "$name" succeeded "merged; age_days=$age"
       else
+        N_FAILED=$((N_FAILED + 1))
         warn "branch -d failed for $name: $del_err"
         br_row "$name" 1 0 "$age" "" delete 0 "$del_err"
+        journal_action git.branch.delete "$name" failed "$del_err"
       fi
     else
       N_BRANCH=$((N_BRANCH + 1))
@@ -362,13 +391,16 @@ $COMMON_DIR/index.lock"
       continue
     fi
     if [ "$DO_CLEAN" -eq 1 ]; then
-      if rm -f -- "$lock" 2>/dev/null; then
+      if rm -f -- "$lock" 2>/dev/null && [ ! -e "$lock" ]; then
         N_LOCK=$((N_LOCK + 1))
         say_ok "  removed $lock (${m}m old, gate ${LOCK_AGE_MIN}m)"
         lk_row "$lock" "$m" remove 1
+        journal_action git.lock.remove "$lock" succeeded "age_minutes=$m"
       else
+        N_FAILED=$((N_FAILED + 1))
         warn "could not remove $lock"
         lk_row "$lock" "$m" remove 0 "rm failed"
+        journal_action git.lock.remove "$lock" failed "target still exists"
       fi
     else
       N_LOCK=$((N_LOCK + 1))
@@ -410,13 +442,16 @@ audit_conflict_litter() {
     bytes="$(wc -c < "$ROOT/$f" 2>/dev/null | tr -d '[:space:]')"
     case "$bytes" in ''|*[!0-9]*) bytes=0 ;; esac
     if [ "$DO_CLEAN" -eq 1 ]; then
-      if rm -f -- "$ROOT/$f" 2>/dev/null; then
+      if rm -f -- "$ROOT/$f" 2>/dev/null && [ ! -e "$ROOT/$f" ]; then
         N_LITTER=$((N_LITTER + 1)); LITTER_BYTES=$((LITTER_BYTES + bytes))
         say_ok "  removed $f (${bytes} B)"
         lt_row "$f" "$bytes" delete 1
+        journal_action git.litter.delete "$ROOT/$f" succeeded "bytes=$bytes"
       else
+        N_FAILED=$((N_FAILED + 1))
         warn "could not remove $f"
         lt_row "$f" "$bytes" delete 0 "rm failed"
+        journal_action git.litter.delete "$ROOT/$f" failed "target still exists"
       fi
     else
       N_LITTER=$((N_LITTER + 1)); LITTER_BYTES=$((LITTER_BYTES + bytes))
@@ -461,9 +496,10 @@ print_git_card() {
     s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty git --clean${C_RESET}"
     segs="$(s_segments \
       "$([ "$total" -gt 0 ] && echo "$G_OK $total cleaned")" \
-      "$([ "$N_STASH" -gt 0 ] && echo "$(s_n "$N_STASH" 'stash' 'stashes')")")"
+      "$([ "$N_STASH" -gt 0 ] && echo "$(s_n "$N_STASH" 'stash' 'stashes')")" \
+      "$([ "$N_FAILED" -gt 0 ] && echo "$G_SKIP $N_FAILED failed")")"
     if [ -n "$segs" ]; then s_card_line "   $segs"; fi
-    if [ "$total" -eq 0 ]; then
+    if [ "$total" -eq 0 ] && [ "$N_FAILED" -eq 0 ]; then
       s_card_line "   nothing needed doing — already spotless ✨"
     else
       [ "$N_PRUNABLE" -gt 0 ] && s_card_line "   pruned $(s_n "$N_PRUNABLE" 'worktree entry' 'worktree entries')"
@@ -471,6 +507,7 @@ print_git_card() {
       [ "$N_BRANCH" -gt 0 ] && s_card_line "   deleted $(s_n "$N_BRANCH" 'branch' 'branches')"
       [ "$N_LOCK" -gt 0 ] && s_card_line "   removed $(s_n "$N_LOCK" 'index.lock' 'index.locks')"
       [ "$N_LITTER" -gt 0 ] && s_card_line "   swept $(s_n "$N_LITTER" 'litter file' 'litter files') (${LITTER_BYTES} B)"
+      [ "$N_FAILED" -gt 0 ] && s_card_line "   $N_FAILED cleanup action(s) could not be confirmed"
       s_card_line
       s_card_line "   thanks for partying responsibly 🎉"
     fi
@@ -517,11 +554,16 @@ if [ "$JSON" -eq 0 ]; then
   verb="removable"; verb_br="deletable"
   [ "$DO_CLEAN" -eq 1 ] && { verb="removed"; verb_br="deleted"; }
   echo
-  echo "Summary: $N_PRUNABLE prunable, $N_WT $verb worktree(s), $N_BRANCH $verb_br branch(es), $N_LOCK stale lock(s), $N_LITTER litter file(s) ($LITTER_BYTES B), $N_STASH stash(es) (report only)"
+  printf 'Summary: %s prunable, %s %s worktree(s), %s %s branch(es), %s stale lock(s), %s litter file(s) (%s B), %s stash(es) (report only)' \
+    "$N_PRUNABLE" "$N_WT" "$verb" "$N_BRANCH" "$verb_br" "$N_LOCK" "$N_LITTER" "$LITTER_BYTES" "$N_STASH"
+  [ "$N_FAILED" -eq 0 ] || printf ', %s failed' "$N_FAILED"
+  printf '\n'
   [ "$DO_CLEAN" -eq 1 ] || echo "Nothing was changed."
   tally_add git.findings "$((N_PRUNABLE + N_WT + N_BRANCH + N_LOCK + N_LITTER))"
   tally_add git.litter_bytes "$LITTER_BYTES"
   tally_add git.stashes "$N_STASH"
+  tally_add git.failed "$N_FAILED"
   if cards_on; then print_git_card; fi
 fi
+if [ "$DO_CLEAN" -eq 1 ] && [ "$N_FAILED" -gt 0 ]; then exit 1; fi
 exit 0

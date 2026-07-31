@@ -1,11 +1,33 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty",
+              "report",
+              "--remind"
+            ],
+            "timeout": 2
+          }
+        ]
+      }
+    ],
     "SessionEnd": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty\" audit --report",
+            "command": "bash",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty",
+              "audit",
+              "--report"
+            ],
+            "async": true,
             "timeout": 60
           }
         ]
