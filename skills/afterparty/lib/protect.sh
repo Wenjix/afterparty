@@ -11,15 +11,24 @@ PROTECT_RE='Cursor|Code Helper|Electron|/MacOS/Code|Codex|node_repl|extension-ho
 
 # True if any live process in process group $1 matches PROTECT_RE. Group kills
 # must check this: filtering protected rows out of a listing does not stop a
-# protected sibling in the same group from dying with it. Returns 1 when ps
-# cannot enumerate (Git Bash) — kills are not usable there anyway.
+# protected sibling in the same group from dying with it. Return values:
+# 0 protected member found; 1 inspected and clear; 2 inspection unavailable.
 pgid_has_protected() {
-  local members
-  members="$(ps -Ao pgid=,command= 2>/dev/null | awk -v pg="$1" '$1 == pg { $1 = ""; print }')"
-  [ -n "$members" ] || return 1
+  local snapshot members rc
+  if ! snapshot="$(ps -Ao pgid=,command= 2>/dev/null)"; then
+    return 2
+  fi
+  members="$(printf '%s\n' "$snapshot" | awk -v pg="$1" '$1 == pg { $1 = ""; print }')" || return 2
+  [ -n "$members" ] || return 2
   if command -v rg >/dev/null 2>&1; then
     printf '%s\n' "$members" | rg -iq -- "$PROTECT_RE"
   else
     printf '%s\n' "$members" | grep -Eiq -- "$PROTECT_RE"
   fi
+  rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    1) return 1 ;;
+    *) return 2 ;;
+  esac
 }

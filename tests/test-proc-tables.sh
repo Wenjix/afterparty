@@ -67,6 +67,7 @@ grep -qF '1d 2h' "$T/p-a" && fail "P2: humanized etime leaked into plain table"
 pass "P2: audit-processes plain table stable"
 
 # ---------- P3: devclean styled RSS severity, plain stable ----------
+mkdir -p "$T/h"
 OUT="$(HOME="$T/h" AFTERPARTY_STYLE=always bash "$LIB/devclean.sh" 2>/dev/null)"
 printf '%s\n' "$OUT" | grep -q 'next-server' || fail "P3: canned orphan row missing entirely"
 printf '%s\n' "$OUT" | grep -qF "${ESC}[31m2097152" || fail "P3: 2 GB rss cell not red"
