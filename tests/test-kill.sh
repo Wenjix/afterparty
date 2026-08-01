@@ -95,8 +95,13 @@ B4=$FAILS
 P4="$(spawn_group sleep 300)"
 [ -n "$P4" ] || fail "spawn failed (recycle test)"
 SPAWNED_GROUPS="$SPAWNED_GROUPS $P4"
-printf '2026-07-14T00:00:00Z\t%s\t%s\t%s\t1\tdev\t-\trecycle test\tsleep 300\n' \
-  "$(git -C "$REPO" rev-parse --show-toplevel)" "$REPO" "$P4" > "$T/recycled.tsv"
+RECORDED_PGID=$((P4 + 1))
+TEST_PGID="$(ps -o pgid= -p $$ 2>/dev/null | tr -d '[:space:]')"
+if [ "$RECORDED_PGID" = "$TEST_PGID" ]; then
+  RECORDED_PGID=$((RECORDED_PGID + 1))
+fi
+printf '2026-07-14T00:00:00Z\t%s\t%s\t%s\t%s\tdev\t-\trecycle test\tsleep 300\n' \
+  "$(git -C "$REPO" rev-parse --show-toplevel)" "$REPO" "$P4" "$RECORDED_PGID" > "$T/recycled.tsv"
 OUT="$(AGENT_PROCESS_LEDGER="$T/recycled.tsv" bash "$LIB/process-ledger.sh" stop --kill 2>/dev/null)"
 printf '%s\n' "$OUT" | grep -q "skip pid $P4: group changed since it was recorded" \
   || fail "recycle guard: skip message missing"

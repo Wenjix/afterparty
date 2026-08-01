@@ -1124,11 +1124,16 @@ case "$(uname -s)" in
   *) CRASH_CONFIRM_DIR="$T/crash-confirm-home/.config/App/Crashpad/pending" ;;
 esac
 mkdir -p "$CRASH_CONFIRM_DIR"
+CRASH_CONFIRM_DIR="$(cd "$CRASH_CONFIRM_DIR" && pwd -P)"
 printf 'delete candidate\n' > "$CRASH_CONFIRM_DIR/dump.dmp"
 REAL_FIND="$(command -v find)"
 cat > "$T/crash-find-shim/find" <<'SH'
 #!/usr/bin/env bash
-if [ "${1:-}" = "$CRASHPAD_TARGET" ]; then
+FIND_TARGET=""
+if [ -d "${1:-}" ]; then
+  FIND_TARGET="$(cd "$1" 2>/dev/null && pwd -P)" || FIND_TARGET=""
+fi
+if [ "$FIND_TARGET" = "$CRASHPAD_TARGET" ]; then
   for arg in "$@"; do
     if [ "$arg" = "-exec" ]; then exec "$REAL_FIND" "$@"; fi
   done
