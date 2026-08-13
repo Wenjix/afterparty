@@ -7,7 +7,17 @@
 # interactive shell ("-zsh", "bash", "/bin/bash") but never the argumented
 # "sh -c ..." wrappers inside dev-server and test-runner groups, which must
 # stay killable.
-PROTECT_RE='Cursor|Code Helper|Electron|/MacOS/Code|Codex|node_repl|extension-host|chrome-devtools-mcp|playwright-mcp|@playwright/mcp|cursor-server|(^|[[:space:]/])-?(bash|zsh|fish)$'
+#
+# The claude alternative is anchored on the executable for the same reason.
+# Claude Code puts a ".claude/shell-snapshots/..." path in the argv of every
+# shell it spawns, so a bare "claude" substring would match the wrapper
+# sharing a dev server's process group; pgid_has_protected would then refuse
+# that group forever and dev servers would become unkillable. Requiring a
+# space or "/" before and a space or end after matches "claude ...", and
+# "/usr/local/bin/claude ...", but never "/Users/x/.claude/anything".
+# This is an audit/ledger kill guard only -- devclean does not source this
+# file, so its deliberate orphan-targeting of agent processes is unaffected.
+PROTECT_RE='Cursor|Code Helper|Electron|/MacOS/Code|Codex|node_repl|extension-host|chrome-devtools-mcp|playwright-mcp|@playwright/mcp|cursor-server|(^|[[:space:]/])claude([[:space:]]|$)|(^|[[:space:]/])-?(bash|zsh|fish)$'
 
 # True if any live process in process group $1 matches PROTECT_RE. Group kills
 # must check this: filtering protected rows out of a listing does not stop a

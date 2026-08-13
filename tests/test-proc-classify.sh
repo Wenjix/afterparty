@@ -108,5 +108,31 @@ done <<'REAL'
 77105 deno-task-dev
 REAL
 
+# ---------- C3: agent runtimes are protected, their spawned servers are not ----------
+# Defence in depth behind C1: if a future pattern misclassifies a live agent
+# session, the protect list is the last thing between it and a SIGTERM.
+# The entry must anchor on the executable. A bare "claude" would also match
+# the ".claude/shell-snapshots/..." path that Claude Code puts in the argv of
+# every shell it spawns, so the wrapper sharing a dev server's process group
+# would test as protected and pgid_has_protected would make real dev servers
+# permanently unkillable -- silently gutting the tool's main job.
+. "$LIB/protect.sh"
+protected() { printf '%s\n' "$1" | grep -Eiq -- "$PROTECT_RE"; }
+
+while IFS='|' read -r want desc cmd; do
+  if protected "$cmd"; then got=protected; else got=killable; fi
+  if [ "$got" = "$want" ]; then
+    pass "C3: $desc is $want"
+  else
+    fail "C3: $desc is $got, want $want"
+  fi
+done <<'CASES'
+protected|bare agent session|claude --dangerously-skip-permissions --effort max
+protected|agent invoked by absolute path|/Users/x/.local/bin/claude --output-format stream-json
+killable|dev-server wrapper carrying a .claude path|/bin/zsh -c source /Users/x/.claude/shell-snapshots/snap.sh && npm run dev
+killable|plain dev server|npm run dev
+killable|agent-owned path but not the executable|node /Users/x/.claude/plugins/marketplaces/afterparty/tools/server.mjs
+CASES
+
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))
