@@ -33,8 +33,9 @@ nothing until you approve.
   explicit flag — `--kill`, `--clean`, `--apply` — scoped to exactly what the
   dry run showed you.
 - **Group cleanup protects the live session.** Ledger and audit kills refuse
-  any process group containing an editor, interactive shell, Codex, or shared
-  MCP process. Devclean uses a separate, identity-checked orphan-PID path.
+  any process group containing an editor, interactive shell, running agent
+  (Claude Code, Codex), or shared MCP process. Devclean uses a separate,
+  identity-checked orphan-PID path.
 - **Receipts describe outcomes, not attempts.** A delivered signal or an
   `rm` invocation is not counted as success until Afterparty confirms the
   process exited or the path disappeared. Partial failures return nonzero and
@@ -193,8 +194,13 @@ concurrent prune cannot overwrite a newly recorded process.
 - git session litter: stale worktrees, agent branches, conflict files, stashes
 - protected processes it will refuse to kill
 
-The protect list covers editors, interactive shells, Codex, and shared MCP
-servers such as `playwright-mcp` and `chrome-devtools-mcp`.
+The protect list covers editors, interactive shells, running agent sessions
+(Claude Code, Codex), and shared MCP servers such as `playwright-mcp` and
+`chrome-devtools-mcp`. Agent entries are anchored on the executable, so a
+session is protected while the shells it spawns — which carry an agent path
+in their arguments — stay killable. This guard applies to ledger and audit
+kills; devclean's orphan cleanup deliberately still targets *orphaned* agent
+and MCP processes.
 
 ## Git cleanup
 
