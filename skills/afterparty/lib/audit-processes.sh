@@ -34,7 +34,7 @@ TESTS_RE='vitest|jest|mocha|jasmine|ava |pytest|pnpm test|npm test|yarn test|vit
 # Alternatives never span a space with `.*`: an agent runtime carries its whole
 # prompt in argv (>20 KB), so an unbounded gap lets ordinary prose ("bundle" ...
 # "/dev") classify a live session as a dev server and offer it to --kill dev.
-DEV_RE='next dev|next start|nodemon|astro dev|remix vite|vite($| )|webpack[^ ]* serve|webpack-dev-server|turbo( run)? dev|pnpm dev|pnpm start|npm run dev|npm run start|yarn dev|bun( run)? dev|deno task [a-z0-9:._-]*dev|ng serve|rails server|flask run|fastapi dev|uvicorn|python -m http.server'
+DEV_RE='next dev|next start|nodemon|astro dev|remix vite|vite($| )|webpack[^ ]* serve|webpack-dev-server|turbo( (run|watch|--?[a-z][a-z0-9-]*))* dev|pnpm dev|pnpm start|npm run dev|npm run start|yarn dev|bun( (run|--?[a-z][a-z0-9-]*))* dev|deno task [a-z0-9:._-]*dev|ng serve|rails server|flask run|fastapi dev|uvicorn|python -m http.server'
 BROWSER_RE='(Google Chrome|Chromium|Chrome Helper|headless_shell).*(remote-debugging|ms-playwright|mcp-chrome|puppeteer)|playwright.*(chromium|firefox|webkit)'
 LOCALHOST_RE='^(node|bun|deno|python|uvicorn|ruby|rails|go|cargo|java|next|vite|webpack|cloudflared)[[:space:]]|:3000|:3001|:3002|:5173|:5174|:8000|:8080|:8787'
 

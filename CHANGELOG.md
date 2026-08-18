@@ -9,7 +9,9 @@ All notable changes to Afterparty are documented here. Versions follow semantic 
 - Dev-server detection no longer matches prose inside a long command line.
   Agent runtimes carry their whole prompt in `argv`, so unanchored patterns
   such as `bun.*dev` spanned unrelated text ("bundle" ... "/dev") and offered
-  live agent sessions to `audit --kill dev`.
+  live agent sessions to `audit --kill dev`. The bounded gap still admits
+  flags and subcommands, so `bun --watch run dev` and Turborepo 2.x's
+  `turbo watch dev` are recognized, but it never spans a bare prose word.
 - Running agent sessions (Claude Code, Codex) are protected from ledger and
   audit group kills. The entry is anchored on the executable, so the shells an
   agent spawns — which carry an agent path in their arguments — stay killable.

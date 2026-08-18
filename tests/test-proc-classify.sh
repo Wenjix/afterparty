@@ -18,17 +18,24 @@ cd "$REPO" || exit 1
 
 # ---------- PATH shim: canned process world ----------
 # 770xx are agent runtimes, NOT dev servers. Their argv embeds a prompt
-# document -- real `claude` sessions run past 20 KB of argv -- and ordinary
+# document -- real agent sessions run past 20 KB of argv -- and ordinary
 # English prose in it straddles an unanchored alternative: "bundle".."/dev",
 # "turbocharge".."dev", "webpack".."observe", "deno task".."dev". Each pairs
 # a `.*` alternative with words that legitimately occur in documentation.
 # 771xx are the genuine dev servers those alternatives exist to catch.
 # pgid 99999 is "our" shell's group.
+#
+# The fixture runtime is deliberately NOT named `claude`. The Dev servers
+# listing filters PROTECT_RE before it prints, so a protected name would be
+# stripped from the section whatever DEV_RE did, and C1 would keep passing
+# with the greedy patterns fully restored -- asserting nothing. C0 below
+# pins that choice so the masking cannot creep back in; `claude` itself is
+# covered by C3.
 SHIM="$T/shim"
 mkdir -p "$SHIM"
 cat > "$SHIM/ps" <<'PS'
 #!/usr/bin/env bash
-P='claude --settings /Users/x/.gc/settings.json [city]'
+P='agentd --settings /Users/x/.gc/settings.json [city]'
 case "$*" in
   *pid,ppid,pgid,%cpu,etime,command*)
     printf '77001 1 77001 0.0 12-05:39:30 %s the bundle is easy to attach so each step writes via redirect > /dev/null\n' "$P"
@@ -40,6 +47,8 @@ case "$*" in
     printf '77103 1 77103 0.0 00:11:22 turbo run dev --filter=web\n'
     printf '77104 1 77104 0.0 00:11:22 node_modules/.bin/webpack serve\n'
     printf '77105 1 77105 0.0 00:11:22 deno task dev\n'
+    printf '77106 1 77106 0.0 00:11:22 bun --watch run dev\n'
+    printf '77107 1 77107 0.0 00:11:22 turbo watch dev\n'
     ;;
   *-o\ pid=,ppid=,pgid=,rss=,%cpu=,etime=,command=*)
     printf '77001 1 77001 524288 0.0 12-05:39:30 %s\n' "$P" ;;
@@ -74,6 +83,22 @@ section() {
 OUT="$(AFTERPARTY_STYLE=never bash "$LIB/audit-processes.sh" 2>/dev/null)"
 DEV="$(printf '%s\n' "$OUT" | section 'Dev servers')"
 
+# ---------- C0: the fixture runtime must not be protect-listed ----------
+# C1 reads the rendered Dev servers section, and that listing filters
+# PROTECT_RE before it prints. So if the fixture command is ever protected,
+# every C1 case passes without testing anything -- which is exactly what
+# happened when the fixture was named `claude` and the protect entry landed
+# a commit later: the greedy patterns could be restored wholesale and C1
+# stayed green. Fail loudly here rather than silently asserting nothing.
+. "$LIB/protect.sh"
+protected() { printf '%s\n' "$1" | grep -Eiq -- "$PROTECT_RE"; }
+FIXTURE='agentd --settings /Users/x/.gc/settings.json [city] the bundle is easy'
+if protected "$FIXTURE"; then
+  fail "C0: fixture runtime is protect-listed -- every C1 case below is vacuous"
+else
+  pass "C0: fixture runtime is not protect-listed (C1 assertions are live)"
+fi
+
 # ---------- C1: prompt prose never classifies an agent as a dev server ----------
 # Each row fails while its DEV_RE alternative leaves `.*` unbounded: the match
 # spans ~40 chars of prose here and >1.8 KB in the wild, so `audit --kill dev`
@@ -94,6 +119,10 @@ TRAPS
 # ---------- C2: genuine dev servers still classified ----------
 # Positive controls. Guard the C1 fix against over-correcting by gutting the
 # alternatives it tightens -- these are what the dev category exists to catch.
+# The last two are the forms the first tightening pass lost: bounding the gap
+# to an optional literal " run" dropped `bun --watch run dev` and Turborepo
+# 2.x's `turbo watch dev`, so the gap now admits flags and subcommands but
+# still never spans a bare prose word.
 while read -r pid cmd_desc; do
   if printf '%s\n' "$DEV" | grep -q "$pid"; then
     pass "C2/$pid: \"$cmd_desc\" still classified as a dev server"
@@ -106,6 +135,8 @@ done <<'REAL'
 77103 turbo-run-dev
 77104 webpack-serve
 77105 deno-task-dev
+77106 bun---watch-run-dev
+77107 turbo-watch-dev
 REAL
 
 # ---------- C3: agent runtimes are protected, their spawned servers are not ----------
@@ -116,9 +147,6 @@ REAL
 # every shell it spawns, so the wrapper sharing a dev server's process group
 # would test as protected and pgid_has_protected would make real dev servers
 # permanently unkillable -- silently gutting the tool's main job.
-. "$LIB/protect.sh"
-protected() { printf '%s\n' "$1" | grep -Eiq -- "$PROTECT_RE"; }
-
 while IFS='|' read -r want desc cmd; do
   if protected "$cmd"; then got=protected; else got=killable; fi
   if [ "$got" = "$want" ]; then
