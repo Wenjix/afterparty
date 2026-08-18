@@ -9,6 +9,17 @@ FAILS=0
 fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 pass() { echo "ok: $*"; }
 
+# Backdate a path's mtime. GNU touch takes -d 'N units ago'; BSD touch does
+# not, so fall back to the POSIX -t form with a BSD-computed stamp -- same
+# GNU-then-BSD shape as the date calls in devclean.sh and test-review-fixes.sh.
+# Without this the staleness fixtures never age on macOS and every age-gated
+# assertion below fails for a reason that has nothing to do with audit-git.sh.
+age() { # age <gnu-spec> <bsd-date-spec> <path>
+  touch -d "$1" "$3" 2>/dev/null \
+    || touch -t "$(date -v "$2" +%Y%m%d%H%M)" "$3" \
+    || fail "age: cannot backdate $3 (neither GNU nor BSD touch worked)"
+}
+
 T="$(mktemp -d)"
 trap 'cd /; rm -rf "$T"' EXIT
 cd "$T" || exit 1
@@ -25,7 +36,7 @@ git checkout -qb codex-wip
 git commit -q --allow-empty -m wip         # unmerged agent branch
 git checkout -q main
 git worktree add -q ../wt-stale -b agent/stale HEAD
-touch -d '10 days ago' ../wt-stale         # stale + clean worktree
+age '10 days ago' -10d ../wt-stale         # stale + clean worktree
 git worktree add -q ../wt-gone -b agent/gone HEAD
 rm -rf ../wt-gone                          # prunable worktree
 echo x > a.orig
@@ -40,7 +51,7 @@ git add f
 git commit -qm 'add f with "quote" and \backslash'
 echo edit >> f
 git stash -q
-touch -d '2 hours ago' .git/index.lock
+age '2 hours ago' -2H .git/index.lock
 
 # ---------- dry run ----------
 OUT="$(bash "$LIB/audit-git.sh" 2>stderr.txt)"; RC=$?

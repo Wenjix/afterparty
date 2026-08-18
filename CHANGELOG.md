@@ -2,6 +2,31 @@
 
 All notable changes to Afterparty are documented here. Versions follow semantic versioning.
 
+## [0.6.1] - 2026-08-13
+
+### Fixed
+
+- Dev-server detection no longer matches prose inside a long command line.
+  Agent runtimes carry their whole prompt in `argv`, so unanchored patterns
+  such as `bun.*dev` spanned unrelated text ("bundle" ... "/dev") and offered
+  live agent sessions to `audit --kill dev`. The bounded gap still admits
+  flags and subcommands, so `bun --watch run dev` and Turborepo 2.x's
+  `turbo watch dev` are recognized, but it never spans a bare prose word.
+- Running agent sessions (Claude Code, Codex) are protected from ledger and
+  audit group kills. The entry is anchored on the executable, so the shells an
+  agent spawns — which carry an agent path in their arguments — stay killable.
+  Devclean's orphan cleanup is unaffected and still targets orphaned agent and
+  MCP processes.
+
+### Changed
+
+- The test suite no longer reaches past its fixtures onto the host: `--apply`
+  cases now shim `launchctl` and `pgrep`, which address the real login session
+  and process table regardless of `HOME`. This also removes an intermittent
+  failure whose outcome depended on what other suites had left running.
+- Age-gated Git fixtures use a portable `touch` fallback, so the suite passes
+  on BSD/macOS as well as GNU/Linux.
+
 ## [0.6.0] - 2026-07-31
 
 ### Added

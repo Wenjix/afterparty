@@ -176,6 +176,16 @@ cat > "$T/cap-shim/pgrep" <<'SH'
 exit 1
 SH
 chmod +x "$T/cap-shim/pgrep"
+# devclean --optimize's background-agent step addresses the real login session
+# (`launchctl print|disable|bootout gui/<uid>/<label>`) no matter what HOME is
+# set to, so an --apply under this shim would disable the developer's actual
+# ChatGPT/Figma agents. Report "nothing registered" instead; no case here
+# asserts on that branch, so this only removes the side effect.
+cat > "$T/cap-shim/launchctl" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+chmod +x "$T/cap-shim/launchctl"
 (cd "$T/repo-one" && PATH="$T/cap-shim:$PATH" HOME="$T/home" XDG_CACHE_HOME="$T/cache" \
   AFTERPARTY_STYLE=never bash "$REPO/bin/afterparty" doctor --strict >"$T/doctor.out" 2>"$T/doctor.err")
 DOCTOR_RC=$?
@@ -639,7 +649,12 @@ cat > "$T/opt-fail-shim/pgrep" <<'SH'
 #!/usr/bin/env bash
 exit 1
 SH
-chmod +x "$T/opt-fail-shim/sed" "$T/opt-fail-shim/pgrep"
+# See the cap-shim launchctl note: keep --apply off the real launchd registry.
+cat > "$T/opt-fail-shim/launchctl" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+chmod +x "$T/opt-fail-shim/sed" "$T/opt-fail-shim/pgrep" "$T/opt-fail-shim/launchctl"
 PATH="$T/opt-fail-shim:$PATH" HOME="$T/opt-fail-home" XDG_CACHE_HOME="$T/cache" \
   AFTERPARTY_STYLE=never bash "$REPO/bin/afterparty" devclean --optimize --apply \
   >"$T/opt-fail.out" 2>"$T/opt-fail.err"

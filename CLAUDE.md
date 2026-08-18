@@ -24,7 +24,13 @@ mechanics when you touch them.
   feature, not a protect-list violation. The protect list + its helpers live
   ONLY in skills/afterparty/lib/protect.sh (shared — don't duplicate). It
   covers bare interactive shells via an end-anchored pattern — argumented
-  `sh -c` wrappers inside target groups must stay killable.
+  `sh -c` wrappers inside target groups must stay killable — and running
+  agent sessions (claude, Codex) via an executable-anchored pattern: a bare
+  substring would match the `.claude/...` path in the argv of every shell
+  Claude Code spawns, so pgid_has_protected would refuse the dev-server
+  groups this tool exists to clean. Category patterns face the same hazard
+  from the opposite side: an agent's whole prompt lives in its argv, so no
+  pattern may span a space with `.*` or it will match ordinary prose.
 - devclean --disk age-gates Codex session transcripts (CODEX_SESSION_AGE_DAYS,
   env-overridable, default 30 like Claude Code's retention): transcripts are
   resume history and the audit trail of agent work — only stale YYYY/MM/DD
@@ -76,6 +82,16 @@ mechanics when you touch them.
   modes, so its dry-run cards may carry ⊘. tests/test-proc-tables.sh fakes ps/pgrep/lsof on PATH for
   deterministic tables everywhere — dry-run only, never --kill/--apply
   under the shim.
+- Test isolation is by PATH shim, not by HOME: two devclean surfaces address
+  the real machine whatever HOME says. run_safe_orphans runs on EVERY
+  devclean invocation and signals what it matches under --apply (and
+  ORPHAN_PATTERNS includes claude and codex), and the background-agent step
+  drives launchctl gui/<uid>/<label>. Any test that reaches --apply MUST
+  shim pgrep and launchctl or it will kill the developer's own agents and
+  disable their real ChatGPT/Figma agents. Verify with a logging shim on
+  PATH: nothing from an --apply path should reach the real binaries.
+  Fixtures that age files need the GNU-then-BSD touch fallback (touch -d,
+  else touch -t with date -v) — the suite must pass on macOS too.
 
 **Environment gotcha:** I develop on Windows 11 but the scripts are bash targeting
 macOS/Linux. Under Git Bash, `rg` and `lsof` are missing and `ps` lacks -Ao, so
