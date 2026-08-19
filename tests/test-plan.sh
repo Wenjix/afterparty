@@ -121,5 +121,16 @@ _b=$FAILS
 printf '%s\n' "$OUT" | grep -q '9005' && fail "P6: a daemon rooted at / reached the plan"
 [ "$FAILS" -eq "$_b" ] && pass "P6: groups outside any workspace are excluded"
 
+# ---------- P7: only groups apply can actually kill are offered ----------
+# --pgid narrows WITHIN a category, so approving a group that matches no
+# category would be approved and then silently not killed. 9001 is "npm run
+# dev" (dev); 9004 is "node server.js", which matches nothing.
+_b=$FAILS
+printf '%s\n' "$OUT" | grep -A1 -E '^- \[x\].*9001' | grep -q 'category: dev' \
+  || fail "P7: checked item did not record its kill category"
+printf '%s\n' "$OUT" | grep -qE '^- \[x\].*9004' \
+  && fail "P7: offered a group with no kill discipline"
+[ "$FAILS" -eq "$_b" ] && pass "P7: only category-matching groups are offered, with the category recorded"
+
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))

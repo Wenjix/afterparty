@@ -17,6 +17,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/workspace.sh"
 . "$DIR/eligible.sh"
 . "$DIR/fingerprint.sh"
+. "$DIR/categories.sh"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -34,7 +35,9 @@ trap 'rm -rf "$T"' EXIT
 ws_index > "$T/ws" 2>/dev/null || : > "$T/ws"
 ws_pid_cwd > "$T/cwd" 2>/dev/null || : > "$T/cwd"
 ps -Ao pid,pgid,%cpu,command 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {
-  print $1 "\t" $2 "\t" $3
+  pid = $1; pg = $2; cpu = $3
+  $1 = ""; $2 = ""; $3 = ""; sub(/^[ \t]+/, "")
+  print pid "\t" pg "\t" cpu "\t" $0
 }' > "$T/ps" || : > "$T/ps"
 
 # Aggregate to the unit that actually gets killed: the process group.
@@ -46,7 +49,7 @@ ps -Ao pid,pgid,%cpu,command 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {
   $1 == "W" { wsts[$3] = $2; next }
   $1 == "C" { cwd[$2] = $3; next }
   $1 == "P" {
-    pid = $2; pg = $3; cpu = $4 + 0
+    pid = $2; pg = $3; cpu = $4 + 0; cmd = $5
     dir = cwd[pid]; if (dir == "") next
     best = ""
     for (w in wsts) if (dir == w || index(dir, w "/") == 1)
@@ -55,6 +58,8 @@ ps -Ao pid,pgid,%cpu,command 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {
     known[pg] = (best != "" ? wsts[best] : "")
     procs[pg]++
     if (cpu > maxcpu[pg]) maxcpu[pg] = cpu
+    # busiest member of the group supplies the command the category comes from
+    if (cpu >= topcpu[pg] || !(pg in leader)) { topcpu[pg] = cpu; leader[pg] = cmd }
   }
   END {
     # "-" rather than "" for an unknown last-touched: tab is IFS-whitespace, so
@@ -62,8 +67,8 @@ ps -Ao pid,pgid,%cpu,command 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {
     # every later column left. That is how a no-transcript workspace ended up
     # parsed as eligible. Same hazard test-review-fixes C6 pins for the ledger.
     for (pg in procs)
-      printf "%s\t%s\t%s\t%d\t%.1f\n", pg, owner[pg],
-             (known[pg] == "" ? "-" : known[pg]), procs[pg], maxcpu[pg]
+      printf "%s\t%s\t%s\t%d\t%.1f\t%s\n", pg, owner[pg],
+             (known[pg] == "" ? "-" : known[pg]), procs[pg], maxcpu[pg], leader[pg]
   }
 ' | sort -n > "$T/groups"
 
@@ -79,7 +84,7 @@ if [ ! -s "$T/groups" ]; then
   exit 0
 fi
 
-while IFS=$'\t' read -r pg owner touched procs cpu; do
+while IFS=$'\t' read -r pg owner touched procs cpu cmd; do
   [ -n "$pg" ] || continue
   [ "$touched" = "-" ] && touched=""
   # Scope: a group belongs in the plan only if it sits in a workspace. With no
@@ -97,13 +102,23 @@ while IFS=$'\t' read -r pg owner touched procs cpu; do
     age="no transcript"
   fi
   detail="$name · $(s_n "$procs" proc procs) · $age · cpu $cpu"
-  if [ "$verdict" = "eligible" ]; then
+  # An approved item is executed by delegating to `audit --kill <category>
+  # --pgid`, and that flag narrows WITHIN a category. A group matching no
+  # category would therefore be approved and then silently not killed, so it is
+  # never offered in the first place.
+  category="$(cat_for_command "$cmd" 2>/dev/null)" || category=""
+  if [ "$verdict" = "eligible" ] && [ -n "$category" ]; then
     fp="$(fp_for_pgid "$pg" 2>/dev/null)" || fp=""
     if [ -n "$fp" ]; then
       printf -- '- [x] eligible  pgid %s  %s\n' "$pg" "$detail"
-      printf -- '      fingerprint: %s\n' "$fp"
+      printf -- '      category: %s  fingerprint: %s\n' "$category" "$fp"
       continue
     fi
+  fi
+  if [ "$verdict" = "eligible" ] && [ -z "$category" ]; then
+    printf -- '- [⊘] %-8s pgid %s  %s\n' "no-rule" "$pg" "$detail"
+    printf -- '      not offered: no kill discipline for this command — stop it yourself\n'
+    continue
   fi
   printf -- '- [⊘] %-8s pgid %s  %s\n' "$verdict" "$pg" "$detail"
   case "$verdict" in
