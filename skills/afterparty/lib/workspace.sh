@@ -33,3 +33,41 @@ ws_human_age() {
   else                          printf '%dd %02dh' "$((s / 86400))" "$(((s % 86400) / 3600))"
   fi
 }
+
+# Emit "<epoch>\t<cwd>" per workspace that has an agent transcript.
+#
+# Identity comes from the cwd the transcript records, never from the directory
+# name: the slug is lossy (both "/" and "." collapse to "-") and undocumented,
+# so decoding it is ambiguous. grep -m1 stops at the first match, which keeps
+# this cheap even against multi-megabyte transcripts.
+ws_index() {
+  local root="${AFTERPARTY_TRANSCRIPT_ROOT:-$WS_TRANSCRIPT_ROOT}"
+  local dir f newest cwd ts
+  [ -d "$root" ] || return 0
+  for dir in "$root"/*/; do
+    [ -d "$dir" ] || continue
+    newest=""
+    for f in "$dir"*.jsonl; do
+      [ -f "$f" ] || continue
+      if [ -z "$newest" ] || [ "$f" -nt "$newest" ]; then newest="$f"; fi
+    done
+    [ -n "$newest" ] || continue
+    cwd="$(grep -m1 -o '"cwd":"[^"]*"' "$newest" 2>/dev/null)" || continue
+    cwd="${cwd#\"cwd\":\"}"
+    cwd="${cwd%\"}"
+    [ -n "$cwd" ] || continue
+    ts="$(ws_mtime "$newest")" || continue
+    printf '%s\t%s\n' "$ts" "$cwd"
+  done
+}
+
+# Working directory of a live pid. Requires lsof; without it the caller keeps
+# the process unattributed rather than guessing an owner, because a wrong owner
+# is worse than none -- it is what would make a plan kill someone else's work.
+ws_for_pid() {
+  local cwd
+  command -v lsof >/dev/null 2>&1 || return 1
+  cwd="$(lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+  [ -n "$cwd" ] || return 1
+  printf '%s' "$cwd"
+}
