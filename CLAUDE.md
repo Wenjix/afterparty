@@ -42,6 +42,20 @@ mechanics when you touch them.
   NO last-touched time - treat unknown as "cannot tell", never "forgotten".
   Attribution is one `lsof -d cwd` call for the whole machine; per-pid would
   be ~500 forks. Never key staleness on process liveness alone.
+- `plan` proposes and `apply` disposes, and apply NEVER signals: it delegates to
+  audit --kill --pgid so there is exactly one kill discipline. Two rules hold
+  it together. Kill categories live ONLY in lib/categories.sh (shared with
+  audit-processes.sh - don't duplicate); `--pgid` narrows WITHIN a category, so
+  plan must withhold any group matching no category or it would approve an
+  action that silently never happens. And the checkbox is the authority, not
+  the fingerprint - the fingerprint (pgid + start time + command, lib/
+  fingerprint.sh) only proves the group is still the one reviewed, so a
+  recycled pgid is refused rather than re-targeted. Eligibility is the
+  two-signal rule in lib/eligible.sh; `unknown` is never eligible.
+- TSV rows written for `read` must never carry an empty middle field: tab is
+  IFS-whitespace, so consecutive tabs collapse and every later column shifts
+  left. Emit a sentinel ("-"). test-review-fixes C6 pins this for the ledger;
+  plan.sh reintroduced it once already.
 - devclean --disk age-gates Codex session transcripts (CODEX_SESSION_AGE_DAYS,
   env-overridable, default 30 like Claude Code's retention): transcripts are
   resume history and the audit trail of agent work — only stale YYYY/MM/DD

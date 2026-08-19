@@ -13,6 +13,8 @@
 #   agent-hygiene.sh artifacts [clean-artifacts args...]
 #   agent-hygiene.sh devclean [--deep] [--optimize] [--disk] [--apply]
 #   agent-hygiene.sh glance [--oneline] [--json]
+#   agent-hygiene.sh plan
+#   agent-hygiene.sh apply <plan.md>
 #   agent-hygiene.sh doctor
 #   agent-hygiene.sh report [--show|--remind]
 #   agent-hygiene.sh report-path
@@ -30,7 +32,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
   # Range tracks the header comment above; adding a command line means
   # widening it, or the last entry silently drops out of --help.
-  sed -n '2,21p' "$0"
+  sed -n '2,23p' "$0"
 }
 
 # The one finale card for the composite audit, fed by the children's tally.
@@ -242,6 +244,12 @@ case "$cmd" in
     ;;
   glance)
     exec "$DIR/glance.sh" "$@"
+    ;;
+  plan)
+    exec "$DIR/plan.sh" "$@"
+    ;;
+  apply)
+    exec "$DIR/apply.sh" "$@"
     ;;
   doctor)
     # One long checkup, no finale cards.

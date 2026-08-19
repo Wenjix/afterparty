@@ -2,6 +2,26 @@
 
 All notable changes to Afterparty are documented here. Versions follow semantic versioning.
 
+## [0.8.0] - 2026-08-19
+
+### Added
+
+- `afterparty plan` — an editable checklist of what could be cleaned, one box
+  per process group. Only items passing the two-signal eligibility gate arrive
+  checked; `in-use`, `working`, `unknown`, and `no-rule` items are listed
+  unchecked with the reason stated.
+- `afterparty apply <plan>` — executes only the checked boxes, and only when
+  the item is still what was reviewed. A moved fingerprint is refused rather
+  than re-targeted, so a recycled process group cannot be killed by an approval
+  that was never given for it. apply delegates every kill to `audit --kill`
+  rather than signalling, so one kill discipline governs everything.
+- `lib/fingerprint.sh`, `lib/eligible.sh`, `lib/categories.sh`.
+
+### Changed
+
+- Kill category patterns moved to `lib/categories.sh`, shared by
+  `audit-processes.sh` and `plan.sh`. Patterns are unchanged.
+
 ## [0.7.0] - 2026-08-18
 
 ### Added

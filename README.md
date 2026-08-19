@@ -108,6 +108,8 @@ gets touched.
 | Command | Reports | Acts with |
 | --- | --- | --- |
 | `afterparty glance` | every workspace holding processes, sorted by how long it has been left alone | *(reports only)* |
+| `afterparty plan` | an editable checklist of what could be cleaned, one box per process group | *(proposes only)* |
+| `afterparty apply <plan>` | executes the boxes you checked, refusing anything that moved | *(the only mutating step)* |
 | `afterparty audit` | recorded processes, dev servers, watchers, browsers, git litter | `--kill tests\|dev\|browser` |
 | `afterparty stop` | ledger-recorded process groups | `--kill` |
 | `afterparty git` | stale worktrees, agent branches, lock files, conflict litter | `--clean` |
@@ -216,6 +218,28 @@ deliberately not the signal: a finished agent leaves its dev server running
 long after you stopped caring, and a long tool call goes quiet while very much
 still working. Thresholds are `AFTERPARTY_IDLE_HOURS` (default 4) and
 `AFTERPARTY_STALE_HOURS` (default 24).
+
+### Approving a cleanup
+
+`afterparty plan` writes a checklist, one box per process group — the unit that
+actually gets killed. It is a proposal, not a decision:
+
+- Only items that pass the two-signal gate arrive **checked**.
+- Everything else is listed **unchecked with the reason stated**, so withholding
+  is visible rather than silent: `in-use` (you touched that workspace recently),
+  `working` (quiet transcript but the cpu says a long task is running),
+  `unknown` (no transcript, so no staleness signal to trust), and `no-rule`
+  (no kill discipline exists for that command — stop it yourself).
+
+Edit the boxes, then `afterparty apply <plan>`. Every approved item is
+re-checked before anything happens: a **moved fingerprint** means a recycled
+process group now holds something you never reviewed, and it is refused rather
+than re-targeted. The checkbox is the authority — unchecking a box makes it
+inert regardless of what else the line says.
+
+`apply` never signals a process itself. It hands approved groups to the same
+gated `audit --kill` path, so the protect list, group semantics, and
+postcondition receipts apply exactly as they do everywhere else.
 
 The protect list covers editors, interactive shells, running agent sessions
 (Claude Code, Codex), and shared MCP servers such as `playwright-mcp` and
