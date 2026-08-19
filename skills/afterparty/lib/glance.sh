@@ -39,13 +39,7 @@ trap 'rm -rf "$T"' EXIT
 ws_index > "$T/ws" 2>/dev/null || true
 
 # ---- pid -> cwd, one call ---------------------------------------------------
-: > "$T/cwd"
-if command -v lsof >/dev/null 2>&1; then
-  lsof -a -d cwd -Fpn 2>/dev/null | awk '
-    /^p/ { pid = substr($0, 2); next }
-    /^n/ { if (pid != "") { print pid "\t" substr($0, 2); pid = "" } }
-  ' > "$T/cwd"
-fi
+ws_pid_cwd > "$T/cwd" 2>/dev/null || : > "$T/cwd"
 
 # ---- listeners --------------------------------------------------------------
 : > "$T/listen"
