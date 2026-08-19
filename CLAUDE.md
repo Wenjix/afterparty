@@ -31,6 +31,17 @@ mechanics when you touch them.
   groups this tool exists to clean. Category patterns face the same hazard
   from the opposite side: an agent's whole prompt lives in its argv, so no
   pattern may span a space with `.*` or it will match ordinary prose.
+- `glance` is the return surface and is READ-ONLY by construction: no --kill,
+  no --apply, and tests/test-glance.sh pins the rejection so a later flag
+  cannot make it mutate. Its severity axis is MAGNITUDE (cpu, count, idle
+  time); reversibility belongs to the approval surface, not here. Workspace
+  identity and staleness live ONLY in skills/afterparty/lib/workspace.sh
+  (shared - don't duplicate): identity comes from the cwd an agent transcript
+  records, never from the directory slug, which collapses both "/" and "." to
+  "-" and cannot be decoded unambiguously. A workspace with no transcript has
+  NO last-touched time - treat unknown as "cannot tell", never "forgotten".
+  Attribution is one `lsof -d cwd` call for the whole machine; per-pid would
+  be ~500 forks. Never key staleness on process liveness alone.
 - devclean --disk age-gates Codex session transcripts (CODEX_SESSION_AGE_DAYS,
   env-overridable, default 30 like Claude Code's retention): transcripts are
   resume history and the audit trail of agent work — only stale YYYY/MM/DD

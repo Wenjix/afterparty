@@ -107,6 +107,7 @@ gets touched.
 
 | Command | Reports | Acts with |
 | --- | --- | --- |
+| `afterparty glance` | every workspace holding processes, sorted by how long it has been left alone | *(reports only)* |
 | `afterparty audit` | recorded processes, dev servers, watchers, browsers, git litter | `--kill tests\|dev\|browser` |
 | `afterparty stop` | ledger-recorded process groups | `--kill` |
 | `afterparty git` | stale worktrees, agent branches, lock files, conflict litter | `--clean` |
@@ -193,6 +194,28 @@ concurrent prune cannot overwrite a newly recorded process.
 - automation browsers
 - git session litter: stale worktrees, agent branches, conflict files, stashes
 - protected processes it will refuse to kill
+
+### Coming back to the machine
+
+`afterparty glance` answers the question you actually arrive with: what was I
+doing, and what is still running from it? It is machine-wide, grouped by
+workspace, and sorted so the workspaces nobody has touched sink to the bottom.
+`--oneline` fits a tmux status line; `--json` emits JSON Lines.
+
+Severity in the glance is **magnitude** — cpu, count, how long since anyone
+looked. That is what makes you look up. Consequence is weighed elsewhere.
+
+Glance never acts. There is no `--kill`, and a test pins that so a future flag
+cannot quietly turn it into a mutation surface.
+
+**How it knows a workspace was left alone.** Last-touched comes from the agent
+transcript, which records its own working directory, so no directory-name
+decoding is involved. A workspace with no transcript has no last-touched time
+at all — that reads as *cannot tell*, never as *forgotten*. Process liveness is
+deliberately not the signal: a finished agent leaves its dev server running
+long after you stopped caring, and a long tool call goes quiet while very much
+still working. Thresholds are `AFTERPARTY_IDLE_HOURS` (default 4) and
+`AFTERPARTY_STALE_HOURS` (default 24).
 
 The protect list covers editors, interactive shells, running agent sessions
 (Claude Code, Codex), and shared MCP servers such as `playwright-mcp` and
