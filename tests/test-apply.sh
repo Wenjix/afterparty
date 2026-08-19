@@ -28,10 +28,29 @@ case "$*" in
     printf '7001 Tue Aug 18 09:00:00 2026 npm run dev\n'
     printf '7002 Tue Aug 18 09:00:00 2026 vitest --watch\n'
     ;;
+  *pid,pgid,%cpu*)
+    printf '7001 7001 0.0 npm run dev\n'
+    printf '7002 7002 0.0 vitest --watch\n'
+    ;;
   *) exit 1 ;;
 esac
 PS
-chmod +x "$SHIM/ps"
+cat > "$SHIM/lsof" <<'LS'
+#!/usr/bin/env bash
+case "$*" in
+  *-d\ cwd*) printf 'p7001\nfcwd\nn/w/loupe\np7002\nfcwd\nn/w/loupe\n' ;;
+  *) exit 1 ;;
+esac
+LS
+chmod +x "$SHIM/ps" "$SHIM/lsof"
+
+# Default world: /w/loupe was last touched long ago and is quiet, so an
+# approved group in it is still eligible when apply runs. A8 overrides this
+# with a freshly-touched root to prove the re-check bites.
+RIDLE="$T/proj-idle"; mkdir -p "$RIDLE/-w-loupe"
+printf '{"cwd":"/w/loupe"}\n' > "$RIDLE/-w-loupe/a.jsonl"
+touch -t 202001010000 "$RIDLE/-w-loupe/a.jsonl" 2>/dev/null \
+  || touch -t "$(date -v -300d +%Y%m%d%H%M)" "$RIDLE/-w-loupe/a.jsonl"
 
 # shellcheck source=/dev/null
 . "$LIB/fingerprint.sh"
@@ -52,7 +71,10 @@ mkplan() {
 PL
 }
 
-run_apply() { PATH="$SHIM:$PATH" AFTERPARTY_STYLE=never bash "$LIB/apply.sh" "$T/plan.md" 2>&1; }
+run_apply() {
+  PATH="$SHIM:$PATH" AFTERPARTY_TRANSCRIPT_ROOT="$RIDLE" AFTERPARTY_STYLE=never \
+    bash "$LIB/apply.sh" "$T/plan.md" 2>&1
+}
 
 # ---------- A1: only the checked, unmoved item is delegated ----------
 _b=$FAILS
@@ -126,6 +148,53 @@ OUT="$(run_apply)"
 _b=$FAILS
 grep -nE '^[^#]*\bkill -' "$LIB/apply.sh" && fail "A7: apply signals a process directly"
 [ "$FAILS" -eq "$_b" ] && pass "A7: apply delegates every kill, never signals"
+
+# ---------- A8: eligibility is re-checked at apply time ----------
+# A group can go from idle to active without its fingerprint changing: the
+# same processes, but the human came back. The plan header promises apply
+# re-checks eligibility; it must actually do it.
+_b=$FAILS
+: > "$T/delegated"
+R2="$T/proj2"; mkdir -p "$R2/-w-loupe"
+printf '{"cwd":"/w/loupe"}\n' > "$R2/-w-loupe/a.jsonl"   # touched NOW -> in-use
+cat > "$SHIM/lsof" <<'LS'
+#!/usr/bin/env bash
+case "$*" in
+  *-d\ cwd*) printf 'p7001\nfcwd\nn/w/loupe\n' ;;
+  *) exit 1 ;;
+esac
+LS
+chmod +x "$SHIM/lsof"
+cat > "$SHIM/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  *pgid=,lstart=,command=*) printf '7001 Tue Aug 18 09:00:00 2026 npm run dev\n' ;;
+  *pid,pgid,%cpu*)          printf '7001 7001 0.0 npm run dev\n' ;;
+  *) exit 1 ;;
+esac
+PS
+chmod +x "$SHIM/ps"
+FPNOW="$(PATH="$SHIM:$PATH" fp_for_pgid 7001)"
+mkplan "$FPNOW"
+OUT="$(PATH="$SHIM:$PATH" AFTERPARTY_TRANSCRIPT_ROOT="$R2" AFTERPARTY_STYLE=never bash "$LIB/apply.sh" "$T/plan.md" 2>&1)"
+[ -s "$T/delegated" ] && fail "A8: killed a group whose workspace became active again"
+printf '%s\n' "$OUT" | grep -qi 'in-use\|no longer eligible\|held' || fail "A8: no reason given for holding: $OUT"
+[ "$FAILS" -eq "$_b" ] && pass "A8: eligibility re-checked at apply time, not just fingerprint"
+
+# ---------- A9: a failed delegation must not exit 0 ----------
+# Mutation receipts are postcondition-based; swallowing a failure reports
+# success for work that did not happen.
+_b=$FAILS
+: > "$T/delegated"
+printf '#!/usr/bin/env bash\necho "$*" >> "%s"\nexit 3\n' "$T/delegated" > "$SHIM/audit-processes.sh"
+chmod +x "$SHIM/audit-processes.sh"
+mkplan "$FPNOW"
+run_apply >/dev/null 2>&1
+rc=$?
+[ "$rc" -ne 0 ] || fail "A9: delegation failed but apply exited 0"
+[ "$FAILS" -eq "$_b" ] && pass "A9: a failed delegation exits nonzero"
+printf '#!/usr/bin/env bash\necho "$*" >> "%s"\nexit 0\n' "$T/delegated" > "$SHIM/audit-processes.sh"
+chmod +x "$SHIM/audit-processes.sh"
 
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))

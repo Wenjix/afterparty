@@ -24,6 +24,7 @@ case "$*" in
     printf '9003 Tue Aug 18 09:00:00 2026 next dev\n'
     printf '9004 Tue Aug 18 09:00:00 2026 node server.js\n'
     printf '9005 Tue Aug 18 09:00:00 2026 /usr/libexec/systemdaemon\n'
+    printf '9006 Tue Aug 18 09:00:00 2026 npm run dev\n'
     ;;
   *pid,pgid,%cpu,command*)
     printf '9001 9001  0.0 npm run dev\n'
@@ -31,6 +32,8 @@ case "$*" in
     printf '9003 9003 95.0 next dev\n'
     printf '9004 9004  0.0 node server.js\n'
     printf '9005 9005  0.0 /usr/libexec/systemdaemon\n'
+    printf '9006 9006  0.0 npm run dev\n'
+    printf '9007 9006  0.0 node worker.js\n'
     ;;
   *) exit 1 ;;
 esac
@@ -44,6 +47,8 @@ case "$*" in
     printf 'p9003\nfcwd\nn/w/busy\n'
     printf 'p9004\nfcwd\nn/w/nosig\n'
     printf 'p9005\nfcwd\nn/\n'
+    printf 'p9006\nfcwd\nn/w/gone\n'
+    printf 'p9007\nfcwd\nn/w/here\n'
     ;;
   *) exit 1 ;;
 esac
@@ -131,6 +136,22 @@ printf '%s\n' "$OUT" | grep -A1 -E '^- \[x\].*9001' | grep -q 'category: dev' \
 printf '%s\n' "$OUT" | grep -qE '^- \[x\].*9004' \
   && fail "P7: offered a group with no kill discipline"
 [ "$FAILS" -eq "$_b" ] && pass "P7: only category-matching groups are offered, with the category recorded"
+
+# ---------- P8: a group spanning two workspaces is withheld ----------
+# owner was resolved per member, so the LAST row decided the whole group. A
+# group with a foot in a stale workspace and a foot in an active one could be
+# marked eligible off the stale member and kill work in the active one.
+_b=$FAILS
+printf '%s\n' "$OUT" | grep -qE '^- \[x\].*9006' && fail "P8: offered a group spanning two workspaces"
+printf '%s\n' "$OUT" | grep -q 'mixed' || fail "P8: mixed ownership not reported as the reason"
+[ "$FAILS" -eq "$_b" ] && pass "P8: mixed-workspace groups are withheld, with the reason"
+
+# ---------- P9: help advertises only what the parser accepts ----------
+_b=$FAILS
+for flag in $(sed -n 's/^#   plan.sh \(.*\)/\1/p' "$LIB/plan.sh" | tr -d '[]' | tr ' ' '\n' | grep '^--'); do
+  bash "$LIB/plan.sh" "$flag" >/dev/null 2>&1 || fail "P9: help advertises $flag but the parser rejects it"
+done
+[ "$FAILS" -eq "$_b" ] && pass "P9: every advertised flag is accepted"
 
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))

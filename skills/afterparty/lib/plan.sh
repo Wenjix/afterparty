@@ -9,7 +9,7 @@
 # that moved between planning and applying.
 #
 # Usage:
-#   plan.sh [--json]
+#   plan.sh
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -54,8 +54,17 @@ ps -Ao pid,pgid,%cpu,command 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {
     best = ""
     for (w in wsts) if (dir == w || index(dir, w "/") == 1)
       if (length(w) > length(best)) best = w
-    owner[pg] = (best != "" ? best : dir)
-    known[pg] = (best != "" ? wsts[best] : "")
+    # First member seen fixes the group owner; a later member resolving
+    # elsewhere marks the group mixed. Assigning per member would let the LAST
+    # row decide the whole group, so a group with one foot in a stale workspace
+    # and one in an active one could be offered off the stale member.
+    resolved = (best != "" ? best : dir)
+    if (!(pg in owner)) {
+      owner[pg] = resolved
+      known[pg] = (best != "" ? wsts[best] : "")
+    } else if (owner[pg] != resolved) {
+      mixed[pg] = 1
+    }
     procs[pg]++
     if (cpu > maxcpu[pg]) maxcpu[pg] = cpu
     # busiest member of the group supplies the command the category comes from
@@ -67,8 +76,9 @@ ps -Ao pid,pgid,%cpu,command 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {
     # every later column left. That is how a no-transcript workspace ended up
     # parsed as eligible. Same hazard test-review-fixes C6 pins for the ledger.
     for (pg in procs)
-      printf "%s\t%s\t%s\t%d\t%.1f\t%s\n", pg, owner[pg],
-             (known[pg] == "" ? "-" : known[pg]), procs[pg], maxcpu[pg], leader[pg]
+      printf "%s\t%s\t%s\t%d\t%.1f\t%s\t%s\n", pg, owner[pg],
+             (known[pg] == "" ? "-" : known[pg]), procs[pg], maxcpu[pg],
+             (pg in mixed ? "mixed" : "-"), leader[pg]
   }
 ' | sort -n > "$T/groups"
 
@@ -84,7 +94,7 @@ if [ ! -s "$T/groups" ]; then
   exit 0
 fi
 
-while IFS=$'\t' read -r pg owner touched procs cpu cmd; do
+while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
   [ -n "$pg" ] || continue
   [ "$touched" = "-" ] && touched=""
   # Scope: a group belongs in the plan only if it sits in a workspace. With no
@@ -106,6 +116,13 @@ while IFS=$'\t' read -r pg owner touched procs cpu cmd; do
   # --pgid`, and that flag narrows WITHIN a category. A group matching no
   # category would therefore be approved and then silently not killed, so it is
   # never offered in the first place.
+  # A group whose members live in different workspaces cannot be judged by one
+  # workspace's staleness, so it is never offered.
+  if [ "$span" = "mixed" ]; then
+    printf -- '- [⊘] %-8s pgid %s  %s\n' "mixed" "$pg" "$detail"
+    printf -- '      not offered: this group spans more than one workspace, so no single staleness applies\n'
+    continue
+  fi
   category="$(cat_for_command "$cmd" 2>/dev/null)" || category=""
   if [ "$verdict" = "eligible" ] && [ -n "$category" ]; then
     fp="$(fp_for_pgid "$pg" 2>/dev/null)" || fp=""
