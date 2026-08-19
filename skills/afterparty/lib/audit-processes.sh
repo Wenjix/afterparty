@@ -204,7 +204,7 @@ kill_group() {
   if identity_moved "$pg"; then
     s_skip "  pgid $pg: identity changed since approval — not signalled"
     journal_action process_group.stop "pgid:$pg" failed "identity changed before SIGTERM"
-    return 4
+    return 5
   fi
   if kill -TERM -"$pg" 2>/dev/null; then
     s_kill "  SIGTERM -> pgid $pg"
@@ -227,7 +227,7 @@ kill_group() {
     if identity_moved "$pg"; then
       s_skip "  pgid $pg: identity changed before SIGKILL — not signalled"
       journal_action process_group.stop "pgid:$pg" failed "identity changed before SIGKILL"
-      return 4
+      return 5
     fi
     if kill -KILL -"$pg" 2>/dev/null; then
       s_kill "  SIGKILL -> pgid $pg (straggler)"
@@ -396,6 +396,7 @@ print_procs_receipt() {
   segs="$(s_segments \
     "$([ "$N_KILLED" -gt 0 ] && echo "$G_OK $N_KILLED killed")" \
     "$([ "$N_PROT" -gt 0 ] && echo "$G_SKIP $N_PROT protected")" \
+    "$([ "$N_IDENT" -gt 0 ] && echo "$G_SKIP $N_IDENT identity changed")" \
     "$([ "$N_FAILED" -gt 0 ] && echo "$G_SKIP $N_FAILED failed")")"
   if [ -n "$segs" ]; then s_card_line "   $segs"; fi
   if [ "$N_KILLED" -gt 0 ]; then
@@ -438,7 +439,7 @@ if [ "$PS_STATUS" != "ok" ]; then
   exit 1
 fi
 
-N_KILLED=0 N_PROT=0 N_FAILED=0
+N_KILLED=0 N_PROT=0 N_FAILED=0 N_IDENT=0
 EXPECT_MAP="${EXPECT_MAP:-}"
 IFS=','
 for cat in $KILL_CATS; do
@@ -479,6 +480,13 @@ for cat in $KILL_CATS; do
       kill_rc=$?
       case "$kill_rc" in
         3) N_PROT=$((N_PROT + 1)) ;;
+        # Identity drift is its own refusal: the group was not protected, it
+        # was simply no longer the group that was approved. Counting it as
+        # protected would misreport why nothing was killed.
+        5)
+          N_IDENT=$((N_IDENT + 1))
+          N_FAILED=$((N_FAILED + 1))
+          ;;
         4)
           N_PROT=$((N_PROT + 1))
           N_FAILED=$((N_FAILED + 1))

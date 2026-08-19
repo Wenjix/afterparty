@@ -109,36 +109,48 @@ kill -0 "$P4" 2>/dev/null || fail "recycle guard: process was killed despite mis
 [ "$FAILS" -eq "$B4" ] && pass "recycled-pid guard refuses a group that no longer matches"
 
 echo
-if # ---------- K-expect: a stale fingerprint stops a real signal ----------
-# pgid is not identity. If a group exits and its id is reused between approval
-# and SIGTERM, killing by number alone destroys work nobody approved. The
-# protect recheck does not catch this: a replacement group is not protected,
-# it is simply different. --expect is the identity gate at the signal boundary.
+# ---------- K-expect: identity is enforced at the signal boundary ----------
+# This must use a command that MATCHES a kill category. An earlier version
+# spawned `sleep`, which matches nothing, so audit exited at "nothing to kill"
+# before kill_group ever ran -- the group survived for the wrong reason and the
+# test asserted nothing. nodemon is in DEV_RE, so the gate is actually reached.
 . "$LIB/fingerprint.sh"
-PG="$(spawn_group sleep 300)"
-SPAWNED_GROUPS="$SPAWNED_GROUPS $PG"
 _b=$FAILS
-if [ -n "$PG" ]; then
-  REAL_FP="$(fp_for_pgid "$PG")"
-  [ -n "$REAL_FP" ] || fail "K-expect: could not fingerprint a live group"
+PG_A="$(spawn_group "$T/bin/nodemon")"
+SPAWNED_GROUPS="$SPAWNED_GROUPS $PG_A"
+if [ -z "$PG_A" ]; then
+  fail "K-expect: could not spawn a dev-category group"
+else
+  FP_A="$(fp_for_pgid "$PG_A")"
+  [ -n "$FP_A" ] || fail "K-expect: could not fingerprint a live group"
 
-  # wrong fingerprint -> must survive
-  AFTERPARTY_STYLE=never bash "$LIB/audit-processes.sh" --kill tests,dev,browser \
-    --pgid "$PG" --expect "$PG:ffffffffffff" >/dev/null 2>&1
-  if kill -0 -"$PG" 2>/dev/null; then
+  # Wrong fingerprint: the group matches dev, so kill_group IS reached, and
+  # only the identity gate can save it.
+  OUT="$(AFTERPARTY_STYLE=never bash "$LIB/audit-processes.sh" --kill dev \
+    --pgid "$PG_A" --expect "$PG_A:ffffffffffff" 2>&1)"
+  if kill -0 -"$PG_A" 2>/dev/null; then
     pass "K-expect: a mismatched fingerprint prevented the signal"
   else
     fail "K-expect: group was killed despite a mismatched fingerprint"
   fi
+  printf '%s\n' "$OUT" | grep -q 'identity changed' \
+    || fail "K-expect: identity gate never ran (audit said: $(printf '%s' "$OUT" | tr '\n' '|'))"
 
-  # right fingerprint -> the sleep is not in any kill category, so it must also
-  # survive; this proves the guard is not the only thing keeping it alive.
-  AFTERPARTY_STYLE=never bash "$LIB/audit-processes.sh" --kill tests,dev,browser \
-    --pgid "$PG" --expect "$PG:$REAL_FP" >/dev/null 2>&1
-  kill -0 -"$PG" 2>/dev/null || fail "K-expect: matching fingerprint killed a non-category group"
-else
-  fail "K-expect: could not spawn a test group"
+  # Matching fingerprint on a second, equivalent group: proves the gate is what
+  # spared the first one, and not merely that nothing was killable.
+  PG_B="$(spawn_group "$T/bin/nodemon")"
+  SPAWNED_GROUPS="$SPAWNED_GROUPS $PG_B"
+  FP_B="$(fp_for_pgid "$PG_B")"
+  AFTERPARTY_STYLE=never bash "$LIB/audit-processes.sh" --kill dev \
+    --pgid "$PG_B" --expect "$PG_B:$FP_B" >/dev/null 2>&1
+  sleep 1
+  if kill -0 -"$PG_B" 2>/dev/null; then
+    fail "K-expect: a matching fingerprint failed to kill a dev group"
+  else
+    pass "K-expect: a matching fingerprint let the kill through"
+  fi
 fi
-[ "$FAILS" -eq "$_b" ] && pass "K-expect: identity is enforced at the signal boundary"
+[ "$FAILS" -eq "$_b" ] && pass "K-expect: identity decides, not category alone"
 
-[ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi
+echo
+if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi

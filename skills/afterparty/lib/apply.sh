@@ -28,9 +28,16 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The reason a person typed under "## Why". plan promises this is recorded, so
 # it has to actually reach the journal rather than dying with the file.
 plan_reason() {
+  # The plan ships an instructional placeholder under "## Why". Journaling it
+  # would file the template as though it were a person's stated reason, on a
+  # run where nobody typed anything and nothing happened.
   awk '/^## Why/ { on = 1; next }
        on && /^## / { exit }
-       on && /^>/   { sub(/^>[[:space:]]*/, ""); if ($0 != "") print }' "$1" \
+       on && /^>/ {
+         sub(/^>[[:space:]]*/, "")
+         if ($0 == "" || $0 ~ /^\(free text/) next
+         print
+       }' "$1" \
     | tr '\n' ' ' | sed 's/[[:space:]]*$//'
 }
 
@@ -69,7 +76,13 @@ group_facts() {
     while IFS=$'\t' read -r pid cpu; do
       awk -v c="$cpu" -v m="$maxcpu" 'BEGIN { exit !(c + 0 > m + 0) }' && maxcpu="$cpu"
       dir="$(awk -F'\t' -v p="$pid" '$1 == p { print $2; exit }' "$T/cwd")"
-      [ -n "$dir" ] || continue
+      # A member we cannot place is not a member we can vouch for. Skipping it
+      # would let a stale leader carry the whole group through the gate while
+      # an unattributable sibling sits in a workspace someone is using.
+      if [ -z "$dir" ]; then
+        mixed=1
+        continue
+      fi
       cand="$(ws_owner_of "$dir" < "$T/ws" 2>/dev/null)" || cand=""
       # Every member is resolved, not just the first. A group can gain a child
       # in a live workspace after planning while its leader -- and therefore
