@@ -69,5 +69,29 @@ else
   pass "F3: absent group fails closed"
 fi
 
+# ---------- F4: survives a long ps under pipefail ----------
+# The shims above emit a handful of lines, which is exactly the condition that
+# HIDES this bug. Callers run with `set -o pipefail`, and an awk that quits
+# mid-stream SIGPIPEs ps, so the pipeline reports failure even though the value
+# was captured. Against a real ps -- hundreds of lines -- every fingerprint
+# came back empty and every eligible item was withheld as "vanished".
+_b=$FAILS
+cat > "$SHIM/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  *pgid=,lstart=,command=*)
+    printf '5150 Tue Aug 18 09:00:00 2026 npm run dev
+'
+    i=0; while [ "$i" -lt 5000 ]; do printf '9%03d Tue Aug 18 09:00:00 2026 filler %s
+' "$((i % 1000))" "$i"; i=$((i + 1)); done
+    ;;
+  *) exit 1 ;;
+esac
+PS
+chmod +x "$SHIM/ps"
+LONG="$(PATH="$SHIM:$PATH" bash -c 'set -uo pipefail; . '"$LIB"'/fingerprint.sh; fp_for_pgid 5150')"
+[ -n "$LONG" ] || fail "F4: fingerprint empty when ps output is long and pipefail is set"
+[ "$FAILS" -eq "$_b" ] && pass "F4: long ps output under pipefail still fingerprints"
+
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))

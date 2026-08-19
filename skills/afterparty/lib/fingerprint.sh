@@ -33,7 +33,11 @@ fp_hash() {
 fp_for_pgid() {
   local pg="$1" sig
   case "$pg" in ''|*[!0-9]*) return 1 ;; esac
-  sig="$(ps -Ao pgid=,lstart=,command= 2>/dev/null | awk -v g="$pg" '$1 == g { print; exit }')" || return 1
+  # No early `exit` in the awk: quitting mid-stream SIGPIPEs ps, and callers run
+  # under `set -o pipefail`, so the pipeline reports failure even though the
+  # value was captured correctly. Against a real ps -- hundreds of lines -- that
+  # made every fingerprint come back empty.
+  sig="$(ps -Ao pgid=,lstart=,command= 2>/dev/null | awk -v g="$pg" '$1 == g && !seen++ { print }')" || return 1
   [ -n "$sig" ] || return 1
   printf '%s' "$sig" | fp_hash
 }
