@@ -82,6 +82,13 @@ fi
 while IFS=$'\t' read -r pg owner touched procs cpu; do
   [ -n "$pg" ] || continue
   [ "$touched" = "-" ] && touched=""
+  # Scope: a group belongs in the plan only if it sits in a workspace. With no
+  # transcript the fallback test is "is this a git repo" -- that catches a
+  # hand-driven project, which genuinely has no staleness signal and is worth
+  # showing as unknown, while excluding the system daemons that all root at "/".
+  if [ -z "$touched" ] && ! git -C "$owner" rev-parse --show-toplevel >/dev/null 2>&1; then
+    continue
+  fi
   verdict="$(elig_verdict "$touched" "$cpu" "$NOW")"
   name="$(basename "$owner")"
   if [ -n "$touched" ]; then

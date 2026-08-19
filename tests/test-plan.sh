@@ -23,12 +23,14 @@ case "$*" in
     printf '9002 Tue Aug 18 09:00:00 2026 vitest --watch\n'
     printf '9003 Tue Aug 18 09:00:00 2026 next dev\n'
     printf '9004 Tue Aug 18 09:00:00 2026 node server.js\n'
+    printf '9005 Tue Aug 18 09:00:00 2026 /usr/libexec/systemdaemon\n'
     ;;
   *pid,pgid,%cpu,command*)
     printf '9001 9001  0.0 npm run dev\n'
     printf '9002 9002  1.0 vitest --watch\n'
     printf '9003 9003 95.0 next dev\n'
     printf '9004 9004  0.0 node server.js\n'
+    printf '9005 9005  0.0 /usr/libexec/systemdaemon\n'
     ;;
   *) exit 1 ;;
 esac
@@ -41,11 +43,23 @@ case "$*" in
     printf 'p9002\nfcwd\nn/w/here\n'
     printf 'p9003\nfcwd\nn/w/busy\n'
     printf 'p9004\nfcwd\nn/w/nosig\n'
+    printf 'p9005\nfcwd\nn/\n'
     ;;
   *) exit 1 ;;
 esac
 LS
-chmod +x "$SHIM/ps" "$SHIM/lsof"
+# A hand-driven project: no transcript, but a real repo. That is the "unknown"
+# case worth surfacing -- no staleness signal, so never offered, but shown.
+# Everything else (system daemons at "/") is not a repo and drops out.
+cat > "$SHIM/git" <<'GT'
+#!/usr/bin/env bash
+case "$*" in
+  *-C\ /w/nosig*rev-parse*) exit 0 ;;
+  *rev-parse*) exit 1 ;;
+esac
+exec /usr/bin/git "$@"
+GT
+chmod +x "$SHIM/ps" "$SHIM/lsof" "$SHIM/git"
 
 R="$T/projects"; mkdir -p "$R/-w-gone" "$R/-w-here" "$R/-w-busy"
 printf '{"cwd":"/w/gone"}\n' > "$R/-w-gone/a.jsonl"
@@ -99,6 +113,13 @@ printf '%s\n' "$OUT" | grep -q 'unknown' || fail "P4: no unknown reason shown"
 _b=$FAILS
 printf '%s\n' "$OUT" | grep -qi 'killed\|removed\|reclaimed' && fail "P5: plan claimed to have done something"
 [ "$FAILS" -eq "$_b" ] && pass "P5: plan proposes, never reports action"
+
+# ---------- P6: processes outside any workspace are not the plan's business ----------
+# Every system daemon has cwd "/". Listing them would bury the handful of
+# groups a person actually left behind.
+_b=$FAILS
+printf '%s\n' "$OUT" | grep -q '9005' && fail "P6: a daemon rooted at / reached the plan"
+[ "$FAILS" -eq "$_b" ] && pass "P6: groups outside any workspace are excluded"
 
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))
