@@ -2,6 +2,24 @@
 
 All notable changes to Afterparty are documented here. Versions follow semantic versioning.
 
+## [0.7.0] - 2026-08-18
+
+### Added
+
+- `afterparty glance` — machine-wide, grouped by workspace, sorted by how long
+  each has been left alone. Answers "what did I leave running?" on returning to
+  the machine. `--oneline` for a status line, `--json` for JSON Lines.
+- `lib/workspace.sh` — workspace attribution and staleness. Identity comes from
+  the working directory an agent transcript records, so no directory-name
+  decoding is involved; a workspace with no transcript reports no last-touched
+  time rather than being assumed idle. Thresholds via `AFTERPARTY_IDLE_HOURS`
+  (default 4) and `AFTERPARTY_STALE_HOURS` (default 24).
+
+### Fixed
+
+- `--help` no longer truncates its last line when a command is added. `usage()`
+  renders a fixed line range that the header had already grown to fill.
+
 ## [0.6.1] - 2026-08-13
 
 ### Fixed

@@ -1,11 +1,11 @@
 ---
 name: afterparty
-description: Use before starting another localhost server, before ending a turn that spawned long-running processes, when CPU or memory is high, when disk is low, or when the user says "what is running", "devclean", "orphaned MCP", "cleanup terminals", "localhosts out of control", "free disk space", "stale worktrees", or "leftover branches".
+description: Use before starting another localhost server, before ending a turn that spawned long-running processes, when CPU or memory is high, when disk is low, or when the user says "what is running", "what did I leave running", "welcome back", "devclean", "orphaned MCP", "cleanup terminals", "localhosts out of control", "free disk space", "stale worktrees", or "leftover branches".
 license: ./LICENSE
 compatibility: Requires Bash 3.2+, Git, and standard Unix process tools. macOS/Linux terminals and WSL are supported; Git Bash provides Git/filesystem commands with degraded process audits.
 metadata:
   author: Wenjix
-  version: "0.6.1"
+  version: "0.7.0"
 ---
 
 # Afterparty
@@ -14,6 +14,13 @@ This is the memory hook; deterministic behavior lives in the bundled CLI.
 `$CLAUDE_SKILL_DIR` is this skill's directory. Requirements: a macOS/Linux
 terminal (Windows: WSL, or Git Bash with degraded process audits), Git, and
 standard Unix process tools.
+
+Returning to the machine, see what every workspace still holds, sorted by how
+long each was left alone (reports only; it never acts):
+
+```bash
+"$CLAUDE_SKILL_DIR/bin/afterparty" glance
+```
 
 Audit before starting duplicate services and before ending a session:
 
