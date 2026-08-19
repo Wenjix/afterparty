@@ -22,6 +22,17 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/fingerprint.sh"
 . "$DIR/workspace.sh"
 . "$DIR/eligible.sh"
+. "$DIR/state.sh"
+. "$DIR/journal.sh"
+
+# The reason a person typed under "## Why". plan promises this is recorded, so
+# it has to actually reach the journal rather than dying with the file.
+plan_reason() {
+  awk '/^## Why/ { on = 1; next }
+       on && /^## / { exit }
+       on && /^>/   { sub(/^>[[:space:]]*/, ""); if ($0 != "") print }' "$1" \
+    | tr '\n' ' ' | sed 's/[[:space:]]*$//'
+}
 
 PLAN="${1:-}"
 if [ -z "$PLAN" ]; then
@@ -37,7 +48,7 @@ fi
 # tests observe delegation without signalling anything real.
 AUDIT="$(command -v audit-processes.sh 2>/dev/null || printf '%s' "$DIR/audit-processes.sh")"
 
-N_OK=0 N_DRIFT=0 N_GONE=0 N_HELD=0 N_FAILED=0
+N_OK=0 N_DRIFT=0 N_GONE=0 N_HELD=0 N_FAILED=0 N_SURVIVED=0
 declare_targets=""
 
 NOW="$(date +%s)"
@@ -54,15 +65,25 @@ group_facts() {
   local pg="$1"
   ps -Ao pid,pgid,%cpu 2>/dev/null | awk -v g="$pg" '$1 ~ /^[0-9]+$/ && $2 == g { print $1 "\t" $3 }' \
   | {
-    local best="" maxcpu=0 pid cpu dir cand
+    local best="" maxcpu=0 pid cpu dir cand mixed=0
     while IFS=$'\t' read -r pid cpu; do
       awk -v c="$cpu" -v m="$maxcpu" 'BEGIN { exit !(c + 0 > m + 0) }' && maxcpu="$cpu"
       dir="$(awk -F'\t' -v p="$pid" '$1 == p { print $2; exit }' "$T/cwd")"
       [ -n "$dir" ] || continue
       cand="$(ws_owner_of "$dir" < "$T/ws" 2>/dev/null)" || cand=""
-      [ -n "$cand" ] && [ -z "$best" ] && best="$cand"
+      # Every member is resolved, not just the first. A group can gain a child
+      # in a live workspace after planning while its leader -- and therefore
+      # its fingerprint -- stays exactly the same. Killing on the strength of
+      # the stale member would take the active work with it.
+      if [ -z "$best" ]; then
+        best="$cand"
+      elif [ "$cand" != "$best" ]; then
+        mixed=1
+      fi
     done
-    if [ -n "$best" ]; then
+    if [ "$mixed" -eq 1 ]; then
+      printf -- 'mixed\t%s' "$maxcpu"
+    elif [ -n "$best" ]; then
       printf '%s\t%s' "$(awk -F'\t' -v w="$best" '$2 == w { print $1; exit }' "$T/ws")" "$maxcpu"
     else
       printf -- '-\t%s' "$maxcpu"
@@ -104,6 +125,12 @@ while IFS= read -r line; do
       # Re-check eligibility against the live world, not the plan's snapshot.
       facts="$(group_facts "$pg")"
       touched="${facts%%	*}"; cpu="${facts##*	}"
+      if [ "$touched" = "mixed" ]; then
+        s_skip "  pgid $pg — held, now spans more than one workspace"
+        s_dim  "      it gained a member elsewhere since the plan was written"
+        N_HELD=$((N_HELD + 1))
+        continue
+      fi
       [ "$touched" = "-" ] && touched=""
       verdict="$(elig_verdict "$touched" "${cpu:-0}" "$NOW")"
       if [ "$verdict" != "eligible" ]; then
@@ -119,9 +146,14 @@ while IFS= read -r line; do
   esac
 done < "$PLAN"
 
+REASON="$(plan_reason "$PLAN")"
+if [ -n "$REASON" ]; then
+  journal_action plan.apply "plan:$(basename "$PLAN")" succeeded "$REASON"
+fi
+
 if [ "$N_OK" -eq 0 ]; then
   s_dim "  nothing approved is still what the plan described"
-  printf '0 applied · %s refused (drift) · %s gone · %s held · 0 failed\n' "$N_DRIFT" "$N_GONE" "$N_HELD"
+  printf '0 applied · %s refused (drift) · %s gone · %s held · 0 survived · 0 failed\n' "$N_DRIFT" "$N_GONE" "$N_HELD"
   exit 0
 fi
 
@@ -150,15 +182,35 @@ for cat in tests dev browser; do
     esac
   done
   [ -n "$list" ] || continue
+  expects=""
+  for t in $declare_targets; do
+    case "$t" in
+      "$cat":*) pgx="${t#*:}"; expects="${expects:+$expects,}${pgx%%:*}:${t##*:}" ;;
+    esac
+  done
   s_would "  delegating: audit --kill $cat --pgid $list"
-  if ! "$AUDIT" --kill "$cat" --pgid "$list"; then
+  if ! "$AUDIT" --kill "$cat" --pgid "$list" --expect "$expects"; then
     s_skip "  delegation failed for $cat (pgid $list)"
     N_FAILED=$((N_FAILED + 1))
   fi
+  # Receipts are postcondition-based. audit returns 0 when it SKIPS a protected
+  # group, so a successful call proves nothing was refused -- only that nothing
+  # errored. Confirm each group is actually gone before calling it applied.
+  OLD_IFS="$IFS"; IFS=','
+  for pgx in $list; do
+    IFS="$OLD_IFS"
+    if fp_for_pgid "$pgx" >/dev/null 2>&1; then
+      s_skip "  pgid $pgx — survived; audit declined to kill it"
+      N_SURVIVED=$((N_SURVIVED + 1))
+      N_OK=$((N_OK - 1))
+    fi
+    IFS=','
+  done
+  IFS="$OLD_IFS"
 done
 
-printf '%s applied · %s refused (drift) · %s gone · %s held · %s failed\n' \
-  "$N_OK" "$N_DRIFT" "$N_GONE" "$N_HELD" "$N_FAILED"
+printf '%s applied · %s refused (drift) · %s gone · %s held · %s survived · %s failed\n' \
+  "$N_OK" "$N_DRIFT" "$N_GONE" "$N_HELD" "$N_SURVIVED" "$N_FAILED"
 # Receipts are postcondition-based: a delegation that failed did not do the
 # work, so the exit status must say so.
 [ "$N_FAILED" -eq 0 ] || exit 1

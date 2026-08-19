@@ -109,4 +109,36 @@ kill -0 "$P4" 2>/dev/null || fail "recycle guard: process was killed despite mis
 [ "$FAILS" -eq "$B4" ] && pass "recycled-pid guard refuses a group that no longer matches"
 
 echo
-if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi
+if # ---------- K-expect: a stale fingerprint stops a real signal ----------
+# pgid is not identity. If a group exits and its id is reused between approval
+# and SIGTERM, killing by number alone destroys work nobody approved. The
+# protect recheck does not catch this: a replacement group is not protected,
+# it is simply different. --expect is the identity gate at the signal boundary.
+. "$LIB/fingerprint.sh"
+PG="$(spawn_group sleep 300)"
+SPAWNED_GROUPS="$SPAWNED_GROUPS $PG"
+_b=$FAILS
+if [ -n "$PG" ]; then
+  REAL_FP="$(fp_for_pgid "$PG")"
+  [ -n "$REAL_FP" ] || fail "K-expect: could not fingerprint a live group"
+
+  # wrong fingerprint -> must survive
+  AFTERPARTY_STYLE=never bash "$LIB/audit-processes.sh" --kill tests,dev,browser \
+    --pgid "$PG" --expect "$PG:ffffffffffff" >/dev/null 2>&1
+  if kill -0 -"$PG" 2>/dev/null; then
+    pass "K-expect: a mismatched fingerprint prevented the signal"
+  else
+    fail "K-expect: group was killed despite a mismatched fingerprint"
+  fi
+
+  # right fingerprint -> the sleep is not in any kill category, so it must also
+  # survive; this proves the guard is not the only thing keeping it alive.
+  AFTERPARTY_STYLE=never bash "$LIB/audit-processes.sh" --kill tests,dev,browser \
+    --pgid "$PG" --expect "$PG:$REAL_FP" >/dev/null 2>&1
+  kill -0 -"$PG" 2>/dev/null || fail "K-expect: matching fingerprint killed a non-category group"
+else
+  fail "K-expect: could not spawn a test group"
+fi
+[ "$FAILS" -eq "$_b" ] && pass "K-expect: identity is enforced at the signal boundary"
+
+[ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi

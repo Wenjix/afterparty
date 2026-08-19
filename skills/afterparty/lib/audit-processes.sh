@@ -13,6 +13,7 @@
 #   audit-processes.sh --kill browser       # kill automation Chrome (never MCP servers)
 #   audit-processes.sh --kill tests,dev     # multiple categories
 #   audit-processes.sh --kill dev --pgid 123,456  # only reviewed groups
+#   audit-processes.sh --kill dev --pgid 123 --expect 123:9f3ac1b2c3d4  # and only if unchanged
 #   audit-processes.sh --json               # JSON Lines report (no --kill)
 #
 # Exit codes: 0 ok · 1 unavailable/failed mutation · 2 usage error.
@@ -32,6 +33,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Category patterns live in categories.sh so plan.sh matches on exactly the
 # same definitions this script kills by; duplicating them is how the two drift.
 . "$DIR/categories.sh"
+# Identity checked at the signal boundary when --expect is supplied.
+. "$DIR/fingerprint.sh"
 LOCALHOST_RE='^(node|bun|deno|python|uvicorn|ruby|rails|go|cargo|java|next|vite|webpack|cloudflared)[[:space:]]|:3000|:3001|:3002|:5173|:5174|:8000|:8080|:8787'
 
 SELF_PID=$$
@@ -160,6 +163,29 @@ pgid_exists() {
 
 # SIGTERM then SIGKILL a process group. Returns 0 only after the group is
 # confirmed absent, so receipts describe outcomes rather than signal attempts.
+# Expected fingerprint for a group under --expect, empty when unconstrained.
+expected_fp_for() {
+  local pg="$1" pair
+  [ -n "$EXPECT_MAP" ] || return 1
+  OLD_IFS="$IFS"; IFS=','
+  for pair in $EXPECT_MAP; do
+    case "$pair" in "$pg":*) IFS="$OLD_IFS"; printf '%s' "${pair#*:}"; return 0 ;; esac
+  done
+  IFS="$OLD_IFS"
+  return 1
+}
+
+# True when the group is not what the caller approved. Checked immediately
+# before every signal: pgid alone is not identity, and a group that exits and
+# has its id reused between approval and SIGTERM would otherwise be killed on
+# an approval that was never given for it. Unconstrained groups always pass.
+identity_moved() {
+  local pg="$1" want have
+  want="$(expected_fp_for "$pg")" || return 1
+  have="$(fp_for_pgid "$pg" 2>/dev/null)" || return 0
+  [ "$have" != "$want" ]
+}
+
 kill_group() {
   local pg="$1" state_rc protection_rc
   # Re-evaluate the live group immediately before each signal. The discovery
@@ -174,6 +200,11 @@ kill_group() {
       s_skip "  could not inspect pgid $pg for protected members — skipped"
       return 1
     fi
+  fi
+  if identity_moved "$pg"; then
+    s_skip "  pgid $pg: identity changed since approval — not signalled"
+    journal_action process_group.stop "pgid:$pg" failed "identity changed before SIGTERM"
+    return 4
   fi
   if kill -TERM -"$pg" 2>/dev/null; then
     s_kill "  SIGTERM -> pgid $pg"
@@ -192,6 +223,11 @@ kill_group() {
         journal_action process_group.stop "pgid:$pg" failed "protection unavailable before SIGKILL"
         return 1
       fi
+    fi
+    if identity_moved "$pg"; then
+      s_skip "  pgid $pg: identity changed before SIGKILL — not signalled"
+      journal_action process_group.stop "pgid:$pg" failed "identity changed before SIGKILL"
+      return 4
     fi
     if kill -KILL -"$pg" 2>/dev/null; then
       s_kill "  SIGKILL -> pgid $pg (straggler)"
@@ -276,6 +312,7 @@ while [ $# -gt 0 ]; do
     --kill) KILL_CATS="${2:-}"; shift 2 ;;
     --keep|--keep-pgid) KEEP="${2:-}"; shift 2 ;;
     --pgid|--only-pgid) PGID_FILTER="${2:-}"; shift 2 ;;
+    --expect) EXPECT_MAP="${2:-}"; shift 2 ;;
     --json) JSON=1; shift ;;
     --strict) STRICT=1; shift ;;
     -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
@@ -402,6 +439,7 @@ if [ "$PS_STATUS" != "ok" ]; then
 fi
 
 N_KILLED=0 N_PROT=0 N_FAILED=0
+EXPECT_MAP="${EXPECT_MAP:-}"
 IFS=','
 for cat in $KILL_CATS; do
   re=$(category_re "$cat")

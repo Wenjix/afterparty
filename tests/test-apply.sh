@@ -202,5 +202,85 @@ rc=$?
 printf '#!/usr/bin/env bash\necho "$*" >> "%s"\nexit 0\n' "$T/delegated" > "$SHIM/audit-processes.sh"
 chmod +x "$SHIM/audit-processes.sh"
 
+# ---------- A10: apply passes the expected identity to audit ----------
+# apply's own last check still leaves a window before audit signals. Identity
+# must be enforced where the signal happens, so it has to travel with it.
+_b=$FAILS
+: > "$T/delegated"; mkplan "$FPNOW"
+run_apply >/dev/null 2>&1
+grep -q -- '--expect' "$T/delegated" || fail "A10: delegation did not carry --expect"
+grep -q "$FPNOW" "$T/delegated" || fail "A10: delegation did not carry the approved fingerprint"
+[ "$FAILS" -eq "$_b" ] && pass "A10: the approved identity travels to the signal boundary"
+
+# ---------- A11: a group that gained a member elsewhere is held ----------
+# The leader is unchanged, so the fingerprint still matches -- but the group
+# now has a foot in a workspace someone is using, and killing it would take
+# that with it. plan withholds mixed groups; apply must re-check the same way.
+_b=$FAILS
+: > "$T/delegated"
+RMIX="$T/proj-mix"; mkdir -p "$RMIX/-w-loupe" "$RMIX/-w-active"
+printf '{"cwd":"/w/loupe"}\n'  > "$RMIX/-w-loupe/a.jsonl"
+printf '{"cwd":"/w/active"}\n' > "$RMIX/-w-active/b.jsonl"
+touch -t 202001010000 "$RMIX/-w-loupe/a.jsonl" 2>/dev/null \
+  || touch -t "$(date -v -300d +%Y%m%d%H%M)" "$RMIX/-w-loupe/a.jsonl"
+cat > "$SHIM/lsof" <<'LS'
+#!/usr/bin/env bash
+case "$*" in
+  *-d\ cwd*) printf 'p7001\nfcwd\nn/w/loupe\np7009\nfcwd\nn/w/active\n' ;;
+  *) exit 1 ;;
+esac
+LS
+cat > "$SHIM/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  *pgid=,lstart=,command=*) printf '7001 Tue Aug 18 09:00:00 2026 npm run dev\n' ;;
+  *pid,pgid,%cpu*)
+    printf '7001 7001 0.0 npm run dev\n'
+    printf '7009 7001 0.0 node child.js\n'
+    ;;
+  *) exit 1 ;;
+esac
+PS
+chmod +x "$SHIM/ps" "$SHIM/lsof"
+FPMIX="$(PATH="$SHIM:$PATH" fp_for_pgid 7001)"
+mkplan "$FPMIX"
+OUT="$(PATH="$SHIM:$PATH" AFTERPARTY_TRANSCRIPT_ROOT="$RMIX" AFTERPARTY_STYLE=never bash "$LIB/apply.sh" "$T/plan.md" 2>&1)"
+[ -s "$T/delegated" ] && fail "A11: killed a group that had gained a member in another workspace"
+printf '%s\n' "$OUT" | grep -qi 'mixed\|more than one workspace' || fail "A11: mixed ownership not reported: $OUT"
+[ "$FAILS" -eq "$_b" ] && pass "A11: a group spanning workspaces is held at apply time too"
+
+# ---------- A12: the free-text reason is recorded, not dropped ----------
+_b=$FAILS
+J="$T/journal"; mkdir -p "$J"
+# restore the single-group world so A12 exercises the reason path, not A11's
+cat > "$SHIM/lsof" <<'LS'
+#!/usr/bin/env bash
+case "$*" in
+  *-d\ cwd*) printf 'p7001\nfcwd\nn/w/loupe\n' ;;
+  *) exit 1 ;;
+esac
+LS
+cat > "$SHIM/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  *pgid=,lstart=,command=*) printf '7001 Tue Aug 18 09:00:00 2026 npm run dev\n' ;;
+  *pid,pgid,%cpu*)          printf '7001 7001 0.0 npm run dev\n' ;;
+  *) exit 1 ;;
+esac
+PS
+chmod +x "$SHIM/ps" "$SHIM/lsof"
+mkplan "$(PATH="$SHIM:$PATH" fp_for_pgid 7001)"
+cat >> "$T/plan.md" <<'PL'
+
+## Why
+> keeping the loupe server off until Monday
+PL
+XDG_CACHE_HOME="$J" run_apply >/dev/null 2>&1
+if grep -rq 'keeping the loupe server off' "$J" 2>/dev/null; then
+  pass "A12: the reason reaches the journal"
+else
+  fail "A12: plan promises apply records '## Why'; it was dropped"
+fi
+
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))
