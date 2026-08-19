@@ -54,7 +54,11 @@ OUT="$(AFTERPARTY_TRANSCRIPT_ROOT="$R" ws_index)"
 printf '%s\n' "$OUT" | grep -q '/Users/x/alpha' || fail "W3: alpha missing from index"
 printf '%s\n' "$OUT" | grep -q '/Users/x/beta'  || fail "W3: beta missing from index"
 [ "$(printf '%s\n' "$OUT" | grep -c .)" -eq 2 ] || fail "W3: a transcript-less dir contributed a row"
-printf '%s\n' "$OUT" | grep -q "$(printf '^[0-9]\\{1,\\}\\t/Users/x/alpha$')" \
+# A literal tab, not "\t": GNU grep reads \t in a BRE as the letter t, while
+# BSD grep reads it as a tab -- so the escaped form passes on macOS and fails
+# on Linux.
+TAB="$(printf '\t')"
+printf '%s\n' "$OUT" | grep -q "^[0-9][0-9]*${TAB}/Users/x/alpha$" \
   || fail "W3: row is not <epoch>TAB<cwd>"
 [ "$FAILS" -eq "$_b" ] && pass "W3: workspaces indexed by transcript-recorded cwd"
 
