@@ -80,7 +80,12 @@ run_apply() {
 _b=$FAILS
 : > "$T/delegated"; mkplan "$FP7001"
 OUT="$(run_apply)"
-grep -q '7001' "$T/delegated" || fail "A1: approved item was not delegated"
+if ! grep -q '7001' "$T/delegated"; then
+  fail "A1: approved item was not delegated"
+  echo "    apply said: $(printf '%s' "$OUT" | tr '\n' '|')" >&2
+  echo "    ps: [$(PATH="$SHIM:$PATH" ps -Ao pid,pgid,%cpu 2>&1 | head -1)]" >&2
+  echo "    ws: [$(AFTERPARTY_TRANSCRIPT_ROOT="$RIDLE" bash -c '. '"$LIB"'/workspace.sh; ws_index' 2>&1 | head -1)]" >&2
+fi
 grep -q '7002' "$T/delegated" && fail "A1: an UNCHECKED item was delegated"
 grep -q '7003' "$T/delegated" && fail "A1: a withheld item was delegated"
 grep -q 'kill' "$T/delegated"  || fail "A1: delegation did not use the kill path"
@@ -106,6 +111,7 @@ cat > "$SHIM/ps" <<'PS'
 #!/usr/bin/env bash
 case "$*" in
   *pgid=,lstart=,command=*) printf '7001 Tue Aug 18 09:00:00 2026 npm run dev\n' ;;
+  *pid,pgid,%cpu*)          printf '7001 7001 0.0 npm run dev\n' ;;
   *) exit 1 ;;
 esac
 PS
