@@ -179,8 +179,12 @@ fi
 # it is safe to stop looking.
 _b=$FAILS
 NOLSOF="$T/nolsof"; mkdir -p "$NOLSOF"
-# a PATH with ps but deliberately no lsof
 cp "$SHIM/ps" "$NOLSOF/ps"
+# An lsof that FAILS rather than one that is absent. Simulating absence via
+# PATH is not portable -- lsof is /usr/sbin on macOS and /usr/bin on Linux, so
+# a fixture PATH that excludes it on one platform includes it on the other,
+# which is exactly how the first version of this passed locally and failed CI.
+printf '#!/usr/bin/env bash\nexit 1\n' > "$NOLSOF/lsof"; chmod +x "$NOLSOF/lsof"
 OUT9="$(PATH="$NOLSOF:/usr/bin:/bin" AFTERPARTY_TRANSCRIPT_ROOT="$R" AFTERPARTY_STYLE=never \
   bash "$LIB/glance.sh" 2>&1)"
 printf '%s\n' "$OUT9" | grep -qi 'incomplete' \

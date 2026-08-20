@@ -45,9 +45,18 @@ GLANCE_INCOMPLETE=0
 LSOF_STATUS=ok LSOF_REASON=""
 PS_STATUS=ok  PS_REASON=""
 WS_STATUS=ok  WS_REASON=""
+# Present-but-failing counts as unavailable. lsof can exist and still refuse
+# (permissions, a hardened kernel, a container without /proc), and treating a
+# failed scan as "found nothing" is the same confident-all-clear this whole
+# capability block exists to prevent. It also makes the condition testable:
+# `command -v` alone cannot be simulated by a PATH shim, since a shim IS found.
 if ! command -v lsof >/dev/null 2>&1; then
   LSOF_STATUS=unavailable
   LSOF_REASON="lsof is not installed; processes cannot be attributed to a workspace"
+  GLANCE_INCOMPLETE=1
+elif ! lsof -a -d cwd -Fpn >/dev/null 2>&1; then
+  LSOF_STATUS=unavailable
+  LSOF_REASON="lsof could not read process working directories; attribution is incomplete"
   GLANCE_INCOMPLETE=1
 fi
 if ! ps -Ao pid,pgid,%cpu,command >/dev/null 2>&1; then
