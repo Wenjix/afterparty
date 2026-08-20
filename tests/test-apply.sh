@@ -317,5 +317,74 @@ for order in loupe-first unplaceable-first; do
 done
 [ "$FAILS" -eq "$_b" ] && pass "A13: an unplaceable member withholds the group, in either row order"
 
+# Restore the single-group world. Cases that run after A11/A13 inherit their
+# shims, where pgid 7001 has a sibling in another workspace — so the item is
+# withheld as MIXED before the branch under test is ever reached. That is the
+# same "an earlier rule fires first" trap that made P7 vacuous in test-plan.
+clean_world() {
+  printf '#!/usr/bin/env bash\ncase "$*" in\n  *-d\\ cwd*) printf '"'"'p7001\\nfcwd\\nn/w/loupe\\n'"'"' ;;\n  *) exit 1 ;;\nesac\n' > "$SHIM/lsof"
+  printf '#!/usr/bin/env bash\ncase "$*" in\n  *pgid=,lstart=,command=*) printf '"'"'7001 Tue Aug 18 09:00:00 2026 npm run dev\\n'"'"' ;;\n  *pid,pgid,%%cpu*) printf '"'"'7001 7001 0.0 npm run dev\\n'"'"' ;;\n  *) exit 1 ;;\nesac\n' > "$SHIM/ps"
+  chmod +x "$SHIM/lsof" "$SHIM/ps"
+}
+
+# ---------- A14: a category apply cannot execute is refused, not "applied" ----------
+# The delegation loop handles tests/dev/browser. Anything else was counted as
+# applied and then never delegated — the item silently did not happen and the
+# receipt said it did. A hand-edited plan is untrusted input.
+_b=$FAILS
+clean_world
+: > "$T/delegated"
+FPCLEAN="$(PATH="$SHIM:$PATH" fp_for_pgid 7001)"
+cat > "$T/plan.md" <<PL
+# afterparty plan
+
+## Process groups
+
+- [x] eligible  pgid 7001  loupe · idle 6h · cpu 0.0
+      category: disk  fingerprint: $FPCLEAN
+PL
+OUT="$(run_apply)"
+[ -s "$T/delegated" ] && fail "A14: delegated an unexecutable category"
+printf '%s\n' "$OUT" | grep -q "not a category apply can execute" \
+  || fail "A14: no refusal naming the bad category: $OUT"
+printf '%s\n' "$OUT" | grep -qE '^0 applied' \
+  || fail "A14: counted an unexecutable item as applied: $OUT"
+[ "$FAILS" -eq "$_b" ] && pass "A14: an unexecutable category is refused and not counted as applied"
+
+# ---------- A15: the receipt is written after the work, describing it ----------
+# plan.apply was journaled "succeeded" BEFORE anything was attempted. The
+# reason is still recorded up front (an early exit must not lose it) but as
+# plan.reason/recorded — claiming success before acting is the false receipt
+# the project rule exists to prevent.
+_b=$FAILS
+J2="$T/j2"; mkdir -p "$J2"
+clean_world
+mkplan "$(PATH="$SHIM:$PATH" fp_for_pgid 7001)"
+cat >> "$T/plan.md" <<'PL'
+
+## Why
+> auditing the receipt ordering
+PL
+XDG_CACHE_HOME="$J2" run_apply >/dev/null 2>&1
+JF="$(find "$J2" -name actions.jsonl 2>/dev/null | head -1)"
+if [ -n "$JF" ]; then
+  grep -q '"operation":"plan.reason".*"status":"recorded"' "$JF" \
+    || fail "A15: the reason was not recorded as plan.reason/recorded"
+  # Status-agnostic on purpose: the delegation shim exits 0 without actually
+  # killing, so apply's postcondition check correctly records "survived" and
+  # the receipt reads failed. What A15 pins is that ONE outcome row exists,
+  # written after the work, carrying the real breakdown — not that the run
+  # succeeded, which this fixture can never produce.
+  grep -q '"operation":"plan.apply".*applied=' "$JF" \
+    || fail "A15: no outcome receipt carrying the applied/held/survived breakdown"
+  [ "$(grep -c '"operation":"plan.apply"' "$JF")" -eq 1 ] \
+    || fail "A15: expected exactly one outcome receipt per run"
+  grep -q '"operation":"plan.apply".*"detail":"auditing the receipt' "$JF" \
+    && fail "A15: plan.apply is still carrying the reason instead of the outcome"
+else
+  fail "A15: no journal was written at all"
+fi
+[ "$FAILS" -eq "$_b" ] && pass "A15: the reason is recorded up front, the outcome after the work"
+
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))

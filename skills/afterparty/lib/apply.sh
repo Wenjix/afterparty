@@ -159,6 +159,18 @@ while IFS= read -r line; do
         N_HELD=$((N_HELD + 1))
         continue
       fi
+      # The delegation loop below handles exactly these. A plan naming anything
+      # else was counted as applied and then never delegated: the item silently
+      # did not happen and the receipt said it did. A hand-edited plan is
+      # untrusted input, so this is validated rather than assumed.
+      case "$category" in
+        tests|dev|browser) : ;;
+        *)
+          s_skip "  pgid $pg — refused, '$category' is not a category apply can execute"
+          N_FAILED=$((N_FAILED + 1))
+          continue
+          ;;
+      esac
       declare_targets="${declare_targets}${category}:${pg}:${have_fp} "
       N_OK=$((N_OK + 1))
       ;;
@@ -166,13 +178,31 @@ while IFS= read -r line; do
   esac
 done < "$PLAN"
 
+# The reason is recorded before any work, because "I reviewed this and approved
+# nothing, here is why" is worth keeping and the run may exit early. But it is
+# recorded as plan.reason/recorded, NOT as plan.apply/succeeded: claiming
+# success before attempting anything is exactly the false receipt the project
+# rule exists to prevent. The outcome is journaled after the work, below.
+# Every exit path writes exactly one outcome receipt, including the path where
+# nothing was approved: "I ran and applied nothing, and here is the breakdown"
+# is a legitimate receipt, and its absence is what let a no-op look like a
+# clean success from the outside.
+journal_outcome() {
+  local status=succeeded
+  [ "$N_OK" -gt 0 ] || status=no-op
+  if [ "$N_FAILED" -gt 0 ] || [ "$N_SURVIVED" -gt 0 ]; then status=failed; fi
+  journal_action plan.apply "plan:$(basename "$PLAN")" "$status" \
+    "applied=$N_OK refused=$N_DRIFT gone=$N_GONE held=$N_HELD survived=$N_SURVIVED failed=$N_FAILED"
+}
+
 REASON="$(plan_reason "$PLAN")"
 if [ -n "$REASON" ]; then
-  journal_action plan.apply "plan:$(basename "$PLAN")" succeeded "$REASON"
+  journal_action plan.reason "plan:$(basename "$PLAN")" recorded "$REASON"
 fi
 
 if [ "$N_OK" -eq 0 ]; then
   s_dim "  nothing approved is still what the plan described"
+  journal_outcome
   printf '0 applied · %s refused (drift) · %s gone · %s held · 0 survived · 0 failed\n' "$N_DRIFT" "$N_GONE" "$N_HELD"
   exit 0
 fi
@@ -229,6 +259,7 @@ for cat in tests dev browser; do
   IFS="$OLD_IFS"
 done
 
+journal_outcome
 printf '%s applied · %s refused (drift) · %s gone · %s held · %s survived · %s failed\n' \
   "$N_OK" "$N_DRIFT" "$N_GONE" "$N_HELD" "$N_SURVIVED" "$N_FAILED"
 # Receipts are postcondition-based: a delegation that failed did not do the
