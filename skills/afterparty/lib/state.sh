@@ -79,6 +79,64 @@ state_secure_dir() {
 # Portable advisory lock based on atomic mkdir. The owner is represented by an
 # empty PID-named directory so releasing the lock does not depend on `rm` (the
 # cleanup commands may deliberately be running with a failing rm shim).
+# A lock held longer than this is treated as abandoned. Deliberately generous:
+# the longest legitimate hold is a ledger prune, which is milliseconds.
+STATE_LOCK_STALE_SECONDS="${AFTERPARTY_LOCK_STALE_SECONDS:-300}"
+# A lock directory with no owner inside is the crash window between the two
+# mkdirs. Short grace so a genuine racer is never mistaken for a crash.
+STATE_LOCK_ORPHAN_SECONDS="${AFTERPARTY_LOCK_ORPHAN_SECONDS:-10}"
+
+state_lock_age() {
+  local now mt
+  mt="$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null)" || return 1
+  [ -n "$mt" ] || return 1
+  now="$(date +%s)" || return 1
+  printf '%s' "$(( now - mt ))"
+}
+
+# Reclaim by ATOMIC RENAME, never by rmdir in place. Two reapers racing on the
+# same abandoned lock both call this; only one wins the rename, so the loser
+# cannot delete a lock the winner (or a fresh legitimate owner) now holds.
+# Removing the directory in place had no such interlock, which is how two
+# processes could come to hold the same lock at once.
+state_lock_reclaim() {
+  local lock="$1" tmp="$1.stale.$$.$RANDOM"
+  if mv "$lock" "$tmp" 2>/dev/null; then
+    rm -rf "$tmp" 2>/dev/null || true
+    return 0
+  fi
+  return 1
+}
+
+# True when the lock looks abandoned rather than held.
+state_lock_is_stale() {
+  local lock="$1" owner_dir owner age owners=0
+  for owner_dir in "$lock"/[0-9]*; do
+    [ -d "$owner_dir" ] || continue
+    owners=$((owners + 1))
+    owner="${owner_dir##*/}"
+    case "$owner" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    # A live PID still holding it past the stale window counts as abandoned
+    # too: PIDs are recycled, so "the number is alive" is not proof that THIS
+    # holder is alive. Without an age bound a recycled pid wedged it forever.
+    if ! kill -0 "$owner" 2>/dev/null; then return 0; fi
+    age="$(state_lock_age "$owner_dir")" || return 1
+    [ "$age" -gt "$STATE_LOCK_STALE_SECONDS" ] && return 0
+    return 1
+  done
+  # No owner inside at all: the holder died between creating the lock and
+  # claiming it. The old reaper globbed for owner dirs, found none, and so
+  # never removed anything -- the lock stayed forever and every writer after it
+  # failed silently.
+  if [ "$owners" -eq 0 ]; then
+    age="$(state_lock_age "$lock")" || return 1
+    [ "$age" -gt "$STATE_LOCK_ORPHAN_SECONDS" ] && return 0
+  fi
+  return 1
+}
+
 state_lock_acquire() {
   local lock="$1" tries="${2:-200}" owner_dir="" owner="" i=0 parent
   parent="${lock%/*}"
@@ -93,19 +151,9 @@ state_lock_acquire() {
       fi
       return 0
     fi
-    for owner_dir in "$lock"/[0-9]*; do
-      [ -d "$owner_dir" ] || continue
-      owner="${owner_dir##*/}"
-      case "$owner" in
-        ''|*[!0-9]*) ;;
-        *)
-          if ! kill -0 "$owner" 2>/dev/null; then
-            rmdir "$owner_dir" 2>/dev/null || true
-            rmdir "$lock" 2>/dev/null || true
-          fi
-          ;;
-      esac
-    done
+    if state_lock_is_stale "$lock"; then
+      state_lock_reclaim "$lock" || true
+    fi
     sleep 0.05
     i=$((i + 1))
   done

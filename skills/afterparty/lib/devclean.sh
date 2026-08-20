@@ -979,7 +979,10 @@ clean_pnpm_store() {
   [ "$freed" -lt 0 ] && freed=0
   DISK_TOTAL_KB=$((DISK_TOTAL_KB + freed))
   s_ok "  pruned pnpm store: freed $(human_mb "$freed") (now $(human_mb "${kb_after:-0}"))"
-  journal_action cache.clean "$store" succeeded "kilobytes=$freed; label=pnpm store"
+  # journal_action returns nonzero when the journal is busy, and this is the
+  # last statement of the function -- without || true a busy journal would make
+  # a successful prune look like a failed one to the caller.
+  journal_action cache.clean "$store" succeeded "kilobytes=$freed; label=pnpm store" || true
 }
 
 clean_fvm_incomplete() {
