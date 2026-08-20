@@ -147,7 +147,7 @@ pid_exists() {
 # rg when available, grep -E otherwise, so the ps fallback path in
 # pids_by_pattern still matches when ripgrep is missing.
 match_i() {
-  if command -v rg >/dev/null 2>&1; then rg -i -- "$1"; else grep -Ei -- "$1"; fi
+  if command -v rg >/dev/null 2>&1; then rg --no-config -i -- "$1"; else grep -Ei -- "$1"; fi
 }
 
 # Stable identity includes parent, start time, and command. A recycled PID can

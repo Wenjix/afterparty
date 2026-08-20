@@ -88,7 +88,14 @@ group_facts() {
       # in a live workspace after planning while its leader -- and therefore
       # its fingerprint -- stays exactly the same. Killing on the strength of
       # the stale member would take the active work with it.
-      if [ -z "$best" ]; then
+      if [ -z "$cand" ]; then
+        # A cwd that resolves to NO indexed workspace is unknown ownership, not
+        # absent ownership. Folding it into the empty-best case let the next
+        # member's workspace win and the unplaceable one be forgotten, so the
+        # verdict depended on ps row order: identical worlds, opposite
+        # decisions. Missing evidence is withheld, never assumed benign.
+        mixed=1
+      elif [ -z "$best" ]; then
         best="$cand"
       elif [ "$cand" != "$best" ]; then
         mixed=1

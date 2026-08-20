@@ -291,5 +291,31 @@ else
   fail "A12: plan promises apply records '## Why'; it was dropped"
 fi
 
+# ---------- A13: an unplaceable member is withheld, whatever the row order ----------
+# 7001 is in the stale /w/loupe; 7011's cwd is real but belongs to no indexed
+# workspace. That is UNKNOWN ownership. Folding it into "no owner seen yet" let
+# the next member decide the group, so the same world produced opposite
+# verdicts depending on which ps row came first. Both orders are asserted.
+_b=$FAILS
+for order in loupe-first unplaceable-first; do
+  : > "$T/delegated"
+  if [ "$order" = "loupe-first" ]; then
+    rows='p7001\nfcwd\nn/w/loupe\np7011\nfcwd\nn/w/elsewhere\n'
+    ps_rows='7001 7001 0.0 npm run dev\n7011 7001 0.0 node helper.js\n'
+  else
+    rows='p7011\nfcwd\nn/w/elsewhere\np7001\nfcwd\nn/w/loupe\n'
+    ps_rows='7011 7001 0.0 node helper.js\n7001 7001 0.0 npm run dev\n'
+  fi
+  printf '#!/usr/bin/env bash\ncase "$*" in\n  *-d\\ cwd*) printf '"'"'%s'"'"' ;;\n  *) exit 1 ;;\nesac\n' "$rows" > "$SHIM/lsof"
+  printf '#!/usr/bin/env bash\ncase "$*" in\n  *pgid=,lstart=,command=*) printf '"'"'7001 Tue Aug 18 09:00:00 2026 npm run dev\\n'"'"' ;;\n  *pid,pgid,%%cpu*) printf '"'"'%s'"'"' ;;\n  *) exit 1 ;;\nesac\n' "$ps_rows" > "$SHIM/ps"
+  chmod +x "$SHIM/lsof" "$SHIM/ps"
+  mkplan "$(PATH="$SHIM:$PATH" fp_for_pgid 7001)"
+  OUT="$(run_apply)"
+  [ -s "$T/delegated" ] && fail "A13/$order: killed a group with an unplaceable member"
+  printf '%s\n' "$OUT" | grep -q 'pgid 7001 .*more than one workspace' \
+    || fail "A13/$order: unplaceable member not reported as mixed: $OUT"
+done
+[ "$FAILS" -eq "$_b" ] && pass "A13: an unplaceable member withholds the group, in either row order"
+
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))

@@ -90,7 +90,7 @@ is_protected_pid() {
   local pid="$1" command
   command="$(command_for "$pid")"
   if command -v rg >/dev/null 2>&1; then
-    printf '%s\n' "$command" | rg -iq -- "$PROTECT_RE"
+    printf '%s\n' "$command" | rg --no-config -iq -- "$PROTECT_RE"
   else
     printf '%s\n' "$command" | grep -Eiq -- "$PROTECT_RE"
   fi
@@ -102,7 +102,7 @@ pgid_exists() {
     return 2
   fi
   if command -v rg >/dev/null 2>&1; then
-    printf '%s\n' "$members" | tr -d ' ' | rg -q "^${pgid}$"
+    printf '%s\n' "$members" | tr -d ' ' | rg --no-config -q "^${pgid}$"
   else
     printf '%s\n' "$members" | tr -d ' ' | grep -q "^${pgid}$"
   fi

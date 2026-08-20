@@ -59,10 +59,10 @@ if ! command -v lsof >/dev/null 2>&1; then
   LSOF_REASON="lsof is not installed"
 fi
 
-match_i()  { if [ "$HAVE_RG" -eq 1 ]; then rg -i -- "$1"; else grep -Ei -- "$1"; fi; }
-match_iv() { if [ "$HAVE_RG" -eq 1 ]; then rg -iv -- "$1"; else grep -Eiv -- "$1"; fi; }
-match_v()  { if [ "$HAVE_RG" -eq 1 ]; then rg -v -- "$1"; else grep -Ev -- "$1"; fi; }
-match_q()  { if [ "$HAVE_RG" -eq 1 ]; then rg -q -- "$1"; else grep -Eq -- "$1"; fi; }
+match_i()  { if [ "$HAVE_RG" -eq 1 ]; then rg --no-config -i -- "$1"; else grep -Ei -- "$1"; fi; }
+match_iv() { if [ "$HAVE_RG" -eq 1 ]; then rg --no-config -iv -- "$1"; else grep -Eiv -- "$1"; fi; }
+match_v()  { if [ "$HAVE_RG" -eq 1 ]; then rg --no-config -v -- "$1"; else grep -Ev -- "$1"; fi; }
+match_q()  { if [ "$HAVE_RG" -eq 1 ]; then rg --no-config -q -- "$1"; else grep -Eq -- "$1"; fi; }
 
 # Print matching processes for a category, excluding protected and self.
 list_matches() {
@@ -72,7 +72,7 @@ list_matches() {
     | match_i "$re" \
     | match_iv "$PROTECT_RE" \
     | match_v "audit-processes.sh" \
-    | match_v 'rg -i --|grep -Ei --' \
+    | match_v 'rg (--no-config )?-i --|grep -Ei --' \
     | awk -v self="$SELF_PGID" '$3 != self'
 }
 
