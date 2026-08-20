@@ -165,13 +165,20 @@ pgid_exists() {
 # confirmed absent, so receipts describe outcomes rather than signal attempts.
 # Expected fingerprint for a group under --expect, empty when unconstrained.
 expected_fp_for() {
-  local pg="$1" pair
-  [ -n "$EXPECT_MAP" ] || return 1
-  OLD_IFS="$IFS"; IFS=','
-  for pair in $EXPECT_MAP; do
-    case "$pair" in "$pg":*) IFS="$OLD_IFS"; printf '%s' "${pair#*:}"; return 0 ;; esac
+  local pg="$1" pair map
+  # A caller-supplied expectation wins; otherwise fall back to the fingerprint
+  # this run captured when it SELECTED the group. Discovery is heuristic and
+  # its snapshot ages the whole length of a run — 2s of drain per group — so
+  # the fingerprint is what turns a stale observation into proof that the thing
+  # about to be signalled is still the thing that was chosen.
+  for map in "$EXPECT_MAP" "$AUTO_FP_MAP"; do
+    [ -n "$map" ] || continue
+    OLD_IFS="$IFS"; IFS=','
+    for pair in $map; do
+      case "$pair" in "$pg":*) IFS="$OLD_IFS"; printf '%s' "${pair#*:}"; return 0 ;; esac
+    done
+    IFS="$OLD_IFS"
   done
-  IFS="$OLD_IFS"
   return 1
 }
 
@@ -188,6 +195,17 @@ identity_moved() {
 
 kill_group() {
   local pg="$1" state_rc protection_rc
+  # kill -TERM -1 means every process this user owns; -0 means afterparty's own
+  # group. Every other pgid entry point validates this; the one that actually
+  # signals did not, and a pgid comes straight out of a ps column.
+  case "$pg" in
+    ''|*[!0-9]*) s_skip "  refusing a non-numeric process group id"; return 1 ;;
+  esac
+  if [ "$pg" -le 1 ]; then
+    s_skip "  refusing process group $pg — 0 and 1 are never valid kill targets"
+    journal_action process_group.stop "pgid:$pg" failed "refused reserved process group"
+    return 1
+  fi
   # Re-evaluate the live group immediately before each signal. The discovery
   # snapshot may be stale, and a protected sibling can join while SIGTERM is
   # draining the group.
@@ -311,7 +329,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --kill) KILL_CATS="${2:-}"; shift 2 ;;
     --keep|--keep-pgid) KEEP="${2:-}"; shift 2 ;;
-    --pgid|--only-pgid) PGID_FILTER="${2:-}"; shift 2 ;;
+    --pgid|--only-pgid) PGID_FILTER="${2:-}"; PGID_SUPPLIED=1; shift 2 ;;
     --expect) EXPECT_MAP="${2:-}"; shift 2 ;;
     --json) JSON=1; shift ;;
     --strict) STRICT=1; shift ;;
@@ -320,6 +338,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Supplied-but-empty is not the same as absent. Every guard below used to hang
+# off the VALUE being non-empty, so `--pgid ''` skipped the syntax check, the
+# 0/1 refusal, the requires--kill check AND the narrowing itself — turning the
+# flag whose entire job is to restrict a kill into one that widens it to the
+# whole category.
+if [ "${PGID_SUPPLIED:-0}" -eq 1 ] && [ -z "$PGID_FILTER" ]; then
+  echo "--pgid was given an empty value; refusing to widen the kill" >&2
+  exit 2
+fi
 if [ -n "$PGID_FILTER" ]; then
   case "$PGID_FILTER" in
     ,*|*,|*,,*|*[!0-9,]*) echo "--pgid wants comma-separated positive process-group IDs" >&2; exit 2 ;;
@@ -440,6 +467,8 @@ if [ "$PS_STATUS" != "ok" ]; then
 fi
 
 N_KILLED=0 N_PROT=0 N_FAILED=0 N_IDENT=0
+PGID_SUPPLIED="${PGID_SUPPLIED:-0}"
+AUTO_FP_MAP=""
 EXPECT_MAP="${EXPECT_MAP:-}"
 IFS=','
 for cat in $KILL_CATS; do
@@ -458,6 +487,18 @@ for cat in $KILL_CATS; do
     pgs="${filtered_pgs%$'\n'}"
   fi
   if [ -z "$pgs" ]; then s_dim "  nothing to kill"; continue; fi
+  # Capture identity for every group this category selected, right now, against
+  # the live process table — not against PS_SNAPSHOT, which was taken before
+  # argument parsing and ages ~2s per group as the run drains. kill_group
+  # re-checks this immediately before SIGTERM and again before SIGKILL, so a
+  # pgid freed and recycled mid-run is refused instead of signalled on an
+  # authority that was never granted for it.
+  while IFS= read -r pg; do
+    [ -n "$pg" ] || continue
+    if sel_fp="$(fp_for_pgid "$pg" 2>/dev/null)" && [ -n "$sel_fp" ]; then
+      AUTO_FP_MAP="${AUTO_FP_MAP:+$AUTO_FP_MAP,}${pg}:${sel_fp}"
+    fi
+  done <<< "$pgs"
   # pgids_for emits one pgid per line; the surrounding loop runs under
   # IFS=',' so word-splitting would glue them into one token — read by line.
   actionable=0
