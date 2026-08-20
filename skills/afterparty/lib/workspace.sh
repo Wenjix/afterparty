@@ -71,3 +71,29 @@ ws_for_pid() {
   [ -n "$cwd" ] || return 1
   printf '%s' "$cwd"
 }
+
+# Emit "<pid>\t<cwd>" for every process, from ONE lsof call. Per-pid lookup
+# would be ~500 forks on a normal machine; this is ~0.4s for all of them.
+# Shared by glance and plan so the attribution model has a single definition.
+ws_pid_cwd() {
+  command -v lsof >/dev/null 2>&1 || return 0
+  lsof -a -d cwd -Fpn 2>/dev/null | awk '
+    /^p/ { pid = substr($0, 2); next }
+    /^n/ { if (pid != "") { print pid "\t" substr($0, 2); pid = "" } }
+  '
+}
+
+# Longest workspace path prefixing <cwd> wins, so a process in
+# repo/packages/web belongs to repo rather than to a shorter ancestor.
+# Reads the index on stdin as "<epoch>\t<path>" lines.
+ws_owner_of() {
+  local dir="$1" best="" ts path
+  while IFS=$'\t' read -r ts path; do
+    [ -n "$path" ] || continue
+    case "$dir" in
+      "$path"|"$path"/*) [ "${#path}" -gt "${#best}" ] && best="$path" ;;
+    esac
+  done
+  [ -n "$best" ] || return 1
+  printf '%s' "$best"
+}

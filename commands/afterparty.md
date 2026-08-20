@@ -21,7 +21,7 @@ happened:
 
 - `bash "${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty" stop --kill` — stop ledger-recorded groups
 - `bash "${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty" audit --kill <tests|dev|browser> --pgid <reviewed-pgid>` — kill reviewed stray groups in a category
-- `bash "${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty" git --clean` — apply the safe git subset
+- `bash "${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty" git` — report git leftovers (`--clean` is report-only; removal goes through `plan`/`apply`)
 
 Otherwise just offer those commands. Never signal protected processes (the
 scripts refuse anyway); unmerged branches, dirty worktrees, and stashes are

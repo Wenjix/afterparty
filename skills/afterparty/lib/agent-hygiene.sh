@@ -13,6 +13,8 @@
 #   agent-hygiene.sh artifacts [clean-artifacts args...]
 #   agent-hygiene.sh devclean [--deep] [--optimize] [--disk] [--apply]
 #   agent-hygiene.sh glance [--oneline] [--json]
+#   agent-hygiene.sh plan
+#   agent-hygiene.sh apply <plan.md>
 #   agent-hygiene.sh doctor
 #   agent-hygiene.sh report [--show|--remind]
 #   agent-hygiene.sh report-path
@@ -30,7 +32,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
   # Range tracks the header comment above; adding a command line means
   # widening it, or the last entry silently drops out of --help.
-  sed -n '2,21p' "$0"
+  sed -n '2,23p' "$0"
 }
 
 # The one finale card for the composite audit, fed by the children's tally.
@@ -115,7 +117,7 @@ print_finale_card() {
       s_card_line "     ${C_CYAN}afterparty audit --kill tests,dev,browser${C_RESET}"
     fi
     if [ "$gitf" -gt 0 ]; then
-      s_card_line "     ${C_CYAN}afterparty git --clean${C_RESET}"
+      s_card_line "     ${C_CYAN}afterparty plan${C_RESET}  (git --clean is report-only)"
     fi
   elif [ "$unavailable" -gt 0 ]; then
     s_card_line "${C_BOLD}${C_YEL}⚠ audit incomplete — no clean bill of health${C_RESET}"
@@ -242,6 +244,12 @@ case "$cmd" in
     ;;
   glance)
     exec "$DIR/glance.sh" "$@"
+    ;;
+  plan)
+    exec "$DIR/plan.sh" "$@"
+    ;;
+  apply)
+    exec "$DIR/apply.sh" "$@"
     ;;
   doctor)
     # One long checkup, no finale cards.

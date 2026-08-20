@@ -162,5 +162,48 @@ killable|plain dev server|npm run dev
 killable|agent-owned path but not the executable|node /Users/x/.claude/plugins/marketplaces/afterparty/tools/server.mjs
 CASES
 
+# ---------- C4/C5: every category, not just dev ----------
+# DEV_RE was anchored in 0.6.1 after prose in a 20 KB agent argv classified a
+# live session as a dev server. TESTS_RE and BROWSER_RE were left as they were,
+# and this suite only ever exercised dev -- which is precisely why nobody
+# noticed. cat_for_command is tested directly here: it is the function both the
+# audit listing and plan's eligibility gate resolve categories with.
+. "$LIB/categories.sh"
+
+while IFS='|' read -r want desc cmd; do
+  got="$(cat_for_command "$cmd" 2>/dev/null || printf 'none')"
+  if [ "$got" = "$want" ]; then
+    pass "C4: $desc -> $want"
+  else
+    fail "C4: $desc -> '$got', want '$want'"
+  fi
+done <<'CASES'
+tests|a real vitest runner by path|node /repo/node_modules/.bin/vitest --watch
+tests|pytest invoked directly|pytest tests/unit
+tests|jest via npx|npx jest --runInBand
+tests|the npm test script|npm test
+tests|ava by path|/repo/node_modules/.bin/ava
+none|a JVM is not a test runner|java -jar idea.jar
+none|a JVM with heap flags|/usr/bin/java -Xmx4g -jar gradle-daemon.jar
+none|prose naming pytest in an agent prompt|claude --effort max [city] remember to run pytest before pushing
+none|prose naming jest in an agent prompt|claude [city] the jest suite is flaky, investigate it
+none|prose naming mocha and jasmine|claude [city] mocha and jasmine are both configured here
+CASES
+
+while IFS='|' read -r want desc cmd; do
+  got="$(cat_for_command "$cmd" 2>/dev/null || printf 'none')"
+  if [ "$got" = "$want" ]; then
+    pass "C5: $desc -> $want"
+  else
+    fail "C5: $desc -> '$got', want '$want'"
+  fi
+done <<'CASES'
+browser|chrome under remote debugging|/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222
+browser|a playwright-managed browser|/Users/x/Library/Caches/ms-playwright/chromium-1140/chrome-mac/Chromium --headless
+browser|the chrome devtools mcp bridge|node /x/node_modules/mcp-chrome/dist/index.js
+none|prose naming playwright and chromium|claude [city] use playwright to test chromium rendering later
+none|prose naming puppeteer|claude [city] the Google Chrome profile needs puppeteer removed
+CASES
+
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))

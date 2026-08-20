@@ -42,12 +42,39 @@ mechanics when you touch them.
   NO last-touched time - treat unknown as "cannot tell", never "forgotten".
   Attribution is one `lsof -d cwd` call for the whole machine; per-pid would
   be ~500 forks. Never key staleness on process liveness alone.
+- `plan` proposes and `apply` disposes, and apply NEVER signals: it delegates to
+  audit --kill --pgid so there is exactly one kill discipline. Two rules hold
+  it together. Kill categories live ONLY in lib/categories.sh (shared with
+  audit-processes.sh - don't duplicate); `--pgid` narrows WITHIN a category, so
+  plan must withhold any group matching no category or it would approve an
+  action that silently never happens. And the checkbox is the authority, not
+  the fingerprint - the fingerprint (pgid + start time + command, lib/
+  fingerprint.sh) only proves the group is still the one reviewed, so a
+  recycled pgid is refused rather than re-targeted. Eligibility is the
+  two-signal rule in lib/eligible.sh; `unknown` is never eligible.
+- TSV rows written for `read` must never carry an empty middle field: tab is
+  IFS-whitespace, so consecutive tabs collapse and every later column shifts
+  left. Emit a sentinel ("-"). test-review-fixes C6 pins this for the ledger;
+  plan.sh reintroduced it once already.
 - devclean --disk age-gates Codex session transcripts (CODEX_SESSION_AGE_DAYS,
   env-overridable, default 30 like Claude Code's retention): transcripts are
   resume history and the audit trail of agent work — only stale YYYY/MM/DD
   date-folders go. pnpm store maintenance also lives in devclean --disk, as
   `pnpm store prune` ONLY — the store is shared across projects, never rm -rf
   it; artifacts deliberately has no --deep flag anymore.
+- Discovery may be heuristic; DESTRUCTION requires fresh, positive proof. Two
+  surfaces used to discover-and-destroy in one step and are now REPORT-ONLY:
+  `git --clean` (exit 2, still reports) and devclean's roaming `clean_find`
+  project scan (reports, withholds). The cut is roaming-vs-named, not
+  apply-vs-report: `clean_dir` targets an exact allowlisted cache path and
+  still deletes; `clean_find` walks $DOCUMENTS_ROOT hunting a NAME with no
+  liveness, git-tracked, or age gate. Removal is moving behind plan/apply as
+  typed targets (process-group, worktree, artifact), each with its own
+  fingerprint and apply-time policy. Approval does NOT replace safety checks:
+  tracked target, symlink or scope escape, repo root, nested repo, and
+  incomplete scans stay hard vetoes even when a human ticks the box, and
+  filesystem items default to unchecked because deleting a worktree and
+  restarting a dev server are not the same consequence.
 - Three mutation paths: `stop --kill` stops ledger-recorded groups;
   `audit --kill tests|dev|browser` kills by pattern category; `git --clean`
   applies only the safe git subset (worktree prune, clean stale worktrees,
@@ -93,13 +120,25 @@ mechanics when you touch them.
   modes, so its dry-run cards may carry ⊘. tests/test-proc-tables.sh fakes ps/pgrep/lsof on PATH for
   deterministic tables everywhere — dry-run only, never --kill/--apply
   under the shim.
+- A test that asserts an effect is ABSENT proves nothing unless it also proves
+  the code path was ENTERED. Assert a positive signal alongside the absence:
+  the rejection message must name the flag, the withheld item must carry its
+  verdict token, the refusal line must name the pgid. Five assertions here were
+  found unable to fail — a trailing positional satisfied a rejection check, a
+  substring matched the wrong column, a fixture's decoy sorted the same way as
+  the correct answer, an item was withheld by an earlier rule than the one under
+  test, and a receipt hardcoded the words the assertion searched for. Verify a
+  new guard by mutating the production code in a scratch copy and confirming the
+  test goes red.
 - Test isolation is by PATH shim, not by HOME: two devclean surfaces address
   the real machine whatever HOME says. run_safe_orphans runs on EVERY
   devclean invocation and signals what it matches under --apply (and
   ORPHAN_PATTERNS includes claude and codex), and the background-agent step
   drives launchctl gui/<uid>/<label>. Any test that reaches --apply MUST
-  shim pgrep and launchctl or it will kill the developer's own agents and
-  disable their real ChatGPT/Figma agents. Verify with a logging shim on
+  shim pgrep, launchctl AND pnpm, or it will kill the developer's own agents,
+  disable their real ChatGPT/Figma agents, and prune their shared pnpm store.
+  pnpm is the third HOME-immune surface: it resolves its store from the OS
+  passwd entry, not $HOME or XDG vars, so fixture isolation does not reach it. Verify with a logging shim on
   PATH: nothing from an --apply path should reach the real binaries.
   Fixtures that age files need the GNU-then-BSD touch fallback (touch -d,
   else touch -t with date -v) — the suite must pass on macOS too.

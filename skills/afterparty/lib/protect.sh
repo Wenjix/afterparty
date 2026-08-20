@@ -31,7 +31,11 @@ pgid_has_protected() {
   members="$(printf '%s\n' "$snapshot" | awk -v pg="$1" '$1 == pg { $1 = ""; print }')" || return 2
   [ -n "$members" ] || return 2
   if command -v rg >/dev/null 2>&1; then
-    printf '%s\n' "$members" | rg -iq -- "$PROTECT_RE"
+    # --no-config: ripgrep prepends flags from RIPGREP_CONFIG_PATH to every
+    # invocation, and --fixed-strings or a small --regex-size-limit makes
+    # PROTECT_RE stop matching -- so a user's own ripgrep config could silently
+    # disable the protect list on a kill path. Verified: both defeat it.
+    printf '%s\n' "$members" | rg --no-config -iq -- "$PROTECT_RE"
   else
     printf '%s\n' "$members" | grep -Eiq -- "$PROTECT_RE"
   fi

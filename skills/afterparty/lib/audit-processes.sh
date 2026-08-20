@@ -13,6 +13,7 @@
 #   audit-processes.sh --kill browser       # kill automation Chrome (never MCP servers)
 #   audit-processes.sh --kill tests,dev     # multiple categories
 #   audit-processes.sh --kill dev --pgid 123,456  # only reviewed groups
+#   audit-processes.sh --kill dev --pgid 123 --expect 123:9f3ac1b2c3d4  # and only if unchanged
 #   audit-processes.sh --json               # JSON Lines report (no --kill)
 #
 # Exit codes: 0 ok · 1 unavailable/failed mutation · 2 usage error.
@@ -29,13 +30,11 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Private local record of confirmed mutation outcomes.
 . "$DIR/journal.sh"
 
-# Category patterns (extended regex, matched against the full command string).
-TESTS_RE='vitest|jest|mocha|jasmine|ava |pytest|pnpm test|npm test|yarn test|vitest run|pnpm exec vitest'
-# Alternatives never span a space with `.*`: an agent runtime carries its whole
-# prompt in argv (>20 KB), so an unbounded gap lets ordinary prose ("bundle" ...
-# "/dev") classify a live session as a dev server and offer it to --kill dev.
-DEV_RE='next dev|next start|nodemon|astro dev|remix vite|vite($| )|webpack[^ ]* serve|webpack-dev-server|turbo( (run|watch|--?[a-z][a-z0-9-]*))* dev|pnpm dev|pnpm start|npm run dev|npm run start|yarn dev|bun( (run|--?[a-z][a-z0-9-]*))* dev|deno task [a-z0-9:._-]*dev|ng serve|rails server|flask run|fastapi dev|uvicorn|python -m http.server'
-BROWSER_RE='(Google Chrome|Chromium|Chrome Helper|headless_shell).*(remote-debugging|ms-playwright|mcp-chrome|puppeteer)|playwright.*(chromium|firefox|webkit)'
+# Category patterns live in categories.sh so plan.sh matches on exactly the
+# same definitions this script kills by; duplicating them is how the two drift.
+. "$DIR/categories.sh"
+# Identity checked at the signal boundary when --expect is supplied.
+. "$DIR/fingerprint.sh"
 LOCALHOST_RE='^(node|bun|deno|python|uvicorn|ruby|rails|go|cargo|java|next|vite|webpack|cloudflared)[[:space:]]|:3000|:3001|:3002|:5173|:5174|:8000|:8080|:8787'
 
 SELF_PID=$$
@@ -60,10 +59,10 @@ if ! command -v lsof >/dev/null 2>&1; then
   LSOF_REASON="lsof is not installed"
 fi
 
-match_i()  { if [ "$HAVE_RG" -eq 1 ]; then rg -i -- "$1"; else grep -Ei -- "$1"; fi; }
-match_iv() { if [ "$HAVE_RG" -eq 1 ]; then rg -iv -- "$1"; else grep -Eiv -- "$1"; fi; }
-match_v()  { if [ "$HAVE_RG" -eq 1 ]; then rg -v -- "$1"; else grep -Ev -- "$1"; fi; }
-match_q()  { if [ "$HAVE_RG" -eq 1 ]; then rg -q -- "$1"; else grep -Eq -- "$1"; fi; }
+match_i()  { if [ "$HAVE_RG" -eq 1 ]; then rg --no-config -i -- "$1"; else grep -Ei -- "$1"; fi; }
+match_iv() { if [ "$HAVE_RG" -eq 1 ]; then rg --no-config -iv -- "$1"; else grep -Eiv -- "$1"; fi; }
+match_v()  { if [ "$HAVE_RG" -eq 1 ]; then rg --no-config -v -- "$1"; else grep -Ev -- "$1"; fi; }
+match_q()  { if [ "$HAVE_RG" -eq 1 ]; then rg --no-config -q -- "$1"; else grep -Eq -- "$1"; fi; }
 
 # Print matching processes for a category, excluding protected and self.
 list_matches() {
@@ -73,7 +72,7 @@ list_matches() {
     | match_i "$re" \
     | match_iv "$PROTECT_RE" \
     | match_v "audit-processes.sh" \
-    | match_v 'rg -i --|grep -Ei --' \
+    | match_v 'rg (--no-config )?-i --|grep -Ei --' \
     | awk -v self="$SELF_PGID" '$3 != self'
 }
 
@@ -164,8 +163,49 @@ pgid_exists() {
 
 # SIGTERM then SIGKILL a process group. Returns 0 only after the group is
 # confirmed absent, so receipts describe outcomes rather than signal attempts.
+# Expected fingerprint for a group under --expect, empty when unconstrained.
+expected_fp_for() {
+  local pg="$1" pair map
+  # A caller-supplied expectation wins; otherwise fall back to the fingerprint
+  # this run captured when it SELECTED the group. Discovery is heuristic and
+  # its snapshot ages the whole length of a run — 2s of drain per group — so
+  # the fingerprint is what turns a stale observation into proof that the thing
+  # about to be signalled is still the thing that was chosen.
+  for map in "$EXPECT_MAP" "$AUTO_FP_MAP"; do
+    [ -n "$map" ] || continue
+    OLD_IFS="$IFS"; IFS=','
+    for pair in $map; do
+      case "$pair" in "$pg":*) IFS="$OLD_IFS"; printf '%s' "${pair#*:}"; return 0 ;; esac
+    done
+    IFS="$OLD_IFS"
+  done
+  return 1
+}
+
+# True when the group is not what the caller approved. Checked immediately
+# before every signal: pgid alone is not identity, and a group that exits and
+# has its id reused between approval and SIGTERM would otherwise be killed on
+# an approval that was never given for it. Unconstrained groups always pass.
+identity_moved() {
+  local pg="$1" want have
+  want="$(expected_fp_for "$pg")" || return 1
+  have="$(fp_for_pgid "$pg" 2>/dev/null)" || return 0
+  [ "$have" != "$want" ]
+}
+
 kill_group() {
   local pg="$1" state_rc protection_rc
+  # kill -TERM -1 means every process this user owns; -0 means afterparty's own
+  # group. Every other pgid entry point validates this; the one that actually
+  # signals did not, and a pgid comes straight out of a ps column.
+  case "$pg" in
+    ''|*[!0-9]*) s_skip "  refusing a non-numeric process group id"; return 1 ;;
+  esac
+  if [ "$pg" -le 1 ]; then
+    s_skip "  refusing process group $pg — 0 and 1 are never valid kill targets"
+    journal_action process_group.stop "pgid:$pg" failed "refused reserved process group"
+    return 1
+  fi
   # Re-evaluate the live group immediately before each signal. The discovery
   # snapshot may be stale, and a protected sibling can join while SIGTERM is
   # draining the group.
@@ -178,6 +218,11 @@ kill_group() {
       s_skip "  could not inspect pgid $pg for protected members — skipped"
       return 1
     fi
+  fi
+  if identity_moved "$pg"; then
+    s_skip "  pgid $pg: identity changed since approval — not signalled"
+    journal_action process_group.stop "pgid:$pg" failed "identity changed before SIGTERM"
+    return 5
   fi
   if kill -TERM -"$pg" 2>/dev/null; then
     s_kill "  SIGTERM -> pgid $pg"
@@ -196,6 +241,11 @@ kill_group() {
         journal_action process_group.stop "pgid:$pg" failed "protection unavailable before SIGKILL"
         return 1
       fi
+    fi
+    if identity_moved "$pg"; then
+      s_skip "  pgid $pg: identity changed before SIGKILL — not signalled"
+      journal_action process_group.stop "pgid:$pg" failed "identity changed before SIGKILL"
+      return 5
     fi
     if kill -KILL -"$pg" 2>/dev/null; then
       s_kill "  SIGKILL -> pgid $pg (straggler)"
@@ -279,7 +329,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --kill) KILL_CATS="${2:-}"; shift 2 ;;
     --keep|--keep-pgid) KEEP="${2:-}"; shift 2 ;;
-    --pgid|--only-pgid) PGID_FILTER="${2:-}"; shift 2 ;;
+    --pgid|--only-pgid) PGID_FILTER="${2:-}"; PGID_SUPPLIED=1; shift 2 ;;
+    --expect) EXPECT_MAP="${2:-}"; shift 2 ;;
     --json) JSON=1; shift ;;
     --strict) STRICT=1; shift ;;
     -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
@@ -287,6 +338,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Supplied-but-empty is not the same as absent. Every guard below used to hang
+# off the VALUE being non-empty, so `--pgid ''` skipped the syntax check, the
+# 0/1 refusal, the requires--kill check AND the narrowing itself — turning the
+# flag whose entire job is to restrict a kill into one that widens it to the
+# whole category.
+if [ "${PGID_SUPPLIED:-0}" -eq 1 ] && [ -z "$PGID_FILTER" ]; then
+  echo "--pgid was given an empty value; refusing to widen the kill" >&2
+  exit 2
+fi
 if [ -n "$PGID_FILTER" ]; then
   case "$PGID_FILTER" in
     ,*|*,|*,,*|*[!0-9,]*) echo "--pgid wants comma-separated positive process-group IDs" >&2; exit 2 ;;
@@ -363,6 +423,7 @@ print_procs_receipt() {
   segs="$(s_segments \
     "$([ "$N_KILLED" -gt 0 ] && echo "$G_OK $N_KILLED killed")" \
     "$([ "$N_PROT" -gt 0 ] && echo "$G_SKIP $N_PROT protected")" \
+    "$([ "$N_IDENT" -gt 0 ] && echo "$G_SKIP $N_IDENT identity changed")" \
     "$([ "$N_FAILED" -gt 0 ] && echo "$G_SKIP $N_FAILED failed")")"
   if [ -n "$segs" ]; then s_card_line "   $segs"; fi
   if [ "$N_KILLED" -gt 0 ]; then
@@ -405,7 +466,10 @@ if [ "$PS_STATUS" != "ok" ]; then
   exit 1
 fi
 
-N_KILLED=0 N_PROT=0 N_FAILED=0
+N_KILLED=0 N_PROT=0 N_FAILED=0 N_IDENT=0
+PGID_SUPPLIED="${PGID_SUPPLIED:-0}"
+AUTO_FP_MAP=""
+EXPECT_MAP="${EXPECT_MAP:-}"
 IFS=','
 for cat in $KILL_CATS; do
   re=$(category_re "$cat")
@@ -423,6 +487,18 @@ for cat in $KILL_CATS; do
     pgs="${filtered_pgs%$'\n'}"
   fi
   if [ -z "$pgs" ]; then s_dim "  nothing to kill"; continue; fi
+  # Capture identity for every group this category selected, right now, against
+  # the live process table — not against PS_SNAPSHOT, which was taken before
+  # argument parsing and ages ~2s per group as the run drains. kill_group
+  # re-checks this immediately before SIGTERM and again before SIGKILL, so a
+  # pgid freed and recycled mid-run is refused instead of signalled on an
+  # authority that was never granted for it.
+  while IFS= read -r pg; do
+    [ -n "$pg" ] || continue
+    if sel_fp="$(fp_for_pgid "$pg" 2>/dev/null)" && [ -n "$sel_fp" ]; then
+      AUTO_FP_MAP="${AUTO_FP_MAP:+$AUTO_FP_MAP,}${pg}:${sel_fp}"
+    fi
+  done <<< "$pgs"
   # pgids_for emits one pgid per line; the surrounding loop runs under
   # IFS=',' so word-splitting would glue them into one token — read by line.
   actionable=0
@@ -445,6 +521,13 @@ for cat in $KILL_CATS; do
       kill_rc=$?
       case "$kill_rc" in
         3) N_PROT=$((N_PROT + 1)) ;;
+        # Identity drift is its own refusal: the group was not protected, it
+        # was simply no longer the group that was approved. Counting it as
+        # protected would misreport why nothing was killed.
+        5)
+          N_IDENT=$((N_IDENT + 1))
+          N_FAILED=$((N_FAILED + 1))
+          ;;
         4)
           N_PROT=$((N_PROT + 1))
           N_FAILED=$((N_FAILED + 1))

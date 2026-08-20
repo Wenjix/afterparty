@@ -125,6 +125,13 @@ fi
 
 # ---------- H5: unavailable process scans are explicit in human + JSON output ----------
 mkdir -p "$T/cap-shim"
+# pnpm resolves its store from the OS passwd entry, NOT $HOME or XDG vars, so
+# the fixture isolation every other binary here relies on does not apply to it.
+# Without this shim `bash tests/run.sh` runs `pnpm store prune` against the
+# developer's real shared store. Third HOME-immune surface after pgrep and
+# launchctl.
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/cap-shim/pnpm"
+chmod +x "$T/cap-shim/pnpm"
 cat > "$T/cap-shim/ps" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
@@ -438,7 +445,13 @@ cat > "$T/devclean-rm-shim/pgrep" <<'SH'
 #!/usr/bin/env bash
 exit 1
 SH
-chmod +x "$T/devclean-rm-shim/rm" "$T/devclean-rm-shim/pgrep"
+# pnpm resolves its store from the OS passwd entry, not $HOME — see the note at
+# the cap-shim above. Without this, H17 runs a real `pnpm store prune`, and
+# because clean_pnpm_store adds freed bytes to DISK_TOTAL_KB, any nonzero real
+# prune shifts the total and makes H17's NEGATIVE assertion pass even if the
+# gradle-accounting bug it exists to catch has regressed.
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/devclean-rm-shim/pnpm"
+chmod +x "$T/devclean-rm-shim/rm" "$T/devclean-rm-shim/pgrep" "$T/devclean-rm-shim/pnpm"
 PATH="$T/devclean-rm-shim:$PATH" HOME="$T/devclean-home" XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never \
   bash "$REPO/bin/afterparty" devclean --disk --apply --no-repo-artifacts \
   --documents-root "$T/devclean-home/Documents" >"$T/devclean-disk.out" 2>"$T/devclean-disk.err"
@@ -457,6 +470,8 @@ fi
 
 # ---------- H18: PID cleanup reports only confirmed process exit ----------
 mkdir -p "$T/devclean-proc-shim" "$T/devclean-proc-home"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/devclean-proc-shim/pnpm"
+chmod +x "$T/devclean-proc-shim/pnpm"
 cat > "$T/devclean-proc-shim/pgrep" <<'SH'
 #!/usr/bin/env bash
 echo 12345
@@ -669,24 +684,38 @@ else
   pass "H24: optimize mode reports only verified configuration changes"
 fi
 
-# ---------- H25: git cleanup failures propagate to receipts and status ----------
+# ---------- H25: a report-only git --clean writes no receipt ----------
+# --clean used to apply the safe subset, and this pinned that a FAILED removal
+# propagated to exit 1, the summary and the journal. Removal is now refused
+# outright (moving behind plan/apply as a typed worktree target), so the
+# invariant worth pinning is the receipt rule from the other direction: a run
+# that did nothing must claim nothing. A false success row here would be worse
+# than the missing one it replaces.
 mkdir -p "$T/git-fail"
 git -C "$T/git-fail" init -q
 printf 'conflict residue\n' > "$T/git-fail/merge.orig"
-PATH="$T/rm-shim:$PATH" HOME="$T/home" XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never \
+JOURNAL_BEFORE=0
+[ -f "$T/cache/agent-processes/actions.jsonl" ] \
+  && JOURNAL_BEFORE="$(grep -c 'git\.' "$T/cache/agent-processes/actions.jsonl" 2>/dev/null || echo 0)"
+HOME="$T/home" XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never \
   bash "$REPO/bin/afterparty" git --clean --root "$T/git-fail" \
   >"$T/git-fail.out" 2>"$T/git-fail.err"
 GIT_FAIL_RC=$?
-if [ "$GIT_FAIL_RC" -ne 1 ]; then
-  fail "H25: failed git cleanup exit=$GIT_FAIL_RC, want 1"
-elif ! grep -q '1 failed' "$T/git-fail.out"; then
-  fail "H25: failed git cleanup was omitted from the summary"
-elif ! grep -q '"operation":"git.litter.delete".*"status":"failed"' "$T/cache/agent-processes/actions.jsonl"; then
-  fail "H25: failed git cleanup was omitted from the action journal"
+JOURNAL_AFTER=0
+[ -f "$T/cache/agent-processes/actions.jsonl" ] \
+  && JOURNAL_AFTER="$(grep -c 'git\.' "$T/cache/agent-processes/actions.jsonl" 2>/dev/null || echo 0)"
+if [ "$GIT_FAIL_RC" -ne 2 ]; then
+  fail "H25: report-only git --clean exit=$GIT_FAIL_RC, want 2"
+elif ! grep -q 'report-only' "$T/git-fail.err"; then
+  fail "H25: refusal did not explain itself"
+elif [ "$JOURNAL_AFTER" -ne "$JOURNAL_BEFORE" ]; then
+  fail "H25: a refused cleanup wrote $((JOURNAL_AFTER - JOURNAL_BEFORE)) journal row(s) — receipts must describe work that happened"
 elif [ ! -f "$T/git-fail/merge.orig" ]; then
-  fail "H25: failed git cleanup fixture unexpectedly disappeared"
+  fail "H25: the litter fixture was deleted by a report-only run"
+elif ! grep -q 'merge.orig' "$T/git-fail.out"; then
+  fail "H25: the litter was not even reported — that is a no-op, not report-only"
 else
-  pass "H25: git cleanup propagates partial failures truthfully"
+  pass "H25: a report-only git --clean reports, removes nothing, and journals nothing"
 fi
 
 # ---------- H26: standalone package metadata has one synchronized version ----------
@@ -775,6 +804,8 @@ fi
 
 # ---------- H29: devclean revalidates PID identity immediately before signaling ----------
 mkdir -p "$T/devclean-identity-shim" "$T/devclean-identity-home"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/devclean-identity-shim/pnpm"
+chmod +x "$T/devclean-identity-shim/pnpm"
 cat > "$T/devclean-identity-shim/pgrep" <<'SH'
 #!/usr/bin/env bash
 echo 12345
@@ -811,6 +842,8 @@ fi
 
 # ---------- H30: matching recycled PIDs are rejected by stable identity ----------
 mkdir -p "$T/devclean-recycle-shim" "$T/devclean-recycle-home"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/devclean-recycle-shim/pnpm"
+chmod +x "$T/devclean-recycle-shim/pnpm"
 cat > "$T/devclean-recycle-shim/pgrep" <<'SH'
 #!/usr/bin/env bash
 echo 12345
@@ -988,6 +1021,8 @@ fi
 
 # ---------- H35: PID exit confirmation fails closed when scanning fails ----------
 mkdir -p "$T/devclean-confirm-shim" "$T/devclean-confirm-home"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/devclean-confirm-shim/pnpm"
+chmod +x "$T/devclean-confirm-shim/pnpm"
 cat > "$T/devclean-confirm-shim/pgrep" <<'SH'
 #!/usr/bin/env bash
 echo 12346

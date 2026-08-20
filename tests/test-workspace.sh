@@ -63,16 +63,36 @@ printf '%s\n' "$OUT" | grep -q "^[0-9][0-9]*${TAB}/Users/x/alpha$" \
 [ "$FAILS" -eq "$_b" ] && pass "W3: workspaces indexed by transcript-recorded cwd"
 
 # ---------- W4: newest transcript in a workspace decides last-touched ----------
-printf '{"cwd":"/Users/x/alpha"}\n' > "$R/-Users-x-alpha/older.jsonl"
-touch -t 202001010000 "$R/-Users-x-alpha/older.jsonl" 2>/dev/null \
-  || touch -t "$(date -v -300d +%Y%m%d%H%M)" "$R/-Users-x-alpha/older.jsonl"
-TS="$(AFTERPARTY_TRANSCRIPT_ROOT="$R" ws_index | awk -F'\t' '$2=="/Users/x/alpha"{print $1}')"
-NOW="$(date +%s)"
-if [ -n "$TS" ] && [ "$((NOW - TS))" -lt 3600 ]; then
-  pass "W4: newest transcript decides last-touched"
-else
-  fail "W4: index used a stale transcript instead of the newest"
-fi
+# The fixture is deliberately ADVERSARIAL. An earlier version wrote a fresh
+# a.jsonl and a backdated older.jsonl, where the correct branch and a
+# first-match-wins branch happened to select the SAME file, so the comparison
+# ran but could not discriminate. Here the OLDEST file sorts first by name and
+# the NEWEST sorts last, so any selection that is not genuinely
+# recency-based picks the wrong one.
+#
+# The assertion is exact epoch EQUALITY, not "recent enough": a freshness range
+# silently regains the same blind spot the moment the decoy is less than an
+# hour old. Real ~/.claude/projects dirs hold many UUID-named transcripts whose
+# glob order is unrelated to mtime, which is the case this protects.
+backdate() {  # backdate <days> <file>
+  touch -d "$1 days ago" "$2" 2>/dev/null \
+    || touch -t "$(date -v -"$1"d +%Y%m%d%H%M)" "$2" \
+    || fail "backdate: neither GNU nor BSD touch worked"
+}
+mkdir -p "$R/-Users-x-gamma"
+for f in aaa-oldest mmm-middle zzz-newest; do
+  printf '{"cwd":"/Users/x/gamma"}\n' > "$R/-Users-x-gamma/$f.jsonl"
+done
+backdate 300 "$R/-Users-x-gamma/aaa-oldest.jsonl"
+backdate 100 "$R/-Users-x-gamma/mmm-middle.jsonl"
+# zzz-newest keeps its creation mtime — the newest, and last in glob order.
+_b=$FAILS
+WANT="$(ws_mtime "$R/-Users-x-gamma/zzz-newest.jsonl")"
+GOT="$(AFTERPARTY_TRANSCRIPT_ROOT="$R" ws_index | awk -F'\t' '$2=="/Users/x/gamma"{print $1}')"
+[ -n "$GOT" ] || fail "W4: gamma missing from the index entirely"
+[ "$GOT" = "$WANT" ] \
+  || fail "W4: last-touched is $GOT, want $WANT (the newest transcript's mtime)"
+[ "$FAILS" -eq "$_b" ] && pass "W4: newest transcript decides last-touched"
 
 # ---------- W5: no transcript root degrades quietly ----------
 if AFTERPARTY_TRANSCRIPT_ROOT="$T/absent" ws_index >/dev/null 2>&1; then
