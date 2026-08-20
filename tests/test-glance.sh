@@ -210,5 +210,27 @@ if [ -n "${PY_BIN:-$(command -v python3)}" ]; then
 fi
 [ "$FAILS" -eq "$_b" ] && pass "G10: --json exposes capability so consumers can tell unknown from empty"
 
+# ---------- G11: the empty-state branch is reachable ----------
+# TOTAL_WS came from `grep -c ... || echo 0`, and grep -c PRINTS 0 while
+# EXITING 1 on no match, so the fallback appended a second zero and the value
+# became the two-line string "0\n0". Every integer comparison on it errored,
+# making the whole empty-state branch dead code — invisible until a machine
+# with no lsof produced an empty row set. Asserting stderr is clean is what
+# catches it: the branch "worked" only because the error went unread.
+_b=$FAILS
+EMPTY="$T/emptyworld"; mkdir -p "$EMPTY"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$EMPTY/lsof"; chmod +x "$EMPTY/lsof"
+cp "$SHIM/ps" "$EMPTY/ps"
+ERR11="$(PATH="$EMPTY:/usr/bin:/bin" AFTERPARTY_TRANSCRIPT_ROOT="$T/none" AFTERPARTY_STYLE=never \
+  bash "$LIB/glance.sh" 2>&1 >/dev/null)"
+printf '%s\n' "$ERR11" | grep -q 'integer expression expected' \
+  && fail "G11: integer comparison errored — TOTAL_WS is not a clean number: $ERR11"
+# s_warn writes to stderr, so the notice is asserted on the combined stream.
+OUT11="$(PATH="$EMPTY:/usr/bin:/bin" AFTERPARTY_TRANSCRIPT_ROOT="$T/none" AFTERPARTY_STYLE=never \
+  bash "$LIB/glance.sh" 2>&1)"
+printf '%s\n' "$OUT11" | grep -qi 'incomplete' \
+  || fail "G11: empty world produced no empty-state notice at all: $OUT11"
+[ "$FAILS" -eq "$_b" ] && pass "G11: the empty-state branch is reachable and errors nothing"
+
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))

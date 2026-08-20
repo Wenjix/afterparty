@@ -119,7 +119,13 @@ ps -Ao pid,pgid,%cpu,command 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {
   }
 ' | sort -rn > "$T/rows"
 
-TOTAL_WS="$(grep -c . "$T/rows" 2>/dev/null || echo 0)"
+# wc, not `grep -c ... || echo 0`: grep -c PRINTS 0 and EXITS 1 when nothing
+# matches, so the fallback appended a second zero and TOTAL_WS became the
+# two-line string "0\n0". Every [ -eq ] on it then errored, which made the
+# entire empty-state branch unreachable — invisible until a machine with no
+# lsof produced an empty row set.
+TOTAL_WS="$(wc -l < "$T/rows" | tr -d '[:space:]')"
+TOTAL_WS="${TOTAL_WS:-0}"
 TOTAL_PROCS="$(awk -F'\t' '{n += $3} END {print n + 0}' "$T/rows")"
 IDLE_SECS=$((WS_IDLE_HOURS * 3600))
 IDLE_WS="$(awk -F'\t' -v now="$NOW" -v cut="$IDLE_SECS" '(now - $1) > cut {n++} END {print n + 0}' "$T/rows")"
