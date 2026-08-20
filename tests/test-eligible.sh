@@ -56,5 +56,34 @@ v="$(AFTERPARTY_BUSY_CPU=99 elig_verdict "$IDLE" 95.0 "$NOW")"
 [ "$v" = "eligible" ] || fail "E3: raising the busy line should make cpu 95 eligible, got '$v'"
 [ "$FAILS" -eq "$_b" ] && pass "E3: idle and busy thresholds are env-tunable"
 
+# ---------- E4: a malformed threshold falls back, it never zeroes ----------
+# The value reaches $(( )) directly. "0.5" errors, "08" misparses as octal, and
+# a zero idle window makes EVERY live workspace instantly eligible for cleanup
+# — a safety threshold silently disabled by a typo. 5h is chosen so the default
+# (4h) and a raised value (8h) disagree, giving the assertion discriminating
+# power that a 9h fixture would not have.
+FIVE=$((NOW - 5 * H))
+_b=$FAILS
+[ "$(AFTERPARTY_IDLE_HOURS=4 elig_verdict "$FIVE" 0.0 "$NOW" 2>/dev/null)" = "eligible" ] \
+  || fail "E4: control — 5h idle under a 4h threshold should be eligible"
+[ "$(AFTERPARTY_IDLE_HOURS=8 elig_verdict "$FIVE" 0.0 "$NOW" 2>/dev/null)" = "in-use" ] \
+  || fail "E4: control — 5h idle under an 8h threshold should be in-use"
+# "08" is not malformed — it is 8 hours written with a leading zero, and base-10
+# forcing must read it that way rather than erroring on invalid octal.
+[ "$(AFTERPARTY_IDLE_HOURS=08 elig_verdict "$FIVE" 0.0 "$NOW" 2>/dev/null)" = "in-use" ] \
+  || fail "E4: '08' should read as 8 hours, not error or fall back"
+[ "$(AFTERPARTY_IDLE_HOURS=008 elig_verdict "$FIVE" 0.0 "$NOW" 2>/dev/null)" = "in-use" ] \
+  || fail "E4: '008' should read as 8 hours (octal would error here)"
+for bad in 0.5 abc -1 ''; do
+  got="$(AFTERPARTY_IDLE_HOURS="$bad" elig_verdict "$FIVE" 0.0 "$NOW" 2>/dev/null)"
+  [ "$got" = "eligible" ] \
+    || fail "E4: threshold '$bad' gave '$got'; should fall back to the 4h default"
+  # and it must not have zeroed the window: a 1-minute-idle workspace stays in use
+  got2="$(AFTERPARTY_IDLE_HOURS="$bad" elig_verdict "$((NOW - 60))" 0.0 "$NOW" 2>/dev/null)"
+  [ "$got2" = "in-use" ] \
+    || fail "E4: threshold '$bad' zeroed the idle window — a 1-minute-old workspace read as '$got2'"
+done
+[ "$FAILS" -eq "$_b" ] && pass "E4: a malformed idle threshold falls back to the default, never to zero"
+
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))

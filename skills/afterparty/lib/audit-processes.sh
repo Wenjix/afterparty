@@ -164,6 +164,16 @@ pgid_exists() {
 # SIGTERM then SIGKILL a process group. Returns 0 only after the group is
 # confirmed absent, so receipts describe outcomes rather than signal attempts.
 # Expected fingerprint for a group under --expect, empty when unconstrained.
+# A flag that takes a value must be given one. Returns the value, or fails so
+# the caller can exit rather than continue with an unset positional.
+need_value() {
+  if [ "$#" -lt 2 ] || [ -z "${2-}" ]; then
+    echo "$1 requires a value" >&2
+    return 1
+  fi
+  printf '%s' "$2"
+}
+
 expected_fp_for() {
   local pg="$1" pair map
   # A caller-supplied expectation wins; otherwise fall back to the fingerprint
@@ -327,10 +337,13 @@ json_capability() {
 KILL_CATS="" KEEP="" PGID_FILTER="" JSON=0 STRICT=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --kill) KILL_CATS="${2:-}"; shift 2 ;;
-    --keep|--keep-pgid) KEEP="${2:-}"; shift 2 ;;
-    --pgid|--only-pgid) PGID_FILTER="${2:-}"; PGID_SUPPLIED=1; shift 2 ;;
-    --expect) EXPECT_MAP="${2:-}"; shift 2 ;;
+    # need_value, not ${2:-}: a value-taking flag in final position left $2
+    # unset, so `shift 2` failed, the loop never advanced and the process spun
+    # at 100% CPU forever. Sibling scripts already use ${2:?}; these did not.
+    --kill) KILL_CATS="$(need_value "$1" "${2-}")" || exit 2; shift 2 ;;
+    --keep|--keep-pgid) KEEP="$(need_value "$1" "${2-}")" || exit 2; shift 2 ;;
+    --pgid|--only-pgid) PGID_FILTER="$(need_value "$1" "${2-}")" || exit 2; PGID_SUPPLIED=1; shift 2 ;;
+    --expect) EXPECT_MAP="$(need_value "$1" "${2-}")" || exit 2; shift 2 ;;
     --json) JSON=1; shift ;;
     --strict) STRICT=1; shift ;;
     -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
