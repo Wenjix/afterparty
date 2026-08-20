@@ -25,6 +25,7 @@ case "$*" in
     printf '9004 Tue Aug 18 09:00:00 2026 node server.js\n'
     printf '9005 Tue Aug 18 09:00:00 2026 /usr/libexec/systemdaemon\n'
     printf '9006 Tue Aug 18 09:00:00 2026 npm run dev\n'
+    printf '9010 Tue Aug 18 09:00:00 2026 node server.js\n'
     ;;
   *pid,pgid,%cpu,command*)
     printf '9001 9001  0.0 npm run dev\n'
@@ -33,6 +34,7 @@ case "$*" in
     printf '9004 9004  0.0 node server.js\n'
     printf '9005 9005  0.0 /usr/libexec/systemdaemon\n'
     printf '9006 9006  0.0 npm run dev\n'
+    printf '9010 9010  0.0 node server.js\n'
     printf '9007 9006  0.0 node worker.js\n'
     ;;
   *) exit 1 ;;
@@ -48,6 +50,7 @@ case "$*" in
     printf 'p9004\nfcwd\nn/w/nosig\n'
     printf 'p9005\nfcwd\nn/\n'
     printf 'p9006\nfcwd\nn/w/gone\n'
+    printf 'p9010\nfcwd\nn/w/gone\n'
     printf 'p9007\nfcwd\nn/w/here\n'
     ;;
   *) exit 1 ;;
@@ -125,6 +128,25 @@ printf '%s\n' "$OUT" | grep -qi 'killed\|removed\|reclaimed' && fail "P5: plan c
 _b=$FAILS
 printf '%s\n' "$OUT" | grep -q '9005' && fail "P6: a daemon rooted at / reached the plan"
 [ "$FAILS" -eq "$_b" ] && pass "P6: groups outside any workspace are excluded"
+
+# ---------- P7b: an ELIGIBLE group with no kill discipline renders no-rule ----------
+# pgid 9010 runs `node server.js` (no category) inside /w/gone, whose transcript
+# is stale — so it passes the two-signal gate and the CATEGORY branch is the
+# only thing that can withhold it. The old P7 used 9004, which lives in a
+# workspace with no transcript at all: the staleness rule withheld it first as
+# `unknown`, so the category guard was never entered and the no-rule branch had
+# zero coverage.
+_b=$FAILS
+P7B_LINE="$(printf '%s\n' "$OUT" | grep '9010' | head -1)"
+[ -n "$P7B_LINE" ] || fail "P7b: eligible category-less group missing from the plan"
+case "$P7B_LINE" in
+  '- [x]'*) fail "P7b: offered a group apply cannot execute: $P7B_LINE" ;;
+esac
+printf '%s\n' "$P7B_LINE" | grep -q 'no-rule' \
+  || fail "P7b: verdict token is not no-rule (got: $P7B_LINE)"
+printf '%s\n' "$OUT" | grep -A1 '9010' | grep -q 'no kill discipline' \
+  || fail "P7b: the no-rule reason was not stated"
+[ "$FAILS" -eq "$_b" ] && pass "P7b: an eligible group with no category renders no-rule, with its reason"
 
 # ---------- P7: only groups apply can actually kill are offered ----------
 # --pgid narrows WITHIN a category, so approving a group that matches no

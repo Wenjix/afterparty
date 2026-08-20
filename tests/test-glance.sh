@@ -72,13 +72,22 @@ printf '%s\n' "$OUT" | grep -q 'quiet'  && fail "G1: /w/quiet has no processes a
 [ "$FAILS" -eq "$_b" ] && pass "G1: only workspaces holding processes are listed"
 
 # ---------- G2: a subdirectory cwd attributes to its workspace ----------
-# pid 4003 sits in /w/forgot/packages/web; it belongs to /w/forgot, and the
-# workspace therefore holds 2 processes, not 1.
-if printf '%s\n' "$OUT" | grep -qE 'forgot[^0-9]*2'; then
-  pass "G2: nested cwd attributed to the enclosing workspace"
-else
-  fail "G2: /w/forgot should hold 2 procs: $(printf '%s\n' "$OUT" | grep forgot)"
-fi
+# pid 4003 sits in /w/forgot/packages/web; it belongs to /w/forgot, so the
+# workspace holds 2 processes, not 1.
+#
+# Assert the PROCS COLUMN, never a substring: `grep -qE 'forgot[^0-9]*2'` used
+# to stop at the first digit after the name, which is the 2 of "2421d 17h" in
+# LAST TOUCHED, so the process count was never inspected at all. The row is
+# "<name> <age...> <procs> <cpu> <ports>" and the fixture gives this workspace
+# exactly one port, so PROCS is $(NF-2) however many fields the age took.
+_b=$FAILS
+G2_ROW="$(printf '%s\n' "$OUT" | grep 'forgot' | head -1)"
+G2_PROCS="$(printf '%s\n' "$G2_ROW" | awk '{print $(NF-2)}')"
+[ "$G2_PROCS" = "2" ] || fail "G2: PROCS column is '$G2_PROCS', want 2 (row: $G2_ROW)"
+# 3001 is listened on by the NESTED pid only, so it can only appear here via
+# the longest-prefix attribution under test.
+printf '%s\n' "$G2_ROW" | grep -q '3001' || fail "G2: nested pid's port missing from the row"
+[ "$FAILS" -eq "$_b" ] && pass "G2: nested cwd attributed to the enclosing workspace"
 
 # ---------- G3: sorted by staleness, forgotten last ----------
 FRESH=$(printf '%s\n' "$OUT" | grep -n 'fresh'  | head -1 | cut -d: -f1)
@@ -90,13 +99,23 @@ else
 fi
 
 # ---------- G4: read-only by construction ----------
+# Each flag is passed ALONE. The old form passed a trailing "dev", which would
+# itself have tripped the unknown-option arm, so the assertion would have kept
+# passing the moment someone added a real --kill arm -- the exact regression it
+# exists to catch. Asserting the message NAMES the flag proves the rejection
+# was entered for the flag rather than for a stray positional.
 _b=$FAILS
 for flag in --kill --apply --clean; do
-  if PATH="$SHIM:$PATH" bash "$LIB/glance.sh" "$flag" dev >/dev/null 2>&1; then
-    fail "G4: glance accepted $flag"
-  fi
+  err="$(PATH="$SHIM:$PATH" bash "$LIB/glance.sh" "$flag" 2>&1 >/dev/null)"
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "G4: glance accepted $flag"
+  printf '%s\n' "$err" | grep -q -- "$flag" \
+    || fail "G4: rejection of $flag did not name it (said: $err)"
 done
-[ "$FAILS" -eq "$_b" ] && pass "G4: glance refuses every mutation flag"
+# Structural backstop: no mutation verb may appear as an option arm at all.
+grep -Eq '^[[:space:]]*--(kill|apply|clean)\)' "$LIB/glance.sh" \
+  && fail "G4: glance.sh has grown a mutation option arm"
+[ "$FAILS" -eq "$_b" ] && pass "G4: glance refuses every mutation flag, by name"
 
 # ---------- G5: piped output plain and stable ----------
 _b=$FAILS

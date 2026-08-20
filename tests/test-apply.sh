@@ -97,7 +97,13 @@ _b=$FAILS
 : > "$T/delegated"; mkplan "0000deadbeef"
 OUT="$(run_apply)"
 [ -s "$T/delegated" ] && fail "A2: acted on an item whose fingerprint moved"
-printf '%s\n' "$OUT" | grep -qi 'refus\|moved\|drift' || fail "A2: drift was not reported: $OUT"
+# Anchored on the pgid-bearing per-item line. The receipt summary hardcodes the
+# words "refused", "drift" and "held" in its format string regardless of the
+# counters, so a bare word match passed on every exit path and the per-item
+# explanations were entirely uncovered. At 20 workspaces the operator needs to
+# know WHICH group drifted, not that some number did.
+printf '%s\n' "$OUT" | grep -q 'pgid 7001 .*fingerprint moved' \
+  || fail "A2: no per-item drift line naming pgid 7001: $OUT"
 [ "$FAILS" -eq "$_b" ] && pass "A2: drifted item refused and reported"
 
 # ---------- A3: a vanished group is refused, never re-targeted ----------
@@ -106,7 +112,9 @@ _b=$FAILS
 printf '#!/usr/bin/env bash\nexit 1\n' > "$SHIM/ps"; chmod +x "$SHIM/ps"
 OUT="$(run_apply)"
 [ -s "$T/delegated" ] && fail "A3: acted on a group that no longer exists"
-[ "$FAILS" -eq "$_b" ] && pass "A3: vanished group refused"
+printf '%s\n' "$OUT" | grep -q 'pgid 7001 .*gone' \
+  || fail "A3: no per-item line explaining the group is gone: $OUT"
+[ "$FAILS" -eq "$_b" ] && pass "A3: vanished group refused, and said so per item"
 cat > "$SHIM/ps" <<'PS'
 #!/usr/bin/env bash
 case "$*" in
@@ -184,7 +192,8 @@ FPNOW="$(PATH="$SHIM:$PATH" fp_for_pgid 7001)"
 mkplan "$FPNOW"
 OUT="$(PATH="$SHIM:$PATH" AFTERPARTY_TRANSCRIPT_ROOT="$R2" AFTERPARTY_STYLE=never bash "$LIB/apply.sh" "$T/plan.md" 2>&1)"
 [ -s "$T/delegated" ] && fail "A8: killed a group whose workspace became active again"
-printf '%s\n' "$OUT" | grep -qi 'in-use\|no longer eligible\|held' || fail "A8: no reason given for holding: $OUT"
+printf '%s\n' "$OUT" | grep -q 'pgid 7001 .*no longer eligible' \
+  || fail "A8: no per-item line naming pgid 7001 as no longer eligible: $OUT"
 [ "$FAILS" -eq "$_b" ] && pass "A8: eligibility re-checked at apply time, not just fingerprint"
 
 # ---------- A9: a failed delegation must not exit 0 ----------

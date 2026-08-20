@@ -71,6 +71,13 @@ printf '{\n  "enable-crash-reporter": true\n}\n' > "$H/.vscode/argv.json"
 # they need their own shimmed cases.)
 SHIM="$T/opt-shim"
 mkdir -p "$SHIM"
+# pnpm resolves its store from the OS passwd entry, NOT $HOME or XDG vars, so
+# the fixture isolation every other binary here relies on does not apply to it.
+# Without this shim `bash tests/run.sh` runs `pnpm store prune` against the
+# developer's real shared store. Third HOME-immune surface after pgrep and
+# launchctl.
+printf '#!/usr/bin/env bash\nexit 1\n' > "$SHIM/pnpm"
+chmod +x "$SHIM/pnpm"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$SHIM/launchctl"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$SHIM/pgrep"
 chmod +x "$SHIM/launchctl" "$SHIM/pgrep"

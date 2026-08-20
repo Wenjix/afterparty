@@ -107,13 +107,25 @@ mechanics when you touch them.
   modes, so its dry-run cards may carry ⊘. tests/test-proc-tables.sh fakes ps/pgrep/lsof on PATH for
   deterministic tables everywhere — dry-run only, never --kill/--apply
   under the shim.
+- A test that asserts an effect is ABSENT proves nothing unless it also proves
+  the code path was ENTERED. Assert a positive signal alongside the absence:
+  the rejection message must name the flag, the withheld item must carry its
+  verdict token, the refusal line must name the pgid. Five assertions here were
+  found unable to fail — a trailing positional satisfied a rejection check, a
+  substring matched the wrong column, a fixture's decoy sorted the same way as
+  the correct answer, an item was withheld by an earlier rule than the one under
+  test, and a receipt hardcoded the words the assertion searched for. Verify a
+  new guard by mutating the production code in a scratch copy and confirming the
+  test goes red.
 - Test isolation is by PATH shim, not by HOME: two devclean surfaces address
   the real machine whatever HOME says. run_safe_orphans runs on EVERY
   devclean invocation and signals what it matches under --apply (and
   ORPHAN_PATTERNS includes claude and codex), and the background-agent step
   drives launchctl gui/<uid>/<label>. Any test that reaches --apply MUST
-  shim pgrep and launchctl or it will kill the developer's own agents and
-  disable their real ChatGPT/Figma agents. Verify with a logging shim on
+  shim pgrep, launchctl AND pnpm, or it will kill the developer's own agents,
+  disable their real ChatGPT/Figma agents, and prune their shared pnpm store.
+  pnpm is the third HOME-immune surface: it resolves its store from the OS
+  passwd entry, not $HOME or XDG vars, so fixture isolation does not reach it. Verify with a logging shim on
   PATH: nothing from an --apply path should reach the real binaries.
   Fixtures that age files need the GNU-then-BSD touch fallback (touch -d,
   else touch -t with date -v) — the suite must pass on macOS too.
