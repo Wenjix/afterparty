@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Synthetic-repo test for audit-git.sh (dry-run, --clean, idempotency, edges).
+# Synthetic-repo test for audit-git.sh (dry run, report-only --clean, edges).
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -94,26 +94,34 @@ print("json ok:", len(rows), "rows")
 pass "json dry run parses + escaping round-trips"
 
 # ---------- clean ----------
+# ---------- --clean is REPORT-ONLY (0.9.0) ----------
+# It used to apply the safe subset here. It discovered targets and destroyed
+# them in one step from heuristics that could not carry the weight -- a
+# worktree's staleness came from a top-directory mtime that does not move when
+# files inside it change, so a worktree in active use read as idle forever.
+#
+# Removal is moving behind plan/apply as a typed worktree target with hard
+# vetoes. Until then this asserts the refusal. NOTE: coverage of the removal
+# logic itself is deliberately reduced in the meantime -- audit-git still
+# contains it, unreachable, for plan/apply to re-home with vetoes attached.
 OUT2="$(bash "$LIB/audit-git.sh" --clean 2>stderr2.txt)"; RC=$?
-[ "$RC" -eq 0 ] || fail "clean exit=$RC"
-[ ! -d ../wt-stale ]                                   || fail "wt-stale survived --clean"
-git worktree list | grep -q 'wt-gone'                  && fail "wt-gone not pruned"
-git rev-parse -q --verify claude/done >/dev/null 2>&1  && fail "claude/done survived --clean"
-git rev-parse -q --verify codex-wip  >/dev/null 2>&1   || fail "codex-wip was deleted (unmerged!)"
-[ ! -f a.orig ] && [ ! -f b.rej ] && [ ! -f sub/c.BACKUP.123.txt ] || fail "litter survived --clean"
-[ -f tracked.orig ]                                    || fail "tracked.orig was deleted"
-[ ! -f .git/index.lock ]                               || fail "aged index.lock survived --clean"
-[ "$(git stash list | wc -l | tr -d ' ')" = "1" ]      || fail "stash was dropped"
-git rev-parse -q --verify agent/stale >/dev/null 2>&1  && fail "agent/stale survived first clean (worktree removed same run)"
-git rev-parse -q --verify agent/gone  >/dev/null 2>&1  && fail "agent/gone survived first clean (worktree pruned same run)"
-pass "--clean applied safe subset only, converging in one pass"
+[ "$RC" -eq 2 ] || fail "--clean exit=$RC, want 2 (a refusal, not silent success)"
+grep -q 'report-only' stderr2.txt || fail "--clean did not say it is report-only"
+grep -q 'afterparty plan' stderr2.txt || fail "--clean did not point at the approval surface"
+# every candidate must SURVIVE...
+[ -d ../wt-stale ]                                    || fail "wt-stale was removed by a report-only run"
+git rev-parse -q --verify claude/done >/dev/null 2>&1 || fail "claude/done was deleted by a report-only run"
+[ -f a.orig ]                                         || fail "conflict litter was deleted by a report-only run"
+[ -f .git/index.lock ]                                || fail "index.lock was deleted by a report-only run"
+# ...and must still be REPORTED, or this is a no-op rather than report-only
+printf '%s\n' "$OUT2" | grep -q 'wt-stale'    || fail "wt-stale was not reported"
+printf '%s\n' "$OUT2" | grep -q 'claude/done' || fail "claude/done was not reported"
+pass "--clean reports every candidate and removes none"
 
-# ---------- repeat cleans are idempotent no-ops ----------
 bash "$LIB/audit-git.sh" --clean >/dev/null 2>&1; RC=$?
-[ "$RC" -eq 0 ] || fail "second clean exit=$RC"
-bash "$LIB/audit-git.sh" --clean >/dev/null 2>&1; RC=$?
-[ "$RC" -eq 0 ] || fail "third (idempotent) clean exit=$RC"
-pass "repeat --clean stays a no-op at exit 0"
+[ "$RC" -eq 2 ] || fail "second --clean exit=$RC, want a stable refusal"
+[ -d ../wt-stale ] || fail "a repeat --clean removed the worktree"
+pass "repeat --clean stays a stable refusal"
 
 # ---------- fresh lock is protected ----------
 touch .git/index.lock

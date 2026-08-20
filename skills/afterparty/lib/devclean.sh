@@ -719,6 +719,7 @@ run_optimize() {
 
 DISK_TOTAL_KB=0
 DISK_FOUND_KB=0
+N_WITHHELD=0
 
 size_kb() {
   du -sk "$1" 2>/dev/null | awk '{print int($1)}'
@@ -829,6 +830,25 @@ clean_dir() {
   fi
 }
 
+# The roaming project scan is REPORT-ONLY as of 0.9.0.
+#
+# clean_dir targets an exact, named cache path -- ~/.gradle/caches is a cache by
+# definition and stays live. clean_find is different in kind: it walks
+# $DOCUMENTS_ROOT looking for a NAME, and its whole filter set was "not a
+# symlink, parent holds a sentinel, >= 1 MB". No liveness check, no git-tracked
+# veto, no age gate, and no requirement that the target ever appeared in a dry
+# run. Verified: it deleted a 4 MB node_modules from an unrelated git repo that
+# the user never named.
+#
+# Reinstalling node_modules is not free -- native modules, private registries,
+# a lockfile that no longer resolves -- and doing it to a project someone is
+# mid-task in is worse. Removal moves behind plan/apply with typed artifact
+# targets and an exact generated-target allowlist.
+clean_find_withheld() {
+  [ "$DRY_RUN" -eq 0 ] || return 1
+  return 0
+}
+
 clean_find() {
   local label="$1" scan_dir="$2" dir_name="$3" parent_files=() found=0 total=0 deleted=0 freed=0 d parent_dir valid pf kb
   shift 3
@@ -856,7 +876,12 @@ clean_find() {
     [ "${kb:-0}" -ge 1024 ] || continue
     found=$((found + 1))
     total=$((total + kb))
-    if [ "$DRY_RUN" -eq 0 ]; then
+    if [ "$DRY_RUN" -eq 0 ] && clean_find_withheld; then
+      # Report the target, refuse to remove it. See the note above clean_find.
+      s_skip "  withheld $label: $d"
+      s_dim  "      roaming scans no longer delete; approve it via afterparty plan"
+      N_WITHHELD=$((N_WITHHELD + 1))
+    elif [ "$DRY_RUN" -eq 0 ]; then
       if rm -rf -- "$d" 2>/dev/null && [ ! -e "$d" ]; then
         deleted=$((deleted + 1))
         freed=$((freed + kb))

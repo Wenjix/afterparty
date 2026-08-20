@@ -5,7 +5,7 @@ license: ./LICENSE
 compatibility: Requires Bash 3.2+, Git, and standard Unix process tools. macOS/Linux terminals and WSL are supported; Git Bash provides Git/filesystem commands with degraded process audits.
 metadata:
   author: Wenjix
-  version: "0.8.0"
+  version: "0.9.0"
 ---
 
 # Afterparty

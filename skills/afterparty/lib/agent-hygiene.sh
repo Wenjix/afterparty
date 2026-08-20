@@ -117,7 +117,7 @@ print_finale_card() {
       s_card_line "     ${C_CYAN}afterparty audit --kill tests,dev,browser${C_RESET}"
     fi
     if [ "$gitf" -gt 0 ]; then
-      s_card_line "     ${C_CYAN}afterparty git --clean${C_RESET}"
+      s_card_line "     ${C_CYAN}afterparty plan${C_RESET}  (git --clean is report-only)"
     fi
   elif [ "$unavailable" -gt 0 ]; then
     s_card_line "${C_BOLD}${C_YEL}⚠ audit incomplete — no clean bill of health${C_RESET}"

@@ -62,6 +62,19 @@ mechanics when you touch them.
   date-folders go. pnpm store maintenance also lives in devclean --disk, as
   `pnpm store prune` ONLY — the store is shared across projects, never rm -rf
   it; artifacts deliberately has no --deep flag anymore.
+- Discovery may be heuristic; DESTRUCTION requires fresh, positive proof. Two
+  surfaces used to discover-and-destroy in one step and are now REPORT-ONLY:
+  `git --clean` (exit 2, still reports) and devclean's roaming `clean_find`
+  project scan (reports, withholds). The cut is roaming-vs-named, not
+  apply-vs-report: `clean_dir` targets an exact allowlisted cache path and
+  still deletes; `clean_find` walks $DOCUMENTS_ROOT hunting a NAME with no
+  liveness, git-tracked, or age gate. Removal is moving behind plan/apply as
+  typed targets (process-group, worktree, artifact), each with its own
+  fingerprint and apply-time policy. Approval does NOT replace safety checks:
+  tracked target, symlink or scope escape, repo root, nested repo, and
+  incomplete scans stay hard vetoes even when a human ticks the box, and
+  filesystem items default to unchecked because deleting a worktree and
+  restarting a dev server are not the same consequence.
 - Three mutation paths: `stop --kill` stops ledger-recorded groups;
   `audit --kill tests|dev|browser` kills by pattern category; `git --clean`
   applies only the safe git subset (worktree prune, clean stale worktrees,

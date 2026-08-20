@@ -2,6 +2,41 @@
 
 All notable changes to Afterparty are documented here. Versions follow semantic versioning.
 
+## [0.9.0] - 2026-08-19
+
+### Changed
+
+- **`git --clean` is now report-only** and exits 2. It discovered targets and
+  destroyed them in one step from heuristics that could not carry the weight: a
+  worktree's staleness came from HEAD's committer date and a top-directory
+  mtime that does not move when files inside it are edited, so a worktree in
+  active use read as idle indefinitely and removal took it along with every
+  gitignored file in it. A gitignored `.env` is not cleanup debris.
+- **devclean's roaming project scan is now report-only** under `--apply`. It
+  walked `$DOCUMENTS_ROOT` for a directory NAME with no liveness check, no
+  git-tracked veto and no age gate, and deleted from projects the user never
+  named. Exact allowlisted cache paths such as `~/.gradle/caches` still clean
+  normally — the cut is roaming-vs-named, not apply-vs-report.
+
+### Fixed
+
+- Category kills revalidate identity at the signal boundary. `--expect` gave
+  plan-driven kills that gate while `audit --kill dev` had none, so a pgid
+  freed and recycled mid-run was signalled on an authority never granted.
+- Process groups 0 and 1 are refused at the point of signalling. `-1` means
+  every process the user owns.
+- An empty `--pgid` is an error rather than a silent widening to the whole
+  category.
+- Every `rg` invocation passes `--no-config`, so a user's ripgrep config can no
+  longer disable the protect list.
+- The `tests` and `browser` categories are anchored to command position. An
+  unanchored `ava ` matched inside `java `, so `audit --kill tests` classified
+  every JVM — a JetBrains IDE, a Gradle daemon — as a test runner.
+
+Removal is moving behind `plan`/`apply` as typed targets. Approval will not
+replace safety checks: tracked targets, symlink and scope escapes, repository
+roots, nested repositories and incomplete scans remain hard vetoes.
+
 ## [0.8.0] - 2026-08-19
 
 ### Added

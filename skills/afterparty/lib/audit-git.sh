@@ -34,10 +34,10 @@ AGENT_BRANCH_RE='^(claude|codex|cursor|copilot|aider|agent)[/-]'
 LOCK_AGE_MIN=60   # an index.lock younger than this may belong to a live git
 
 # --- args --------------------------------------------------------------------
-ROOT="$PWD" AGE_DAYS=7 DO_CLEAN=0 JSON=0
+ROOT="$PWD" AGE_DAYS=7 DO_CLEAN=0 JSON=0 CLEAN_REQUESTED=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --clean) DO_CLEAN=1; shift ;;
+    --clean) CLEAN_REQUESTED=1; shift ;;
     --age) AGE_DAYS="${2:?}"; shift 2 ;;
     --root) ROOT="${2:?}"; shift 2 ;;
     --json) JSON=1; shift ;;
@@ -54,6 +54,25 @@ if ! git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
 fi
 
 g() { git -C "$ROOT" "$@"; }
+
+# --clean is REPORT-ONLY as of 0.9.0.
+#
+# It discovered targets and destroyed them in one step, from heuristics that
+# cannot support the weight: a worktree's staleness came from HEAD's committer
+# date and a TOP-directory mtime that does not move when files inside it are
+# edited, so a worktree being actively worked in read as idle indefinitely and
+# `git worktree remove` took it — along with every gitignored file in it. With
+# ~20 agent worktrees open at once that is a live sibling's .env and .venv.
+#
+# Discovery may be heuristic; destruction requires fresh, positive proof.
+# Removal is moving behind `afterparty plan` / `apply`, where a target is
+# fingerprinted, re-checked for liveness at apply time, and approved by a
+# person. Until those typed targets exist, this refuses rather than guesses.
+if [ "$CLEAN_REQUESTED" -eq 1 ]; then
+  DO_CLEAN=0
+  GIT_CLEAN_WITHHELD=1
+fi
+GIT_CLEAN_WITHHELD="${GIT_CLEAN_WITHHELD:-0}"
 
 IS_BARE="$(g rev-parse --is-bare-repository 2>/dev/null)"
 # Normalize to the worktree top-level so paths compare against git-emitted
@@ -559,6 +578,11 @@ if [ "$JSON" -eq 0 ]; then
   [ "$N_FAILED" -eq 0 ] || printf ', %s failed' "$N_FAILED"
   printf '\n'
   [ "$DO_CLEAN" -eq 1 ] || echo "Nothing was changed."
+  if [ "$GIT_CLEAN_WITHHELD" -eq 1 ]; then
+    echo "--clean is report-only: removing a worktree needs approval, not a stale mtime." >&2
+    echo "Review and approve with: afterparty plan  then  afterparty apply <plan>" >&2
+    exit 2
+  fi
   tally_add git.findings "$((N_PRUNABLE + N_WT + N_BRANCH + N_LOCK + N_LITTER))"
   tally_add git.litter_bytes "$LITTER_BYTES"
   tally_add git.stashes "$N_STASH"
