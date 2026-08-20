@@ -150,17 +150,65 @@ if [ -n "$PY_BIN" ]; then
 import json, sys
 rows = [json.loads(l) for l in sys.stdin if l.strip()]
 assert rows, "no json rows"
+# Two sections now: capability rows let a consumer tell "unknown" from "empty".
+# Validate each on its own terms rather than loosening the workspace schema.
+ws = [r for r in rows if r["section"] == "workspace"]
+caps = [r for r in rows if r["section"] == "capability"]
+assert ws, "no workspace rows"
+assert caps, "no capability rows"
 for r in rows:
     assert r["schema_version"] == 1, r
-    assert r["section"] == "workspace", r
+    assert r["section"] in ("workspace", "capability"), r
+for r in caps:
+    assert r["status"] in ("ok", "unavailable"), r
+    assert r["name"], r
+for r in ws:
     assert isinstance(r["idle_seconds"], int), "idle_seconds must be a number: %r" % r
     assert r["path"].startswith("/"), "path must be absolute: %r" % r
     assert isinstance(r["procs"], int), r
-stale = [r for r in rows if r["path"] == "/w/forgot"]
+stale = [r for r in ws if r["path"] == "/w/forgot"]
 assert stale and stale[0]["idle_seconds"] > 3600, "forgot should be deeply idle: %r" % stale
 ' || fail "G8: json rows malformed"
 fi
 [ "$FAILS" -eq "$_b" ] && pass "G8: --json parses with numeric idle_seconds and absolute paths"
+
+# ---------- G9: a scanner that could not run means UNKNOWN, not "nothing" ----------
+# glance printed an empty table and exited 0 when lsof was missing — a
+# confident all-clear for a machine it never inspected. This is the surface
+# read first after switching context, so "quiet" is exactly what tells someone
+# it is safe to stop looking.
+_b=$FAILS
+NOLSOF="$T/nolsof"; mkdir -p "$NOLSOF"
+# a PATH with ps but deliberately no lsof
+cp "$SHIM/ps" "$NOLSOF/ps"
+OUT9="$(PATH="$NOLSOF:/usr/bin:/bin" AFTERPARTY_TRANSCRIPT_ROOT="$R" AFTERPARTY_STYLE=never \
+  bash "$LIB/glance.sh" 2>&1)"
+printf '%s\n' "$OUT9" | grep -qi 'incomplete' \
+  || fail "G9: no incompleteness notice when lsof is unavailable: $OUT9"
+printf '%s\n' "$OUT9" | grep -qi 'lsof' \
+  || fail "G9: the notice does not name the missing scanner"
+ONE9="$(PATH="$NOLSOF:/usr/bin:/bin" AFTERPARTY_TRANSCRIPT_ROOT="$R" AFTERPARTY_STYLE=never \
+  bash "$LIB/glance.sh" --oneline 2>&1)"
+printf '%s\n' "$ONE9" | grep -qi 'incomplete' \
+  || fail "G9: --oneline claimed a clean machine it could not see: $ONE9"
+# positive control: with lsof present the same world reports workspaces, so the
+# notice above is about capability and not about an empty fixture
+printf '%s\n' "$OUT" | grep -q 'forgot' \
+  || fail "G9: control — the normal run should still list workspaces"
+[ "$FAILS" -eq "$_b" ] && pass "G9: missing capability reports unknown, never a clean bill of health"
+
+# ---------- G10: --json carries capability rows ----------
+_b=$FAILS
+J9="$(PATH="$NOLSOF:/usr/bin:/bin" AFTERPARTY_TRANSCRIPT_ROOT="$R" bash "$LIB/glance.sh" --json 2>/dev/null)"
+printf '%s\n' "$J9" | grep -q '"section":"capability"' \
+  || fail "G10: --json has no capability rows, so a consumer cannot tell unknown from empty"
+printf '%s\n' "$J9" | grep -q '"status":"unavailable"' \
+  || fail "G10: --json did not mark the missing scanner unavailable"
+if [ -n "${PY_BIN:-$(command -v python3)}" ]; then
+  printf '%s\n' "$J9" | "${PY_BIN:-$(command -v python3)}" -c 'import json,sys; [json.loads(l) for l in sys.stdin if l.strip()]' \
+    || fail "G10: --json stopped parsing once capability rows were added"
+fi
+[ "$FAILS" -eq "$_b" ] && pass "G10: --json exposes capability so consumers can tell unknown from empty"
 
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))
