@@ -76,9 +76,27 @@ mkshim 77700 0
 : > "$KILLLOG"
 OUT="$(run_kill --kill dev --pgid '')"; rc=$?
 [ "$rc" -eq 2 ] || fail "KG1: empty --pgid exited $rc, want 2"
-printf '%s\n' "$OUT" | grep -qi 'empty value' || fail "KG1: refusal did not explain the empty value: $OUT"
+# Wording is secondary; the behaviour is not. The refusal must name the flag
+# and nothing may be signalled. (An empty value is now caught by the generic
+# value-required guard at parse time, before the narrowing check runs.)
+printf '%s\n' "$OUT" | grep -q -- '--pgid' \
+  || fail "KG1: refusal did not name --pgid: $OUT"
 [ -s "$KILLLOG" ] && fail "KG1: signalled something despite refusing the flag"
 [ "$FAILS" -eq "$_b" ] && pass "KG1: an empty --pgid is refused, and nothing is signalled"
+
+# ---------- KG1b: a value-taking flag in final position must not spin ----------
+# $2 was unset, so `shift 2` failed and the arg loop never advanced: the
+# process span at 100% CPU forever. ulimit bounds the damage if it regresses.
+_b=$FAILS
+for flag in --kill --keep --pgid --expect; do
+  rc=$( ( ulimit -t 5; PATH="$SHIM:$PATH" bash "$LIB/audit-processes.sh" "$flag" >/dev/null 2>&1 ); echo $? )
+  case "$rc" in
+    2) : ;;
+    152|137|158|9) fail "KG1b: $flag with no value spun until the CPU limit killed it" ;;
+    *) fail "KG1b: $flag with no value exited $rc, want 2" ;;
+  esac
+done
+[ "$FAILS" -eq "$_b" ] && pass "KG1b: every value-taking flag refuses a missing value instead of spinning"
 
 # ---------- KG2: process groups 0 and 1 are never signalled ----------
 # -1 means every process the user owns; -0 means afterparty's own group.
