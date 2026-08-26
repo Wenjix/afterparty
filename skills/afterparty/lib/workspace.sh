@@ -136,8 +136,12 @@ ws_label_fit() {
     printf '%s' "$label"
     return 0
   fi
-  cut=$(( ${#label} - (width - 1) ))
-  printf '…%s' "${label:$cut}"
+  # ASCII marker, not "…": ${#var} counts BYTES under a non-UTF-8 locale, so a
+  # 3-byte ellipsis silently overflowed the column by 2 on Git Bash. A width
+  # helper must not itself contain a character whose width it cannot count.
+  cut=$(( ${#label} - (width - 3) ))
+  [ "$cut" -gt 0 ] || cut=0
+  printf '...%s' "${label:$cut}"
 }
 
 # Shortest suffix that is unique among the paths given. Reads paths on stdin,

@@ -142,6 +142,10 @@ F2="$(ws_label_fit /client-two/apps/web 14)"
 [ "$F1" != "$F2" ] || fail "W7: fitted labels collide at narrow widths: '$F1'"
 printf '%s' "$F1" | grep -q 'web' || fail "W7: fitting dropped the distinguishing tail: $F1"
 [ "${#F1}" -le 14 ] || fail "W7: fitted label is ${#F1} chars, over the 14 requested"
+# and in BYTES, which is what a %-Ns column actually pads by. A multibyte
+# marker made this overflow by 2 under a non-UTF-8 locale.
+B1="$(printf '%s' "$F1" | wc -c | tr -d '[:space:]')"
+[ "$B1" -le 14 ] || fail "W7: fitted label is $B1 BYTES, over the 14 requested"
 [ "$FAILS" -eq "$_b" ] && pass "W7: workspace labels distinguish projects that share a leaf name"
 
 # ---------- W8: labels are unique within the table being displayed ----------
