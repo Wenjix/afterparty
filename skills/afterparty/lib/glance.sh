@@ -194,11 +194,15 @@ fi
 printf '%s\n' "afterparty glance — $(s_n "$TOTAL_WS" 'workspace holding' 'workspaces holding') $(s_n "$TOTAL_PROCS" process processes)"
 echo
 s_dim "  WORKSPACE                    LAST TOUCHED   PROCS     CPU  PORTS"
+# Labels are computed across the rows being displayed, so each one is the
+# shortest suffix unique in THIS table rather than a guess made row by row.
+awk -F'\t' '{print $2}' "$T/rows" | ws_unique_labels > "$T/labels" 2>/dev/null || : > "$T/labels"
 HERE="$(pwd -P 2>/dev/null || pwd)"
 while IFS=$'\t' read -r ts path procs cpu ports; do
   [ -n "$path" ] || continue
   age=$((NOW - ts))
-  name="$(ws_label "$path")"
+  name="$(awk -F'\t' -v p="$path" '$1 == p { print $2; exit }' "$T/labels")"
+  [ -n "$name" ] || name="$(ws_label_fit "$path" 28)"
   case "$HERE" in "$path"|"$path"/*) name="$name ·here" ;; esac
   printf '  %-28.28s %-14s %5s  %s  %s\n' \
     "$name" "$(ws_human_age "$age")" "$procs" \

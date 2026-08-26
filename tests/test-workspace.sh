@@ -120,13 +120,55 @@ fi
 # APPROVAL surface an ambiguous label is a wrong approval waiting to happen:
 # two rows read identically and you cannot tell which one you are ticking.
 _b=$FAILS
-A="$(ws_label /Users/x/alpha/web)"
-B="$(ws_label /Users/x/beta/web)"
-[ "$A" != "$B" ] || fail "W7: two workspaces named 'web' render identically as '$A'"
-printf '%s' "$A" | grep -q 'alpha' || fail "W7: the label does not identify the parent: $A"
-[ "$(ws_label /top)" = "top" ] || fail "W7: a top-level path should keep its bare name"
+# Every pair here defeated an earlier attempt: basename collapsed the first
+# pair, and parent/leaf collapsed the second AND rendered the third as a single
+# segment because its parent and leaf are the same word.
+while IFS='|' read -r p1 p2 why; do
+  l1="$(ws_label "$p1")"; l2="$(ws_label "$p2")"
+  [ "$l1" != "$l2" ] || fail "W7: $why — both render as '$l1'"
+done <<'PAIRS'
+/Users/x/alpha/web|/Users/x/beta/web|sibling projects sharing a leaf name
+/client-one/apps/web|/client-two/apps/web|monorepo apps/ layout
+/repo/web/web|/other/web/web|repeated segment names
+PAIRS
+[ "$(ws_label /repo/web/web)" != "web" ] \
+  || fail "W7: a path whose parent and leaf match collapsed to one segment"
 [ -n "$(ws_label '')" ] || fail "W7: an empty path must still produce some label"
+
+# Width fitting must drop LEADING segments: the tail is what distinguishes two
+# workspaces, so right-truncation would reintroduce the collision.
+F1="$(ws_label_fit /client-one/apps/web 14)"
+F2="$(ws_label_fit /client-two/apps/web 14)"
+[ "$F1" != "$F2" ] || fail "W7: fitted labels collide at narrow widths: '$F1'"
+printf '%s' "$F1" | grep -q 'web' || fail "W7: fitting dropped the distinguishing tail: $F1"
+[ "${#F1}" -le 14 ] || fail "W7: fitted label is ${#F1} chars, over the 14 requested"
 [ "$FAILS" -eq "$_b" ] && pass "W7: workspace labels distinguish projects that share a leaf name"
+
+# ---------- W8: labels are unique within the table being displayed ----------
+# Uniqueness only has to hold among the rows actually shown, so it is computed
+# there: one segment where that suffices, more only where it does not. A label
+# that is unambiguous but unreadable is its own failure on a surface whose job
+# is to be scanned.
+_b=$FAILS
+LBL="$(printf '%s\n' \
+  /Users/x/Documents/GitHub/proxymates \
+  /Users/x/Documents/GitHub/loupe \
+  /Users/x/orca/afterparty \
+  /client-one/apps/web \
+  /client-two/apps/web | ws_unique_labels)"
+[ "$(printf '%s\n' "$LBL" | wc -l | tr -d '[:space:]')" -eq 5 ] \
+  || fail "W8: expected one label per path"
+# every label distinct
+DUP="$(printf '%s\n' "$LBL" | cut -f2 | sort | uniq -d)"
+[ -z "$DUP" ] || fail "W8: duplicate labels rendered: $DUP"
+# short where it can be
+[ "$(printf '%s\n' "$LBL" | awk -F'\t' '$1 ~ /proxymates$/ {print $2}')" = "proxymates" ] \
+  || fail "W8: an unambiguous workspace was not shortened to one segment"
+# longer only where it must be
+W1="$(printf '%s\n' "$LBL" | awk -F'\t' '$1 == "/client-one/apps/web" {print $2}')"
+printf '%s' "$W1" | grep -q 'client-one' \
+  || fail "W8: a colliding workspace was not lengthened enough to distinguish it: $W1"
+[ "$FAILS" -eq "$_b" ] && pass "W8: labels are the shortest suffix unique within the displayed table"
 
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))

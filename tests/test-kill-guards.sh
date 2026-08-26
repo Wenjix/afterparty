@@ -178,5 +178,41 @@ grep -q -- 'kill -TERM -77700' "$KILLLOG" \
   || fail "KG4: an unchanged group was not killed (said: $OUT)"
 [ "$FAILS" -eq "$_b" ] && pass "KG4: an unchanged group is still killed"
 
+# ---------- KG5: the ledger stop path also refuses an absent group ----------
+# Introducing return code 3 for "group absent" without updating every caller
+# turned a fail-CLOSED path into a signalling one: the ledger handled 0 and 2
+# only, so 3 fell through to kill -TERM. Reproduced before the fix — SIGTERM
+# was delivered to a pgid that ps had just reported absent, and the run exited
+# 0. If that id is reused in the gap an unrelated group takes the signal.
+_b=$FAILS
+LSHIM="$T/lshim"; mkdir -p "$LSHIM"
+cat > "$LSHIM/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  *-o\ pgid=*-p\ 77800*) printf '77800
+' ;;
+  *-o\ pgid=*-p*)        printf '99999
+' ;;   # this shell's own group
+  *-p\ 77800*)           printf '77800 npm run dev
+' ;;
+  # the recheck before SIGTERM: ps SUCCEEDS and the group is gone
+  *-Ao\ pgid=,command=*) exit 0 ;;
+  *-Ao\ pgid=*)          exit 0 ;;
+  *) exit 1 ;;
+esac
+PS
+chmod +x "$LSHIM/ps"
+printf '2026-01-01T00:00:00Z	/r	/r	77800	77800	dev			npm run dev
+' > "$T/ledger.tsv"
+: > "$KILLLOG"
+LOUT="$(PATH="$LSHIM:$PATH" AGENT_PROCESS_LEDGER="$T/ledger.tsv" AFTERPARTY_STYLE=never   bash "$LIB/process-ledger.sh" stop --kill --all 2>&1)"
+grep -q -- '-77800' "$KILLLOG"   && fail "KG5: ledger signalled a group ps reported absent"
+printf '%s
+' "$LOUT" | grep -qi 'already exited'   || fail "KG5: ledger did not report the group as already gone: $LOUT"
+# positive control: the log records kills when one really happens
+bash -c 'kill -TERM -424242 2>/dev/null' || true
+grep -q -- '-424242' "$KILLLOG" || fail "KG5: kill log is not recording — the check above proved nothing"
+[ "$FAILS" -eq "$_b" ] && pass "KG5: the ledger stop path treats an absent group as terminal"
+
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi

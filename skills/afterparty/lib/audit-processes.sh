@@ -254,6 +254,14 @@ kill_group() {
       return 4
     else
       protection_rc=$?
+      if [ "$protection_rc" -eq 3 ]; then
+        # SIGTERM worked and the group drained between pgid_exists and this
+        # recheck. That is success, not drift: without this it fell through to
+        # the identity check, reported "identity changed" and failed the run.
+        # KG2b covered the SIGTERM boundary only; both boundaries need it.
+        s_skip "  pgid $pg exited after SIGTERM — no SIGKILL needed"
+        return 6
+      fi
       if [ "$protection_rc" -eq 2 ]; then
         s_skip "  could not recheck pgid $pg before SIGKILL — skipped"
         journal_action process_group.stop "pgid:$pg" failed "protection unavailable before SIGKILL"
