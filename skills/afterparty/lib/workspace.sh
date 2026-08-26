@@ -127,6 +127,12 @@ ws_label() {
 # ones: the head of a path is the part workspaces have in common and the tail
 # is the part that tells them apart. Right-truncating would reintroduce exactly
 # the collision this label exists to prevent.
+#
+# Callers that render a TABLE should not use this at all -- they should use
+# ws_unique_labels, which is table-scoped, and pad without truncating. Cutting
+# a label to a fixed width can merge two labels that ws_unique_labels had just
+# made distinct, and a byte-wise cut can land mid-codepoint. This remains only
+# for single-value display where no set exists to be unique within.
 ws_label_fit() {
   local label width cut
   label="$(ws_label "$1")"
@@ -155,7 +161,12 @@ ws_label_fit() {
 # Falls back to the full path if even that collides.
 ws_unique_labels() {
   awk -F/ '
-    { paths[NR] = $0; n = NR }
+    # Deduplicate first. Uniqueness is a property of the SET of workspaces on
+    # screen, but callers pass one row per finding -- and two process groups in
+    # one workspace is the normal case, not the exception. Counting the same
+    # path twice made every suffix look ambiguous, so that workspace fell all
+    # the way back to its absolute path exactly when it was busiest.
+    !seen_path[$0]++ { paths[++n] = $0 }
     function suffix(p, k,   parts, m, i, out) {
       m = split(p, parts, "/")
       out = ""

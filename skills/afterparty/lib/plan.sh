@@ -107,7 +107,7 @@ while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
   fi
   verdict="$(elig_verdict "$touched" "$cpu" "$NOW")"
   name="$(awk -F'\t' -v p="$owner" '$1 == p { print $2; exit }' "$T/labels")"
-  [ -n "$name" ] || name="$(ws_label_fit "$owner" 34)"
+  [ -n "$name" ] || name="$(ws_label "$owner")"
   if [ -n "$touched" ]; then
     age="idle $(ws_human_age "$((NOW - touched))")"
   else

@@ -255,12 +255,15 @@ kill_group() {
     else
       protection_rc=$?
       if [ "$protection_rc" -eq 3 ]; then
-        # SIGTERM worked and the group drained between pgid_exists and this
-        # recheck. That is success, not drift: without this it fell through to
-        # the identity check, reported "identity changed" and failed the run.
-        # KG2b covered the SIGTERM boundary only; both boundaries need it.
-        s_skip "  pgid $pg exited after SIGTERM — no SIGKILL needed"
-        return 6
+        # The group drained between pgid_exists and this recheck. A signal WAS
+        # delivered and absence IS confirmed, so this is the ordinary success
+        # path -- it must journal and count like any other kill. Returning the
+        # pre-signal "already gone" code here suppressed the receipt for work
+        # that actually happened, which is the mirror image of claiming work
+        # that did not. "Already gone" is only ever a PRE-signal verdict.
+        s_ok "  pgid $pg exited after SIGTERM"
+        journal_action process_group.stop "pgid:$pg" succeeded "exited after SIGTERM"
+        return 0
       fi
       if [ "$protection_rc" -eq 2 ]; then
         s_skip "  could not recheck pgid $pg before SIGKILL — skipped"

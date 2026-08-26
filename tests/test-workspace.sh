@@ -174,5 +174,50 @@ printf '%s' "$W1" | grep -q 'client-one' \
   || fail "W8: a colliding workspace was not lengthened enough to distinguish it: $W1"
 [ "$FAILS" -eq "$_b" ] && pass "W8: labels are the shortest suffix unique within the displayed table"
 
+# ---------- W9: uniqueness must survive rendering ----------
+# Labels that ws_unique_labels made distinct were being right-truncated to a
+# fixed column width, which merged them again — reintroducing the exact
+# collision the labelling exists to prevent. Renderers pad now, never truncate.
+_b=$FAILS
+LONG_A="/Users/x/aaaaaaaaaaaaaaaaaaaaaaaaaaaaX/web"
+LONG_B="/Users/x/aaaaaaaaaaaaaaaaaaaaaaaaaaaaY/web"
+LL="$(printf '%s\n%s\n' "$LONG_A" "$LONG_B" | ws_unique_labels | cut -f2)"
+L1="$(printf '%s\n' "$LL" | sed -n 1p)"; L2="$(printf '%s\n' "$LL" | sed -n 2p)"
+[ "$L1" != "$L2" ] || fail "W9: long-prefix workspaces share a label"
+# and after the renderer's field width
+R1="$(printf '%-28s' "$L1")"; R2="$(printf '%-28s' "$L2")"
+[ "$R1" != "$R2" ] || fail "W9: labels merge once rendered into a 28-column field"
+# glance must not carry a truncating precision on the workspace column
+grep -q '%-28\.28s' "$LIB/glance.sh" \
+  && fail "W9: glance still truncates the workspace column, which can merge distinct labels"
+[ "$FAILS" -eq "$_b" ] && pass "W9: distinct labels stay distinct through rendering"
+
+# ---------- W10: repeated owners must not defeat shortening ----------
+# Callers pass one row per finding, and two process groups in one workspace is
+# the normal case. Counting a path twice made every suffix look ambiguous, so
+# that workspace fell back to its absolute path exactly when it was busiest.
+_b=$FAILS
+DL="$(printf '%s\n' /Users/x/GitHub/loupe /Users/x/GitHub/loupe /Users/x/orca/afterparty | ws_unique_labels)"
+[ "$(printf '%s\n' "$DL" | awk -F'\t' '$1 ~ /loupe$/ {print $2}' | head -1)" = "loupe" ] \
+  || fail "W10: a workspace appearing twice fell back to its full path"
+[ "$FAILS" -eq "$_b" ] && pass "W10: a repeated workspace still gets its short label"
+
+# ---------- W11: multibyte paths are never cut mid-character ----------
+# ${#var} and shell substrings measure bytes under a non-UTF-8 locale, so any
+# width-based cut can land inside a codepoint. Renderers no longer truncate,
+# so the label is emitted whole.
+_b=$FAILS
+JP1=/Users/x/プロジェクト/web
+JP2=/Users/x/別プロジェクト/web
+JL="$(printf '%s\n%s\n' "$JP1" "$JP2" | ws_unique_labels | cut -f2)"
+J1="$(printf '%s\n' "$JL" | sed -n 1p)"; J2="$(printf '%s\n' "$JL" | sed -n 2p)"
+[ "$J1" != "$J2" ] || fail "W11: multibyte workspaces share a label"
+printf '%s' "$J1" | grep -q 'プロジェクト' \
+  || fail "W11: the multibyte label was mangled: $J1"
+# a cut mid-codepoint shows up as a replacement/partial byte sequence
+printf '%s' "$J1" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 \
+  || fail "W11: the label is not valid UTF-8 — it was cut mid-character"
+[ "$FAILS" -eq "$_b" ] && pass "W11: multibyte labels stay whole and valid UTF-8"
+
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))

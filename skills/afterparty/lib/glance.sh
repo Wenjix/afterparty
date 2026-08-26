@@ -202,9 +202,9 @@ while IFS=$'\t' read -r ts path procs cpu ports; do
   [ -n "$path" ] || continue
   age=$((NOW - ts))
   name="$(awk -F'\t' -v p="$path" '$1 == p { print $2; exit }' "$T/labels")"
-  [ -n "$name" ] || name="$(ws_label_fit "$path" 28)"
+  [ -n "$name" ] || name="$(ws_label "$path")"
   case "$HERE" in "$path"|"$path"/*) name="$name ·here" ;; esac
-  printf '  %-28.28s %-14s %5s  %s  %s\n' \
+  printf '  %-28s %-14s %5s  %s  %s\n' \
     "$name" "$(ws_human_age "$age")" "$procs" \
     "$(s_sevcell "${cpu%%.*}" 50 80 "$(printf '%6s' "$cpu")")" "$ports"
 done < "$T/rows"

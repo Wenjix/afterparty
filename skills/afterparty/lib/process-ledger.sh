@@ -333,7 +333,7 @@ stop_entries() {
     else
       protection_rc=$?
       if [ "$protection_rc" -eq 3 ]; then
-        s_skip "  pgid ${pgid:-$group} had already exited — nothing to signal"
+        s_skip "  pgid $pgid had already exited — nothing to signal"
         continue
       fi
 
@@ -443,7 +443,11 @@ stop_entries() {
       else
         protection_rc=$?
         if [ "$protection_rc" -eq 3 ]; then
-          s_skip "  pgid ${pgid:-$group} had already exited — nothing to signal"
+          # SIGTERM landed and the group drained. Success, not "already gone" --
+          # that verdict belongs only to a PRE-signal check.
+          s_ok "  pgid $group exited after SIGTERM"
+          N_STOPPED=$((N_STOPPED + 1))
+          journal_action ledger_group.stop "pgid:$group" succeeded "exited after SIGTERM"
           continue
         fi
 
@@ -463,7 +467,10 @@ stop_entries() {
       else
         protection_rc=$?
         if [ "$protection_rc" -eq 3 ]; then
-          s_skip "  pgid ${pgid:-$group} had already exited — nothing to signal"
+          # The confirmation scan found no members: the group is gone, which is
+          # exactly what this loop exists to confirm.
+          N_STOPPED=$((N_STOPPED + 1))
+          journal_action ledger_group.stop "pgid:$group" succeeded "group confirmed absent"
           continue
         fi
 
@@ -479,7 +486,7 @@ stop_entries() {
     else
       protection_rc=$?
       if [ "$protection_rc" -eq 3 ]; then
-        s_skip "  pgid ${pgid:-$group} had already exited — nothing to signal"
+        s_skip "  pgid $group had already exited — nothing to signal"
         continue
       fi
 
