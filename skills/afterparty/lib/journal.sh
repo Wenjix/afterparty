@@ -60,8 +60,12 @@ journal_action() {
     AFTERPARTY_JOURNAL_READY=1
   fi
   if ! state_lock_acquire "$lock"; then
+    # return 1, not 0. A dropped receipt is a mutation that happened with no
+    # record of it, and a caller that cannot detect the drop will go on to
+    # print a confident summary describing work the journal never saw. The
+    # warning alone was invisible in any run whose stderr nobody reads.
     printf 'afterparty: action journal is busy; outcome was not recorded\n' >&2
-    return 0
+    return 1
   fi
   if ! (umask 077 && printf '%s\n' "$row" >> "$path"); then
     state_lock_release "$lock"
