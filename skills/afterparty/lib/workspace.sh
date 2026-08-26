@@ -97,3 +97,23 @@ ws_owner_of() {
   [ -n "$best" ] || return 1
   printf '%s' "$best"
 }
+
+# Display label for a workspace path. Bare basename is ambiguous the moment two
+# projects share a leaf name -- monorepos and scaffolds make "web", "api" and
+# "server" extremely common -- and on the APPROVAL surface an ambiguous label
+# is a wrong approval waiting to happen: two rows read identically and you
+# cannot tell which one you are ticking. Uses parent/leaf, which disambiguates
+# every realistic collision while staying far shorter than a full path.
+ws_label() {
+  local path="${1:-}" parent leaf
+  [ -n "$path" ] || { printf '(unknown)'; return 0; }
+  leaf="${path##*/}"
+  [ -n "$leaf" ] || leaf="$path"
+  parent="${path%/*}"
+  parent="${parent##*/}"
+  if [ -n "$parent" ] && [ "$parent" != "$leaf" ]; then
+    printf '%s/%s' "$parent" "$leaf"
+  else
+    printf '%s' "$leaf"
+  fi
+}

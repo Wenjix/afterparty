@@ -22,14 +22,22 @@ PROTECT_RE='Cursor|Code Helper|Electron|/MacOS/Code|Codex|node_repl|extension-ho
 # True if any live process in process group $1 matches PROTECT_RE. Group kills
 # must check this: filtering protected rows out of a listing does not stop a
 # protected sibling in the same group from dying with it. Return values:
-# 0 protected member found; 1 inspected and clear; 2 inspection unavailable.
+# 0 protected member found; 1 inspected and clear; 2 inspection unavailable;
+# 3 the group is not present at all.
+#
+# 3 exists because ps succeeding with no members for this pgid is not the same
+# as ps failing. The group simply exited between discovery and the kill loop --
+# which is the common case on a busy machine, since the loop drains 2s per
+# group. Folding it into 2 made the caller report "could not inspect" and
+# count a FAILURE for a group that had already gone away on its own, inflating
+# the failure count and the exit status of an otherwise clean run.
 pgid_has_protected() {
   local snapshot members rc
   if ! snapshot="$(ps -Ao pgid=,command= 2>/dev/null)"; then
     return 2
   fi
   members="$(printf '%s\n' "$snapshot" | awk -v pg="$1" '$1 == pg { $1 = ""; print }')" || return 2
-  [ -n "$members" ] || return 2
+  [ -n "$members" ] || return 3
   if command -v rg >/dev/null 2>&1; then
     # --no-config: ripgrep prepends flags from RIPGREP_CONFIG_PATH to every
     # invocation, and --fixed-strings or a small --regex-size-limit makes

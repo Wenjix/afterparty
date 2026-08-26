@@ -193,14 +193,14 @@ fi
 
 printf '%s\n' "afterparty glance — $(s_n "$TOTAL_WS" 'workspace holding' 'workspaces holding') $(s_n "$TOTAL_PROCS" process processes)"
 echo
-s_dim "  WORKSPACE             LAST TOUCHED   PROCS     CPU  PORTS"
+s_dim "  WORKSPACE                    LAST TOUCHED   PROCS     CPU  PORTS"
 HERE="$(pwd -P 2>/dev/null || pwd)"
 while IFS=$'\t' read -r ts path procs cpu ports; do
   [ -n "$path" ] || continue
   age=$((NOW - ts))
-  name="$(basename "$path")"
+  name="$(ws_label "$path")"
   case "$HERE" in "$path"|"$path"/*) name="$name ·here" ;; esac
-  printf '  %-21.21s %-14s %5s  %s  %s\n' \
+  printf '  %-28.28s %-14s %5s  %s  %s\n' \
     "$name" "$(ws_human_age "$age")" "$procs" \
     "$(s_sevcell "${cpu%%.*}" 50 80 "$(printf '%6s' "$cpu")")" "$ports"
 done < "$T/rows"

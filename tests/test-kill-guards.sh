@@ -116,6 +116,42 @@ for reserved in 1 0; do
   [ "$FAILS" -eq "$_b" ] && pass "KG2: process group $reserved refused, and said so"
 done
 
+# ---------- KG2b: a group that exited on its own is not a failure ----------
+# The kill loop drains 2s per group, so on a busy machine a target routinely
+# goes away by itself before its turn. "ps returned no members" shared a return
+# code with "ps failed", so that no-op was reported as an inspection failure,
+# counted toward N_FAILED, and turned the exit status of an otherwise clean run
+# nonzero.
+_b=$FAILS
+SHIM="$T/shim"; rm -rf "$SHIM"; mkdir -p "$SHIM"
+cat > "$SHIM/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  *pid,ppid,pgid,%cpu,etime,command*)
+    printf '77800 1 77800 0.0 01:00:00 /usr/local/bin/nodemon server.js
+' ;;
+  *pgid=,lstart=,command=*)
+    printf '77800 Tue Aug 18 09:00:00 2026 /usr/local/bin/nodemon server.js
+' ;;
+  # the group has since exited: ps SUCCEEDS and reports no members for it
+  *-Ao\ pgid=,command=*) exit 0 ;;
+  *-Ao\ pgid=*) exit 0 ;;
+  *-o\ pgid=*) printf '99999
+' ;;
+  *) exit 1 ;;
+esac
+PS
+chmod +x "$SHIM/ps"
+: > "$KILLLOG"
+OUT="$(run_kill --kill dev)"; rc=$?
+grep -q -- '-77800' "$KILLLOG" && fail "KG2b: signalled a group that had already exited"
+printf '%s
+' "$OUT" | grep -qi 'already exited'   || fail "KG2b: an exited group was not reported as already gone: $OUT"
+printf '%s
+' "$OUT" | grep -qi 'could not inspect'   && fail "KG2b: an exited group was still reported as an inspection failure"
+[ "$rc" -eq 0 ] || fail "KG2b: exit=$rc — a group vanishing on its own must not fail the run"
+[ "$FAILS" -eq "$_b" ] && pass "KG2b: a group that exited on its own is a no-op, not a failure"
+
 # ---------- KG3: identity is revalidated on an ORDINARY kill ----------
 # No --expect here. Identity enforcement used to exist only for plan-driven
 # kills, so `audit --kill dev` — the documented command — signalled whatever

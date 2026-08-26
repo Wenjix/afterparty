@@ -224,6 +224,14 @@ kill_group() {
     return 3
   else
     protection_rc=$?
+    if [ "$protection_rc" -eq 3 ]; then
+      # Already gone. The postcondition this function exists to guarantee --
+      # the group is absent -- is satisfied, so this is a no-op and not a
+      # failure. It was counted as one because "no members" and "ps failed"
+      # shared a return code.
+      s_skip "  pgid $pg had already exited — nothing to signal"
+      return 6
+    fi
     if [ "$protection_rc" -eq 2 ]; then
       s_skip "  could not inspect pgid $pg for protected members — skipped"
       return 1
@@ -299,8 +307,13 @@ json_report() {
   local cat="$1" re="$2" line pid ppid pgid cpu etime
   list_matches "$re" | while IFS= read -r line; do
     [ -n "$line" ] || continue
+    # set -f: an argv containing * would otherwise glob against the CALLER's
+    # cwd, replacing the command text with whatever filenames happen to sit
+    # there — corrupting the field and leaking unrelated filenames into a
+    # machine-readable surface. list_matches at the top of this file already
+    # guards this; these two emitters were missed.
     # shellcheck disable=SC2086
-    set -- $line
+    set -f; set -- $line; set +f
     [ $# -ge 6 ] || continue
     pid="$1" ppid="$2" pgid="$3" cpu="$4" etime="$5"
     shift 5
@@ -321,7 +334,7 @@ json_report_localhost() {
     | while IFS= read -r line; do
         [ -n "$line" ] || continue
         # shellcheck disable=SC2086
-        set -- $line
+        set -f; set -- $line; set +f
         [ $# -ge 4 ] || continue
         json_row "$(json_kv section listeners)" "$(json_kv command "$1")" \
           "$(json_kvn pid "$2")" "$(json_kv user "$3")" "$(json_kv name "${!#}")"
@@ -437,6 +450,7 @@ print_procs_receipt() {
     "$([ "$N_KILLED" -gt 0 ] && echo "$G_OK $N_KILLED killed")" \
     "$([ "$N_PROT" -gt 0 ] && echo "$G_SKIP $N_PROT protected")" \
     "$([ "$N_IDENT" -gt 0 ] && echo "$G_SKIP $N_IDENT identity changed")" \
+    "$([ "$N_GONE" -gt 0 ] && echo "$G_SKIP $N_GONE already gone")" \
     "$([ "$N_FAILED" -gt 0 ] && echo "$G_SKIP $N_FAILED failed")")"
   if [ -n "$segs" ]; then s_card_line "   $segs"; fi
   if [ "$N_KILLED" -gt 0 ]; then
@@ -479,7 +493,7 @@ if [ "$PS_STATUS" != "ok" ]; then
   exit 1
 fi
 
-N_KILLED=0 N_PROT=0 N_FAILED=0 N_IDENT=0
+N_KILLED=0 N_PROT=0 N_FAILED=0 N_IDENT=0 N_GONE=0
 PGID_SUPPLIED="${PGID_SUPPLIED:-0}"
 AUTO_FP_MAP=""
 EXPECT_MAP="${EXPECT_MAP:-}"
@@ -534,6 +548,8 @@ for cat in $KILL_CATS; do
       kill_rc=$?
       case "$kill_rc" in
         3) N_PROT=$((N_PROT + 1)) ;;
+        # Already gone before we signalled: a no-op, not a failure.
+        6) N_GONE=$((N_GONE + 1)) ;;
         # Identity drift is its own refusal: the group was not protected, it
         # was simply no longer the group that was approved. Counting it as
         # protected would misreport why nothing was killed.

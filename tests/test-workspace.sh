@@ -114,5 +114,19 @@ else
   [ "$FAILS" -eq "$_b" ] && pass "W6: pid attributed via lsof, fails closed without it"
 fi
 
+# ---------- W7: workspace labels must disambiguate ----------
+# A bare basename collides the moment two projects share a leaf name, and
+# "web", "api" and "server" are the most common leaf names there are. On the
+# APPROVAL surface an ambiguous label is a wrong approval waiting to happen:
+# two rows read identically and you cannot tell which one you are ticking.
+_b=$FAILS
+A="$(ws_label /Users/x/alpha/web)"
+B="$(ws_label /Users/x/beta/web)"
+[ "$A" != "$B" ] || fail "W7: two workspaces named 'web' render identically as '$A'"
+printf '%s' "$A" | grep -q 'alpha' || fail "W7: the label does not identify the parent: $A"
+[ "$(ws_label /top)" = "top" ] || fail "W7: a top-level path should keep its bare name"
+[ -n "$(ws_label '')" ] || fail "W7: an empty path must still produce some label"
+[ "$FAILS" -eq "$_b" ] && pass "W7: workspace labels distinguish projects that share a leaf name"
+
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))
