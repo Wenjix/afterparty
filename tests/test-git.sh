@@ -118,6 +118,41 @@ printf '%s\n' "$OUT2" | grep -q 'wt-stale'    || fail "wt-stale was not reported
 printf '%s\n' "$OUT2" | grep -q 'claude/done' || fail "claude/done was not reported"
 pass "--clean reports every candidate and removes none"
 
+# ---------- dirty and broken worktrees are classified, not just refused ----------
+# --clean is report-only today, but the dirty check is the ONLY afterparty-side
+# guard standing between `git worktree remove` and an agent's uncommitted work,
+# and it has never been pinned. A refactor that adds --force to make removal
+# "more reliable", or that changes how `git status --porcelain` is captured,
+# would pass every other case in this file. When removal moves behind
+# plan/apply as a typed worktree target, this is the classification it inherits.
+# Branch from the OLD-dated root commit, as wt-stale effectively does.
+# Staleness is derived from the worktree's HEAD commit date as well as its
+# directory mtime, so a worktree created at HEAD is "idle 0d" no matter how far
+# back its mtime is pushed — which is why the first version of this case never
+# reached the branch it was written to pin.
+WT_OLD="$(git rev-list --max-parents=0 HEAD | head -1)"
+git worktree add -q --detach ../wt-dirty "$WT_OLD" 2>/dev/null
+# Write the dirty content BEFORE ageing. Writing into the worktree updates its
+# directory mtime, so ageing first left it looking ACTIVE — the row never
+# reached the stale-and-dirty branch and this whole case passed without
+# exercising the guard it exists to pin.
+printf 'uncommitted\n' > ../wt-dirty/untracked.txt
+printf 'edited\n' >> ../wt-dirty/f 2>/dev/null || printf 'edited\n' > ../wt-dirty/f
+age '30 days ago' -30d ../wt-dirty
+OUT3="$(bash "$LIB/audit-git.sh" 2>/dev/null)"
+printf '%s\n' "$OUT3" | grep -q 'wt-dirty' \
+  || fail "dirty worktree was not reported at all"
+printf '%s\n' "$OUT3" | grep -q 'stale but DIRTY:.*wt-dirty' \
+  || fail "wt-dirty did not reach the stale-and-dirty branch: $(printf '%s\n' "$OUT3" | grep wt-dirty)"
+printf '%s\n' "$OUT3" | grep -q 'would remove .*wt-dirty' \
+  && fail "dirty worktree was offered for removal"
+# positive control: a CLEAN stale worktree in the same run IS offered, so the
+# absence above is the dirty check and not the section failing to run
+printf '%s\n' "$OUT3" | grep -q 'would remove .*wt-stale' \
+  || fail "control: the clean stale worktree was not offered, so nothing was classified"
+[ -f ../wt-dirty/untracked.txt ] || fail "the dirty worktree's untracked file vanished during a dry run"
+pass "a dirty stale worktree is reported, marked, and never offered for removal"
+
 bash "$LIB/audit-git.sh" --clean >/dev/null 2>&1; RC=$?
 [ "$RC" -eq 2 ] || fail "second --clean exit=$RC, want a stable refusal"
 [ -d ../wt-stale ] || fail "a repeat --clean removed the worktree"

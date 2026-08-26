@@ -264,4 +264,10 @@ printf '%s applied · %s refused (drift) · %s gone · %s held · %s survived ·
   "$N_OK" "$N_DRIFT" "$N_GONE" "$N_HELD" "$N_SURVIVED" "$N_FAILED"
 # Receipts are postcondition-based: a delegation that failed did not do the
 # work, so the exit status must say so.
-[ "$N_FAILED" -eq 0 ] || exit 1
+# A run where every approved group SURVIVED did no work, and a caller cannot
+# tell that from "cleaned up" if both exit 0. Survivors are counted as a
+# failure of the run, matching the postcondition rule: the receipt describes
+# what was confirmed, and nothing was.
+if [ "$N_FAILED" -ne 0 ] || [ "$N_SURVIVED" -ne 0 ]; then
+  exit 1
+fi

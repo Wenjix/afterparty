@@ -214,5 +214,72 @@ bash -c 'kill -TERM -424242 2>/dev/null' || true
 grep -q -- '-424242' "$KILLLOG" || fail "KG5: kill log is not recording — the check above proved nothing"
 [ "$FAILS" -eq "$_b" ] && pass "KG5: the ledger stop path treats an absent group as terminal"
 
+# ---------- KG6: stop --kill scoping decides what gets signalled ----------
+# --keep spares a group, --kind narrows by category, and the default scope is
+# the current workspace. All three were untested ON THE DESTRUCTIVE PATH, so
+# nothing proved a spared group is actually spared -- only that the flags
+# parse. Each case asserts BOTH directions: the in-scope group is signalled and
+# the out-of-scope one is not, so a scope that matched nothing would fail too.
+SSHIM="$T/sshim"; mkdir -p "$SSHIM"
+cat > "$SSHIM/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  *-o\ pgid=*-p\ 8801*) printf '8801
+' ;;
+  *-o\ pgid=*-p\ 8802*) printf '8802
+' ;;
+  *-o\ pgid=*-p*)       printf '99999
+' ;;
+  *-p\ 8801*)           printf '8801 npm run dev
+' ;;
+  *-p\ 8802*)           printf '8802 vitest --watch
+' ;;
+  *-Ao\ pgid=,command=*) printf '8801 npm run dev
+8802 vitest --watch
+' ;;
+  *-Ao\ pgid=*)          printf '8801
+8802
+' ;;
+  *) exit 1 ;;
+esac
+PS
+chmod +x "$SSHIM/ps"
+mkledger() {
+  printf '2026-01-01T00:00:00Z	%s	%s	8801	8801	dev			npm run dev
+' "$1" "$1" >  "$T/sl.tsv"
+  printf '2026-01-01T00:00:00Z	%s	%s	8802	8802	tests			vitest --watch
+' "$1" "$1" >> "$T/sl.tsv"
+}
+run_stop() {
+  PATH="$SSHIM:$PATH" AGENT_PROCESS_LEDGER="$T/sl.tsv" AFTERPARTY_STYLE=never     bash "$LIB/process-ledger.sh" stop --kill "$@" 2>&1
+}
+
+_b=$FAILS
+mkledger /r
+: > "$KILLLOG"; run_stop --all --keep 8801 >/dev/null 2>&1
+grep -q -- '-8801' "$KILLLOG" && fail "KG6: --keep did not spare pgid 8801"
+grep -q -- '-8802' "$KILLLOG" || fail "KG6: --keep spared everything, so the check proves nothing"
+[ "$FAILS" -eq "$_b" ] && pass "KG6: --keep spares its group and only its group"
+
+_b=$FAILS
+: > "$KILLLOG"; run_stop --all --kind tests >/dev/null 2>&1
+grep -q -- '-8802' "$KILLLOG" || fail "KG6: --kind tests did not signal the tests group"
+grep -q -- '-8801' "$KILLLOG" && fail "KG6: --kind tests also signalled the dev group"
+[ "$FAILS" -eq "$_b" ] && pass "KG6: --kind narrows the kill to that category"
+
+_b=$FAILS
+mkledger /some/other/workspace
+: > "$KILLLOG"; ( cd "$T" && run_stop >/dev/null 2>&1 )
+grep -qE -- '-880[12]' "$KILLLOG"   && fail "KG6: a row from an unrelated workspace was signalled without --all"
+# Recorded in a SUBDIRECTORY, stopped from the parent. A non-git workspace has
+# no toplevel to normalise to, so an exact-equality test made this row
+# invisible from the project root -- stop --kill silently skipped a process it
+# had recorded itself.
+mkdir -p "$T/ws/sub"
+mkledger "$T/ws/sub"
+: > "$KILLLOG"; ( cd "$T/ws" && run_stop >/dev/null 2>&1 )
+grep -q -- '-8801' "$KILLLOG" || fail "KG6: a row recorded in a subdirectory was invisible from the workspace root"
+[ "$FAILS" -eq "$_b" ] && pass "KG6: the default scope is this workspace, and it is not empty"
+
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi

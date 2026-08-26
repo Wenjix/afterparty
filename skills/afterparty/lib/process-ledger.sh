@@ -44,6 +44,8 @@ ensure_ledger() {
     state_secure_dir "$ledger_dir" || return
   fi
   (umask 077 && touch "$LEDGER") || return
+  LEDGER_TMP=""
+  trap - EXIT INT TERM
   chmod 600 "$LEDGER" 2>/dev/null || true
 }
 
@@ -67,6 +69,22 @@ pad_row() {
 
 unpad() {
   if [ "${1:-}" = "-" ]; then printf ''; else printf '%s' "${1:-}"; fi
+}
+
+# True when two workspace paths name the same tree: identical, or one contains
+# the other. Git repos already normalise to a shared toplevel; this gives
+# non-git workspaces the same behaviour instead of keying on an exact cwd.
+same_workspace_tree() {
+  local a="${1%/}" b="${2%/}"
+  [ -n "$a" ] && [ -n "$b" ] || return 1
+  case "$a" in
+    "$b") return 0 ;;
+    "$b"/*) return 0 ;;
+  esac
+  case "$b" in
+    "$a"/*) return 0 ;;
+  esac
+  return 1
 }
 
 workspace_root() {
@@ -116,7 +134,13 @@ print_header() {
 
 row_matches() {
   local want_root="$1" all_roots="$2" want_kind="$3" root="$4" kind="$5"
-  if [ "$all_roots" -ne 1 ] && [ "$root" != "$want_root" ]; then
+  # A non-git workspace has no toplevel to normalise to, so workspace_root
+  # falls back to the exact cwd of `add` — and an exact-equality test then made
+  # a row recorded in a subdirectory invisible from the project root, and vice
+  # versa. `stop --kill` silently skipped processes it had recorded itself.
+  # Rows in the same tree match in either direction; --all is still the way to
+  # reach the whole machine.
+  if [ "$all_roots" -ne 1 ] && ! same_workspace_tree "$root" "$want_root"; then
     return 1
   fi
   if [ -n "$want_kind" ] && [ "$kind" != "$want_kind" ]; then
@@ -540,9 +564,18 @@ prune_entries() {
     return 1
   fi
   ledger_dir="$(dirname "$LEDGER")"
+  # A trap, because an interrupted prune otherwise leaves a partial copy of the
+  # ledger next to the real one forever: nothing sweeps it, and it carries the
+  # same 0600 contents. The EXIT trap covers the ordinary path; INT/TERM cover
+  # the session ending underneath a prune, which is exactly when this runs.
+  ledger_tmp_cleanup() { [ -z "${LEDGER_TMP:-}" ] || rm -f "$LEDGER_TMP"; }
+  trap ledger_tmp_cleanup EXIT
+  trap 'ledger_tmp_cleanup; exit 130' INT
+  trap 'ledger_tmp_cleanup; exit 143' TERM
   if ! tmp="$(mktemp "$ledger_dir/.ledger.tsv.XXXXXX")"; then
     state_lock_release "$LEDGER_LOCK"
     echo "could not create ledger temporary file" >&2
+  LEDGER_TMP="$tmp"
     return 1
   fi
   chmod 600 "$tmp" 2>/dev/null || true
@@ -559,6 +592,8 @@ prune_entries() {
   done < "$LEDGER"
   if ! mv -f -- "$tmp" "$LEDGER"; then
     rm -f -- "$tmp" 2>/dev/null || true
+    LEDGER_TMP=""
+    trap - EXIT INT TERM
     state_lock_release "$LEDGER_LOCK"
     echo "could not replace ledger: $LEDGER" >&2
     return 1
