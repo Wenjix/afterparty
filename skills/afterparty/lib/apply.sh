@@ -24,6 +24,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/eligible.sh"
 . "$DIR/state.sh"
 . "$DIR/journal.sh"
+. "$DIR/vetoes.sh"
 
 # The reason a person typed under "## Why". plan promises this is recorded, so
 # it has to actually reach the journal rather than dying with the file.
@@ -55,8 +56,9 @@ fi
 # tests observe delegation without signalling anything real.
 AUDIT="$(command -v audit-processes.sh 2>/dev/null || printf '%s' "$DIR/audit-processes.sh")"
 
-N_OK=0 N_DRIFT=0 N_GONE=0 N_HELD=0 N_FAILED=0 N_SURVIVED=0
+N_OK=0 N_DRIFT=0 N_GONE=0 N_HELD=0 N_FAILED=0 N_SURVIVED=0 N_VETOED=0
 declare_targets=""
+wt_targets=""
 
 NOW="$(date +%s)"
 T="$(mktemp -d)" || exit 1
@@ -118,17 +120,35 @@ pending_pgid=""
 while IFS= read -r line; do
   case "$line" in
     '- [x]'*)
+      # Any checked line arms the next attribute line. Keying this on a pgid
+      # having been parsed would drop every worktree item silently, since a
+      # worktree line carries a path and no pgid -- the item would be counted
+      # nowhere and the receipt would look clean.
       pending_pgid="$(printf '%s\n' "$line" | sed -n 's/.*pgid \([0-9][0-9]*\).*/\1/p')"
+      [ -n "$pending_pgid" ] || pending_pgid="-"
       continue
       ;;
   esac
   [ -n "$pending_pgid" ] || continue
   case "$line" in
+    # A worktree item is recognised by its type token, not by shape. The path
+    # is read from 'path:' to end of line, which is the one parse that survives
+    # a path containing spaces -- every other field is a fixed-width token.
+    *"type: worktree"*)
+      want_fp="$(printf '%s\n' "$line" | sed -n 's/.*fingerprint: \([0-9a-f][0-9a-f]*\).*/\1/p')"
+      wtpath="$(printf '%s\n' "$line" | sed -n 's/.*[[:space:]]path: //p')"
+      pending_pgid=""
+      [ -n "$want_fp" ] && [ -n "$wtpath" ] || continue
+      wt_targets="${wt_targets}${want_fp}:${wtpath}"$'\n'
+      N_OK=$((N_OK + 1))
+      continue
+      ;;
     *fingerprint:*)
       want_fp="$(printf '%s\n' "$line" | sed -n 's/.*fingerprint: \([0-9a-f][0-9a-f]*\).*/\1/p')"
       category="$(printf '%s\n' "$line" | sed -n 's/.*category: \([a-z][a-z]*\).*/\1/p')"
       pg="$pending_pgid"
       pending_pgid=""
+      [ "$pg" = "-" ] && continue
       [ -n "$pg" ] && [ -n "$want_fp" ] && [ -n "$category" ] || continue
 
       if ! have_fp="$(fp_for_pgid "$pg" 2>/dev/null)" || [ -z "$have_fp" ]; then
@@ -193,10 +213,10 @@ journal_outcome() {
   # A survivor is not the same as a failure. audit declining to kill a
   # protected group is a CORRECT outcome; the work simply was not confirmed.
   # Filing that as "failed" made the receipt misdescribe a working refusal.
-  [ "$N_SURVIVED" -gt 0 ] && status=incomplete
+  { [ "$N_SURVIVED" -gt 0 ] || [ "$N_VETOED" -gt 0 ]; } && status=incomplete
   [ "$N_FAILED" -gt 0 ] && status=failed
   journal_action plan.apply "plan:$(basename "$PLAN")" "$status" \
-    "applied=$N_OK refused=$N_DRIFT gone=$N_GONE held=$N_HELD survived=$N_SURVIVED failed=$N_FAILED"
+    "applied=$N_OK refused=$N_DRIFT gone=$N_GONE held=$N_HELD vetoed=$N_VETOED survived=$N_SURVIVED failed=$N_FAILED"
 }
 
 REASON="$(plan_reason "$PLAN")"
@@ -263,15 +283,75 @@ for cat in tests dev browser; do
   IFS="$OLD_IFS"
 done
 
+# --- worktrees -------------------------------------------------------------
+#
+# apply does not reimplement removal policy either: it re-runs the vetoes and
+# hands the work to `git worktree remove`, WITHOUT --force. git refuses a dirty
+# or locked worktree on its own, and that refusal is a second layer under the
+# veto rather than something to argue past.
+wt_repo() {
+  local listing
+  listing="$(git -C "$1" worktree list --porcelain 2>/dev/null)" || return 1
+  # The first "worktree <path>" block is always the main worktree. Taken with
+  # parameter expansion rather than `| head -1`: closing the pipe early would
+  # SIGPIPE git under the pipefail this script runs with.
+  printf '%s' "${listing%%$'\n'*}" | sed -n 's/^worktree //p'
+}
+
+while IFS= read -r t; do
+  [ -n "$t" ] || continue
+  want_fp="${t%%:*}"
+  wtpath="${t#*:}"
+  if ! have_fp="$(fp_for_worktree "$wtpath" 2>/dev/null)" || [ -z "$have_fp" ]; then
+    s_skip "  $wtpath — gone, refused (no longer a worktree)"
+    N_GONE=$((N_GONE + 1)); N_OK=$((N_OK - 1))
+    continue
+  fi
+  if [ "$have_fp" != "$want_fp" ]; then
+    s_skip "  $wtpath — refused, fingerprint moved ($want_fp -> $have_fp)"
+    s_dim  "      it was committed to, dirtied or replaced since the plan; re-plan"
+    N_DRIFT=$((N_DRIFT + 1)); N_OK=$((N_OK - 1))
+    continue
+  fi
+  repo="$(wt_repo "$wtpath")" || repo=""
+  if [ -z "$repo" ]; then
+    s_skip "  $wtpath — refused, cannot locate the owning repository"
+    N_FAILED=$((N_FAILED + 1)); N_OK=$((N_OK - 1))
+    continue
+  fi
+  # The vetoes run HERE, against the world as it is now, not as the plan
+  # described it. A ticked box gets the item considered; it does not get the
+  # structural checks skipped.
+  reason="$(veto_for worktree "$wtpath" "$repo" "$T/cwd")"
+  if [ -n "$reason" ]; then
+    s_skip "  $wtpath — refused by the $reason veto, approval does not override it"
+    N_VETOED=$((N_VETOED + 1)); N_OK=$((N_OK - 1))
+    continue
+  fi
+  s_would "  removing worktree: $wtpath"
+  rm_err="$(git -C "$repo" worktree remove -- "$wtpath" 2>&1)" || rm_err="${rm_err:-removal failed}"
+  # Postcondition, not return code: git can report success while leaving the
+  # directory behind if a file inside it is held open.
+  if [ -e "$wtpath" ]; then
+    s_skip "  $wtpath — survived removal: ${rm_err:-still present}"
+    journal_action worktree.remove "$wtpath" failed "${rm_err:-target still exists}"
+    N_SURVIVED=$((N_SURVIVED + 1)); N_OK=$((N_OK - 1))
+    continue
+  fi
+  journal_action worktree.remove "$wtpath" succeeded "repo=$repo"
+done <<WT_EOF
+$wt_targets
+WT_EOF
+
 journal_outcome
-printf '%s applied · %s refused (drift) · %s gone · %s held · %s survived · %s failed\n' \
-  "$N_OK" "$N_DRIFT" "$N_GONE" "$N_HELD" "$N_SURVIVED" "$N_FAILED"
+printf '%s applied · %s refused (drift) · %s gone · %s held · %s vetoed · %s survived · %s failed\n' \
+  "$N_OK" "$N_DRIFT" "$N_GONE" "$N_HELD" "$N_VETOED" "$N_SURVIVED" "$N_FAILED"
 # Receipts are postcondition-based: a delegation that failed did not do the
 # work, so the exit status must say so.
 # A run where every approved group SURVIVED did no work, and a caller cannot
 # tell that from "cleaned up" if both exit 0. Survivors are counted as a
 # failure of the run, matching the postcondition rule: the receipt describes
 # what was confirmed, and nothing was.
-if [ "$N_FAILED" -ne 0 ] || [ "$N_SURVIVED" -ne 0 ]; then
+if [ "$N_FAILED" -ne 0 ] || [ "$N_SURVIVED" -ne 0 ] || [ "$N_VETOED" -ne 0 ]; then
   exit 1
 fi

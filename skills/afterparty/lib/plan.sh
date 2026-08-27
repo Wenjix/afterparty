@@ -232,7 +232,13 @@ else
       continue
     fi
     printf -- '- [ ] %-8s path %s  %s\n' "$verdict" "$wtpath" "$detail"
-    printf -- '      type: worktree  repo: %s  fingerprint: %s\n' "$repo" "$fp"
+    # path LAST, and prefixed with 'path:' rather than positional: a worktree
+    # path may contain spaces, and every other field is a fixed token, so
+    # 'everything after path:' is the one parse that cannot be ambiguous. The
+    # repo is not recorded because apply derives it from the worktree itself --
+    # a field a person could edit into disagreeing with the target is a field
+    # worth not having.
+    printf -- '      type: worktree  fingerprint: %s  path: %s\n' "$fp" "$wtpath"
   done < "$WT_ROWS"
 fi
 
