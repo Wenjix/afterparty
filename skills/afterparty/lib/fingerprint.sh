@@ -41,3 +41,63 @@ fp_for_pgid() {
   [ -n "$sig" ] || return 1
   printf '%s' "$sig" | fp_hash
 }
+
+# --- filesystem targets ---------------------------------------------------
+#
+# Process identity is "which process holds this pgid". Filesystem identity is
+# the same question in a different shape: a path is a NAME, not a thing, and
+# between plan and apply the name can come to point somewhere else -- a
+# reinstall, a checkout, a restore from backup. Killing the wrong process and
+# deleting the wrong directory are the same class of mistake.
+
+# dev:inode:mtime for $1, portably. GNU stat takes -c, BSD stat takes -f, and
+# neither accepts the other's flag; try GNU first and fall back, the same
+# GNU-then-BSD shape the touch and date calls in the tests use.
+fp_stat_id() {
+  local out
+  out="$(stat -c '%d:%i:%Y' -- "$1" 2>/dev/null)" && [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+  out="$(stat -f '%d:%i:%m' -- "$1" 2>/dev/null)" && [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+  return 1
+}
+
+# Fingerprint of the worktree at $1. Nonzero when it is gone or not a worktree.
+#
+# Path, HEAD, branch and cleanliness -- because "is this still the worktree I
+# reviewed" is not answered by the path alone. Someone committing inside it, or
+# leaving uncommitted work in it, changed the thing under review even though
+# every byte of the path is identical. Cleanliness is IN the fingerprint as well
+# as being a hard veto: the veto refuses the removal, and the fingerprint makes
+# the plan visibly stale so the person re-reads it rather than re-ticking it.
+fp_for_worktree() {
+  local p="$1" top head branch dirty
+  [ -n "$p" ] || return 1
+  [ -d "$p" ] || return 1
+  top="$(git -C "$p" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ -n "$top" ] || return 1
+  head="$(git -C "$p" rev-parse HEAD 2>/dev/null)" || head="(unborn)"
+  branch="$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null)" || branch="(detached)"
+  # Cannot-prove-clean counts as dirty, matching veto_is_dirty: a failing
+  # `git status` is not evidence of a clean tree.
+  if ! dirty="$(git -C "$p" status --porcelain 2>/dev/null)"; then
+    dirty="unknown"
+  fi
+  [ -n "$dirty" ] && dirty="dirty" || dirty="clean"
+  printf '%s\n%s\n%s\n%s\n' "$top" "$head" "$branch" "$dirty" | fp_hash
+}
+
+# Fingerprint of the artifact at $1. Nonzero when it is gone.
+#
+# What this proves is bounded, and the bound is worth stating: dev:inode
+# identifies the directory itself, so a path re-created under the same name
+# reads as a different item and is refused. It does NOT prove the contents are
+# unchanged -- a directory's mtime does not move when a file deep inside it
+# changes. Contents are not what approval was given for; the person approved
+# "this artifact directory, which I judged abandoned", and staleness is
+# re-checked separately at apply time.
+fp_for_artifact() {
+  local p="$1" id
+  [ -n "$p" ] || return 1
+  [ -e "$p" ] || return 1
+  id="$(fp_stat_id "$p")" || return 1
+  printf '%s\n%s\n' "$p" "$id" | fp_hash
+}
