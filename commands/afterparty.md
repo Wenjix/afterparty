@@ -20,10 +20,11 @@ run the matching gated command(s) with the Bash tool and report what
 happened:
 
 - `bash "${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty" stop --kill` — stop ledger-recorded groups
-- `bash "${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty" audit --kill <tests|dev|browser>` — kill stray processes by category
-- `bash "${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty" git --clean` — apply the safe git subset
+- `bash "${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty" audit --kill <tests|dev|browser> --pgid <reviewed-pgid>` — kill reviewed stray groups in a category
+- `bash "${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty" git` — report git leftovers (`--clean` is report-only; removal goes through `plan`/`apply`)
 
 Otherwise just offer those commands. Never signal protected processes (the
 scripts refuse anyway); unmerged branches, dirty worktrees, and stashes are
-report-only. The last session's report, if any, is at `report.md` (repo
-root, when gitignored) or `~/.cache/agent-processes/report.md`.
+report-only. Treat a nonzero cleanup status as a partial failure and report it
+instead of claiming success. Find the prior session report with
+`bash "${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty" report-path`.

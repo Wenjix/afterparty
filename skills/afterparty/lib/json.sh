@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # json.sh - shared JSON Lines helpers, sourced (not executed) by the lib
 # scripts that support --json: audit-git.sh, audit-processes.sh,
-# process-ledger.sh. Pure tr/sed, no jq. Each finding is one compact object
+# process-ledger.sh. Pure Bash, no jq. Each finding is one compact object
 # per line (JSON Lines) so the router's sequential script calls compose into
 # one valid stream with no assembly step.
 #
@@ -10,12 +10,18 @@
 # and the escaping obviously correct. Keys are trusted literals and are never
 # escaped; values go through json_escape.
 
-# Escape a string for use inside a JSON double-quoted value.
+# Escape a string for use inside a JSON double-quoted value. Bash parameter
+# expansion keeps this hot path fast on Git Bash, where spawning tr/sed for
+# every field is disproportionately expensive.
 json_escape() {
-  printf '%s' "${1-}" \
-    | tr '\t\r\n' '   ' \
-    | tr -d '\000-\037' \
-    | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+  local value="${1-}"
+  value="${value//$'\t'/ }"
+  value="${value//$'\r'/ }"
+  value="${value//$'\n'/ }"
+  value="${value//[$'\001'-$'\010'$'\013'$'\014'$'\016'-$'\037']/}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '%s' "$value"
 }
 
 # "key":"value" (empty string allowed).
@@ -45,4 +51,11 @@ json_kvb() {
 
 # Join "key":value pairs into one object line. A pair argument may itself
 # contain commas (e.g. an "applied"+"error" pair) — it is passed through as-is.
-json_row() { local IFS=','; printf '{%s}\n' "$*"; }
+json_row() {
+  local IFS=','
+  if [ "$#" -gt 0 ]; then
+    printf '{"schema_version":1,%s}\n' "$*"
+  else
+    printf '{"schema_version":1}\n'
+  fi
+}

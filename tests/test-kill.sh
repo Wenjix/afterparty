@@ -95,13 +95,62 @@ B4=$FAILS
 P4="$(spawn_group sleep 300)"
 [ -n "$P4" ] || fail "spawn failed (recycle test)"
 SPAWNED_GROUPS="$SPAWNED_GROUPS $P4"
-printf '2026-07-14T00:00:00Z\t%s\t%s\t%s\t1\tdev\t-\trecycle test\tsleep 300\n' \
-  "$(git -C "$REPO" rev-parse --show-toplevel)" "$REPO" "$P4" > "$T/recycled.tsv"
+RECORDED_PGID=$((P4 + 1))
+TEST_PGID="$(ps -o pgid= -p $$ 2>/dev/null | tr -d '[:space:]')"
+if [ "$RECORDED_PGID" = "$TEST_PGID" ]; then
+  RECORDED_PGID=$((RECORDED_PGID + 1))
+fi
+printf '2026-07-14T00:00:00Z\t%s\t%s\t%s\t%s\tdev\t-\trecycle test\tsleep 300\n' \
+  "$(git -C "$REPO" rev-parse --show-toplevel)" "$REPO" "$P4" "$RECORDED_PGID" > "$T/recycled.tsv"
 OUT="$(AGENT_PROCESS_LEDGER="$T/recycled.tsv" bash "$LIB/process-ledger.sh" stop --kill 2>/dev/null)"
 printf '%s\n' "$OUT" | grep -q "skip pid $P4: group changed since it was recorded" \
   || fail "recycle guard: skip message missing"
 kill -0 "$P4" 2>/dev/null || fail "recycle guard: process was killed despite mismatch"
 [ "$FAILS" -eq "$B4" ] && pass "recycled-pid guard refuses a group that no longer matches"
+
+echo
+# ---------- K-expect: identity is enforced at the signal boundary ----------
+# This must use a command that MATCHES a kill category. An earlier version
+# spawned `sleep`, which matches nothing, so audit exited at "nothing to kill"
+# before kill_group ever ran -- the group survived for the wrong reason and the
+# test asserted nothing. nodemon is in DEV_RE, so the gate is actually reached.
+. "$LIB/fingerprint.sh"
+_b=$FAILS
+PG_A="$(spawn_group "$T/bin/nodemon")"
+SPAWNED_GROUPS="$SPAWNED_GROUPS $PG_A"
+if [ -z "$PG_A" ]; then
+  fail "K-expect: could not spawn a dev-category group"
+else
+  FP_A="$(fp_for_pgid "$PG_A")"
+  [ -n "$FP_A" ] || fail "K-expect: could not fingerprint a live group"
+
+  # Wrong fingerprint: the group matches dev, so kill_group IS reached, and
+  # only the identity gate can save it.
+  OUT="$(AFTERPARTY_STYLE=never bash "$LIB/audit-processes.sh" --kill dev \
+    --pgid "$PG_A" --expect "$PG_A:ffffffffffff" 2>&1)"
+  if kill -0 -"$PG_A" 2>/dev/null; then
+    pass "K-expect: a mismatched fingerprint prevented the signal"
+  else
+    fail "K-expect: group was killed despite a mismatched fingerprint"
+  fi
+  printf '%s\n' "$OUT" | grep -q 'identity changed' \
+    || fail "K-expect: identity gate never ran (audit said: $(printf '%s' "$OUT" | tr '\n' '|'))"
+
+  # Matching fingerprint on a second, equivalent group: proves the gate is what
+  # spared the first one, and not merely that nothing was killable.
+  PG_B="$(spawn_group "$T/bin/nodemon")"
+  SPAWNED_GROUPS="$SPAWNED_GROUPS $PG_B"
+  FP_B="$(fp_for_pgid "$PG_B")"
+  AFTERPARTY_STYLE=never bash "$LIB/audit-processes.sh" --kill dev \
+    --pgid "$PG_B" --expect "$PG_B:$FP_B" >/dev/null 2>&1
+  sleep 1
+  if kill -0 -"$PG_B" 2>/dev/null; then
+    fail "K-expect: a matching fingerprint failed to kill a dev group"
+  else
+    pass "K-expect: a matching fingerprint let the kill through"
+  fi
+fi
+[ "$FAILS" -eq "$_b" ] && pass "K-expect: identity decides, not category alone"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi

@@ -1,51 +1,59 @@
 ---
 name: afterparty
-description: Use before starting another localhost server, before ending a turn that spawned long-running processes, when CPU or memory is high, when disk is low, or when the user says "what is running", "devclean", "orphaned MCP", "cleanup terminals", "localhosts out of control", "free disk space", "stale worktrees", or "leftover branches".
+description: Use before starting another localhost server, before ending a turn that spawned long-running processes, when CPU or memory is high, when disk is low, or when the user says "what is running", "what did I leave running", "welcome back", "approve cleanup", "devclean", "orphaned MCP", "cleanup terminals", "localhosts out of control", "free disk space", "stale worktrees", or "leftover branches".
+license: ./LICENSE
+compatibility: Requires Bash 3.2+, Git, and standard Unix process tools. macOS/Linux terminals and WSL are supported; Git Bash provides Git/filesystem commands with degraded process audits.
+metadata:
+  author: Wenjix
+  version: "0.9.0"
 ---
 
 # Afterparty
 
-This skill is the memory hook. It exists so agents remember to run the script.
-The deterministic cleanup behavior lives in this skill's bundled
-`bin/afterparty` and `lib/*.sh`. `$CLAUDE_SKILL_DIR` below is this skill's
-directory (Claude Code sets it; in other harnesses substitute the skill's base
-path).
+This is the memory hook; deterministic behavior lives in the bundled CLI.
+`$CLAUDE_SKILL_DIR` is this skill's directory. Requirements: a macOS/Linux
+terminal (Windows: WSL, or Git Bash with degraded process audits), Git, and
+standard Unix process tools.
 
-Requirements: macOS/Linux (on Windows use Git Bash or WSL) and `ripgrep`;
-`lsof` is optional (localhost report).
+Returning to the machine, see what every workspace still holds, sorted by how
+long each was left alone (reports only; it never acts):
 
-Run a dry-run audit first (processes, localhost ports, git leftovers —
-worktrees, agent branches, conflict litter):
+```bash
+"$CLAUDE_SKILL_DIR/bin/afterparty" glance
+```
+
+Cleaning up for real is two steps, so a person approves before anything dies:
+
+```bash
+"$CLAUDE_SKILL_DIR/bin/afterparty" plan          # writes a checklist
+"$CLAUDE_SKILL_DIR/bin/afterparty" apply <plan>  # runs only the checked boxes
+```
+
+Audit before starting duplicate services and before ending a session:
 
 ```bash
 "$CLAUDE_SKILL_DIR/bin/afterparty" audit
 ```
 
-Add `--json` for JSON Lines. `audit --report` saves the report for the next
-session: `report.md` if the repo gitignores it, else
-`~/.cache/agent-processes/report.md`.
-
-Record long-running commands you start:
+Record long-running commands immediately:
 
 ```bash
 "$CLAUDE_SKILL_DIR/bin/afterparty" add --pid <PID> --kind dev --port <PORT> --purpose "<why>" -- <command>
 ```
 
-Before ending the turn:
-
-```bash
-"$CLAUDE_SKILL_DIR/bin/afterparty" audit
-```
-
 Only act after reviewing the dry run:
 
 ```bash
-"$CLAUDE_SKILL_DIR/bin/afterparty" stop --kill            # stop process groups recorded in the ledger
-"$CLAUDE_SKILL_DIR/bin/afterparty" audit --kill tests,dev # kill stray processes by category pattern
-"$CLAUDE_SKILL_DIR/bin/afterparty" git --clean            # prune stale worktrees, merged agent branches
+"$CLAUDE_SKILL_DIR/bin/afterparty" stop --kill
+"$CLAUDE_SKILL_DIR/bin/afterparty" audit --kill dev --pgid <reviewed-pgid>
+"$CLAUDE_SKILL_DIR/bin/afterparty" git --clean
 "$CLAUDE_SKILL_DIR/bin/afterparty" artifacts --clean
 "$CLAUDE_SKILL_DIR/bin/afterparty" devclean --apply
 ```
+
+Use `--json` for versioned JSON Lines. `audit --report` persists the next
+session's report; locate it with `report-path`. `actions` shows the private
+local mutation journal.
 
 Never kill the editor, Codex, the user's shell, or shared MCP servers unless the
 script proves they are safe orphaned targets.

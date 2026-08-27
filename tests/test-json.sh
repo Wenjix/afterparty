@@ -13,6 +13,18 @@ pass() { echo "ok: $*"; }
 T="$(mktemp -d)"
 trap 'cd /; rm -rf "$T"' EXIT
 
+# ---------- shared escaper: whitespace flattening + control stripping ----------
+. "$LIB/json.sh"
+CONTROL_VALUE=$'a\tb\nc\001d"e\\f'
+ESCAPED_ROW="$(json_row "$(json_kv value "$CONTROL_VALUE")")"
+printf '%s\n' "$ESCAPED_ROW" | "$PY" -c '
+import json, sys
+r = json.loads(sys.stdin.readline())
+assert r["schema_version"] == 1
+assert r["value"] == "a b cd\"e\\f", repr(r["value"])
+' || fail "shared JSON escaping changed control-character semantics"
+pass "shared JSON escaper preserves valid single-line JSON"
+
 PYCHECK='
 import json, sys
 rows = [json.loads(l) for l in sys.stdin if l.strip()]
@@ -80,18 +92,46 @@ pass "audit --report writes gitignored repo-root report.md"
 
 # ---------- audit --report in a NON-opted-in repo -> ledger home ----------
 mkdir -p "$T/plain" && cd "$T/plain" && git init -q
+FALLBACK_REPORT="$(XDG_CACHE_HOME="$T/cache" "$BIN" report-path)"
 XDG_CACHE_HOME="$T/cache" AGENT_PROCESS_LEDGER="$FAKE" "$BIN" audit --report >/dev/null 2>"$T/r2.err"; RC=$?
 [ "$RC" -eq 0 ] || fail "audit --report (plain repo) exit=$RC"
-[ -f "$T/cache/agent-processes/report.md" ] || fail "fallback report.md not written to ledger home"
+[ -f "$FALLBACK_REPORT" ] || fail "fallback report.md not written to repo-scoped cache"
 [ -f "$T/plain/report.md" ] && fail "litter: report.md written into non-opted-in repo"
 pass "litter guard: non-opted-in repo falls back to ledger home"
 
 # ---------- audit --report outside any repo ----------
 cd "$T"
+NO_REPO_REPORT="$(XDG_CACHE_HOME="$T/cache2" "$BIN" report-path)"
 XDG_CACHE_HOME="$T/cache2" "$BIN" audit --report >/dev/null 2>&1; RC=$?
 [ "$RC" -eq 0 ] || fail "audit --report (no repo) exit=$RC"
-[ -f "$T/cache2/agent-processes/report.md" ] || fail "no-repo report not written to ledger home"
+[ -f "$NO_REPO_REPORT" ] || fail "no-repo report not written to workspace-scoped cache"
 pass "audit --report outside a repo still lands in ledger home"
 
 echo
+# ---------- J-glob: argv must never glob against the caller's cwd ----------
+# A process whose command line contains * had that * expanded against whatever
+# directory the audit happened to run from, replacing the command text with
+# unrelated filenames — corrupting the field AND leaking those names into a
+# machine-readable surface an agent consumes. list_matches was already guarded
+# with `set -f`; the two JSON emitters were not.
+GT="$(mktemp -d)"
+mkdir -p "$GT/shim" "$GT/cwd"
+touch "$GT/cwd/leaked-one.txt" "$GT/cwd/leaked-two.txt"
+cat > "$GT/shim/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  *pid,ppid,pgid,%cpu,etime,command*) printf '5001 1 5001 0.0 01:00:00 npm run dev -- --filter *\n' ;;
+  *) exit 1 ;;
+esac
+PS
+chmod +x "$GT/shim/ps"
+_b=$FAILS
+GOUT="$(cd "$GT/cwd" && PATH="$GT/shim:$PATH" bash "$LIB/audit-processes.sh" --json 2>/dev/null | grep '"section":"processes"')"
+printf '%s\n' "$GOUT" | grep -q 'leaked-one.txt' \
+  && fail "J-glob: a filename from the caller's cwd leaked into the JSON command field"
+printf '%s\n' "$GOUT" | grep -q -- '--filter \*' \
+  || fail "J-glob: the literal * was lost from the command field: $GOUT"
+rm -rf "$GT"
+[ "$FAILS" -eq "$_b" ] && pass "J-glob: argv is emitted literally, with no globbing against cwd"
+
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi
