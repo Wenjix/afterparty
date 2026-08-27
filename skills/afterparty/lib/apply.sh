@@ -190,7 +190,11 @@ done < "$PLAN"
 journal_outcome() {
   local status=succeeded
   [ "$N_OK" -gt 0 ] || status=no-op
-  if [ "$N_FAILED" -gt 0 ] || [ "$N_SURVIVED" -gt 0 ]; then status=failed; fi
+  # A survivor is not the same as a failure. audit declining to kill a
+  # protected group is a CORRECT outcome; the work simply was not confirmed.
+  # Filing that as "failed" made the receipt misdescribe a working refusal.
+  [ "$N_SURVIVED" -gt 0 ] && status=incomplete
+  [ "$N_FAILED" -gt 0 ] && status=failed
   journal_action plan.apply "plan:$(basename "$PLAN")" "$status" \
     "applied=$N_OK refused=$N_DRIFT gone=$N_GONE held=$N_HELD survived=$N_SURVIVED failed=$N_FAILED"
 }

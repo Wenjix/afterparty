@@ -44,8 +44,6 @@ ensure_ledger() {
     state_secure_dir "$ledger_dir" || return
   fi
   (umask 077 && touch "$LEDGER") || return
-  LEDGER_TMP=""
-  trap - EXIT INT TERM
   chmod 600 "$LEDGER" 2>/dev/null || true
 }
 
@@ -69,22 +67,6 @@ pad_row() {
 
 unpad() {
   if [ "${1:-}" = "-" ]; then printf ''; else printf '%s' "${1:-}"; fi
-}
-
-# True when two workspace paths name the same tree: identical, or one contains
-# the other. Git repos already normalise to a shared toplevel; this gives
-# non-git workspaces the same behaviour instead of keying on an exact cwd.
-same_workspace_tree() {
-  local a="${1%/}" b="${2%/}"
-  [ -n "$a" ] && [ -n "$b" ] || return 1
-  case "$a" in
-    "$b") return 0 ;;
-    "$b"/*) return 0 ;;
-  esac
-  case "$b" in
-    "$a"/*) return 0 ;;
-  esac
-  return 1
 }
 
 workspace_root() {
@@ -134,13 +116,17 @@ print_header() {
 
 row_matches() {
   local want_root="$1" all_roots="$2" want_kind="$3" root="$4" kind="$5"
-  # A non-git workspace has no toplevel to normalise to, so workspace_root
-  # falls back to the exact cwd of `add` — and an exact-equality test then made
-  # a row recorded in a subdirectory invisible from the project root, and vice
-  # versa. `stop --kill` silently skipped processes it had recorded itself.
-  # Rows in the same tree match in either direction; --all is still the way to
-  # reach the whole machine.
-  if [ "$all_roots" -ne 1 ] && ! same_workspace_tree "$root" "$want_root"; then
+  # Exact root equality, deliberately. A non-git workspace has no toplevel to
+  # normalise to, so a row added in a subdirectory does not match from the
+  # parent — surprising, and it was briefly "fixed" by matching any path that
+  # contained or was contained by the other. That was strictly worse: $HOME is
+  # not a repo, so any session sitting at ~ or ~/Documents silently acquired
+  # --all semantics and `stop --kill` reached other sessions' dev servers. It
+  # also overrode git's own answer, matching across two distinct toplevels.
+  #
+  # Missing a row is fail-safe: nothing dies. Matching a stranger's row is not.
+  # Use --root <dir> or --all to widen scope deliberately.
+  if [ "$all_roots" -ne 1 ] && [ "$root" != "$want_root" ]; then
     return 1
   fi
   if [ -n "$want_kind" ] && [ "$kind" != "$want_kind" ]; then
@@ -568,16 +554,25 @@ prune_entries() {
   # ledger next to the real one forever: nothing sweeps it, and it carries the
   # same 0600 contents. The EXIT trap covers the ordinary path; INT/TERM cover
   # the session ending underneath a prune, which is exactly when this runs.
-  ledger_tmp_cleanup() { [ -z "${LEDGER_TMP:-}" ] || rm -f "$LEDGER_TMP"; }
+  ledger_tmp_cleanup() {
+    [ -z "${LEDGER_TMP:-}" ] || rm -f "$LEDGER_TMP"
+    # Release the lock too: an interrupted prune otherwise leaves it held. It
+    # is self-healing via state_lock_is_stale, but only after the stale window.
+    state_lock_release "$LEDGER_LOCK" 2>/dev/null || true
+  }
   trap ledger_tmp_cleanup EXIT
   trap 'ledger_tmp_cleanup; exit 130' INT
   trap 'ledger_tmp_cleanup; exit 143' TERM
   if ! tmp="$(mktemp "$ledger_dir/.ledger.tsv.XXXXXX")"; then
     state_lock_release "$LEDGER_LOCK"
     echo "could not create ledger temporary file" >&2
-  LEDGER_TMP="$tmp"
     return 1
   fi
+  # AFTER the check: on the failure path $tmp is empty, so assigning there left
+  # ledger_tmp_cleanup short-circuiting on an empty value and all three traps
+  # sweeping nothing. A commented, plausible-looking trap that provably does
+  # nothing is worse than no trap, because the next reader stops checking.
+  LEDGER_TMP="$tmp"
   chmod 600 "$tmp" 2>/dev/null || true
   while IFS= read -r __row; do
     IFS=$'\t' read -r ts root cwd pid pgid kind port purpose command_label <<< "$(pad_row "$__row")"
@@ -598,6 +593,8 @@ prune_entries() {
     echo "could not replace ledger: $LEDGER" >&2
     return 1
   fi
+  LEDGER_TMP=""
+  trap - EXIT INT TERM
   chmod 600 "$LEDGER" 2>/dev/null || true
   state_lock_release "$LEDGER_LOCK"
   s_ok "pruned $dropped dead entr$([ "$dropped" -eq 1 ] && echo y || echo ies); kept $kept"

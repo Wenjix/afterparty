@@ -88,5 +88,43 @@ UNIQ="$(sort -u "$LEDGER" | wc -l | tr -d '[:space:]')"
 [ "$UNIQ" -eq "$EXPECTED" ] || fail "C4: $UNIQ unique rows of $EXPECTED — rows were duplicated"
 [ "$FAILS" -eq "$_b" ] && pass "C4: $WRITERS concurrent writers wrote $EXPECTED intact rows"
 
+# ---------- C5: an interrupted prune leaves no copy of the ledger ----------
+# Each leftover is a full 0600 copy of the machine-wide ledger — every
+# workspace path, purpose string and command line of every agent session — and
+# nothing in the tool ever sweeps that directory.
+#
+# The first version of this guard was INERT: the trap existed, was commented,
+# and swept nothing, because LEDGER_TMP was assigned inside the mktemp FAILURE
+# branch where the variable is empty. A plausible-looking trap that does
+# nothing is worse than no trap, so this asserts the sweep rather than the
+# presence of a trap.
+_b=$FAILS
+PT="$T/prune"; mkdir -p "$PT/shim"
+printf '#!/usr/bin/env bash\nsleep 0.3\nexit 1\n' > "$PT/shim/ps"; chmod +x "$PT/shim/ps"
+PL="$PT/ledger.tsv"
+i=1; while [ "$i" -le 30 ]; do
+  printf '2026-01-01T00:00:00Z\t/r\t/r\t9%04d\t\tdev\t\t\tsleep\n' "$i" >> "$PL"
+  i=$((i + 1))
+done
+( PATH="$PT/shim:$PATH" AGENT_PROCESS_LEDGER="$PL" bash "$LIB/process-ledger.sh" prune --all >/dev/null 2>&1 ) &
+PRUNE_PID=$!
+sleep 2
+MID="$(find "$PT" -name '.ledger.tsv.*' 2>/dev/null | wc -l | tr -d '[:space:]')"
+kill -TERM "$PRUNE_PID" 2>/dev/null
+wait "$PRUNE_PID" 2>/dev/null
+PRUNE_STATUS=$?
+LEFT="$(find "$PT" -name '.ledger.tsv.*' 2>/dev/null | wc -l | tr -d '[:space:]')"
+
+# (i) the temp must have EXISTED mid-flight, or the absence check below is
+# vacuous — a prune that never created one also leaves none behind
+[ "$MID" -ge 1 ] || fail "C5: no temp existed mid-prune, so the cleanup assertion would prove nothing"
+# (ii) the run must have been INTERRUPTED, or a completed prune passes trivially
+[ "$PRUNE_STATUS" -eq 143 ] || fail "C5: prune was not interrupted (status $PRUNE_STATUS) — the TERM trap never ran"
+# (iii) and nothing may remain
+[ "$LEFT" -eq 0 ] || fail "C5: $LEFT ledger copy/copies survived an interrupted prune"
+# the real ledger must be intact — cleanup must not have taken the original
+[ "$(wc -l < "$PL" | tr -d '[:space:]')" -eq 30 ] || fail "C5: the ledger itself lost rows"
+[ "$FAILS" -eq "$_b" ] && pass "C5: an interrupted prune sweeps its temp and leaves the ledger intact"
+
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi

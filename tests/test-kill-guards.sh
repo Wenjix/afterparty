@@ -271,14 +271,21 @@ _b=$FAILS
 mkledger /some/other/workspace
 : > "$KILLLOG"; ( cd "$T" && run_stop >/dev/null 2>&1 )
 grep -qE -- '-880[12]' "$KILLLOG"   && fail "KG6: a row from an unrelated workspace was signalled without --all"
-# Recorded in a SUBDIRECTORY, stopped from the parent. A non-git workspace has
-# no toplevel to normalise to, so an exact-equality test made this row
-# invisible from the project root -- stop --kill silently skipped a process it
-# had recorded itself.
-mkdir -p "$T/ws/sub"
-mkledger "$T/ws/sub"
+# A row belonging to ANOTHER workspace must not be signalled without --all.
+# This briefly matched by path containment so a subdirectory row would be found
+# from the parent — which also meant $HOME, not being a repo, silently acquired
+# --all semantics and reached every project beneath it. Missing a row is
+# fail-safe; matching a stranger's row is not.
+mkdir -p "$T/ws/other"
+mkledger "$T/ws/other"
 : > "$KILLLOG"; ( cd "$T/ws" && run_stop >/dev/null 2>&1 )
-grep -q -- '-8801' "$KILLLOG" || fail "KG6: a row recorded in a subdirectory was invisible from the workspace root"
+grep -qE -- '-880[12]' "$KILLLOG" \
+  && fail "KG6: signalled a row belonging to a different workspace without --all"
+# Positive control in the SAME world: --all reaches it, so the absence above is
+# a scope decision and not an empty fixture or a dead shim.
+: > "$KILLLOG"; ( cd "$T/ws" && run_stop --all >/dev/null 2>&1 )
+grep -q -- '-8801' "$KILLLOG" \
+  || fail "KG6: --all did not reach the row either — the fixture proves nothing"
 [ "$FAILS" -eq "$_b" ] && pass "KG6: the default scope is this workspace, and it is not empty"
 
 echo
