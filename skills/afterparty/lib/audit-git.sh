@@ -558,8 +558,11 @@ if [ "$JSON" -eq 0 ]; then
     s_mode "$C_RED" "CLEAN" " — sweeping up the git leftovers in $ROOT (safe subset only)" \
       "CLEAN — applying safe git cleanup in $ROOT"
   else
-    s_mode "$C_YEL" "DRY RUN" " — checking what the party did to $ROOT (--clean applies the safe subset)" \
-      "DRY RUN — reporting git leftovers in $ROOT (use --clean to apply the safe subset)"
+    # --clean stopped applying anything in 0.9.0; it reports and exits 2. The
+    # banner kept advertising it as the way to act, which is the one line a
+    # person reads before deciding what to run next.
+    s_mode "$C_YEL" "DRY RUN" " — checking what the party did to $ROOT (approve removals via afterparty plan)" \
+      "DRY RUN — reporting git leftovers in $ROOT (approve removals via 'afterparty plan', then 'afterparty apply')"
   fi
 fi
 
