@@ -103,6 +103,13 @@ ps -Ao pid,pgid,%cpu,command 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {
   sed 's/^/L\t/' "$T/listen"
   sed 's/^/P\t/' "$T/ps"
 } | awk -F'\t' -v now="$NOW" '
+    # macOS awk (20200816) compares strings via locale collation, and reports
+    # two DIFFERENT multibyte paths as equal: "/w/プロジェクト/web" == "/w/別
+    # プロジェクト/web" evaluates TRUE, and so does the substr form. index() is
+    # byte-exact, so equality is length-plus-index. Without this a process is
+    # attributed to the WRONG workspace and two workspaces merge into one row —
+    # on the surface a person approves kills from.
+    function samepath(a, b) { return (length(a) == length(b) && index(a, b) == 1) }
   $1 == "W" { wsts[$3] = $2; next }
   $1 == "C" { cwd[$2] = $3; next }
   $1 == "L" { port[$2] = ($2 in port ? port[$2] " " $3 : $3); next }
@@ -113,7 +120,7 @@ ps -Ao pid,pgid,%cpu,command 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {
     # repo/packages/web belongs to repo, not to some shorter ancestor.
     best = ""
     for (w in wsts) {
-      if (dir == w || index(dir, w "/") == 1) {
+      if (samepath(dir, w) || index(dir, w "/") == 1) {
         if (length(w) > length(best)) best = w
       }
     }
@@ -201,7 +208,7 @@ HERE="$(pwd -P 2>/dev/null || pwd)"
 while IFS=$'\t' read -r ts path procs cpu ports; do
   [ -n "$path" ] || continue
   age=$((NOW - ts))
-  name="$(awk -F'\t' -v p="$path" '$1 == p { print $2; exit }' "$T/labels")"
+  name="$(awk -F'\t' -v p="$path" 'function samepath(a,b){return (length(a)==length(b) && index(a,b)==1)} samepath($1,p) { print $2; exit }' "$T/labels")"
   [ -n "$name" ] || name="$(ws_label "$path")"
   case "$HERE" in "$path"|"$path"/*) name="$name ·here" ;; esac
   printf '  %-28s %-14s %5s  %s  %s\n' \

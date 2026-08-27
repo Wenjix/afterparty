@@ -104,7 +104,7 @@ group_facts() {
     if [ "$mixed" -eq 1 ]; then
       printf -- 'mixed\t%s' "$maxcpu"
     elif [ -n "$best" ]; then
-      printf '%s\t%s' "$(awk -F'\t' -v w="$best" '$2 == w { print $1; exit }' "$T/ws")" "$maxcpu"
+      printf '%s\t%s' "$(awk -F'\t' -v w="$best" 'function samepath(a,b){return (length(a)==length(b) && index(a,b)==1)} samepath($2,w) { print $1; exit }' "$T/ws")" "$maxcpu"
     else
       printf -- '-\t%s' "$maxcpu"
     fi

@@ -122,6 +122,9 @@ LEFT="$(find "$PT" -name '.ledger.tsv.*' 2>/dev/null | wc -l | tr -d '[:space:]'
 [ "$PRUNE_STATUS" -eq 143 ] || fail "C5: prune was not interrupted (status $PRUNE_STATUS) — the TERM trap never ran"
 # (iii) and nothing may remain
 [ "$LEFT" -eq 0 ] || fail "C5: $LEFT ledger copy/copies survived an interrupted prune"
+# The lock too: an interrupted prune that keeps it held blocks every other
+# session until the stale window expires. Nothing here looked at it before.
+[ ! -e "$PL.lock" ] || fail "C5: the ledger lock survived an interrupted prune"
 # the real ledger must be intact — cleanup must not have taken the original
 [ "$(wc -l < "$PL" | tr -d '[:space:]')" -eq 30 ] || fail "C5: the ledger itself lost rows"
 [ "$FAILS" -eq "$_b" ] && pass "C5: an interrupted prune sweeps its temp and leaves the ledger intact"

@@ -146,6 +146,7 @@ chmod +x "$SHIM/ps"
 OUT="$(run_kill --kill dev)"; rc=$?
 grep -q -- '-77800' "$KILLLOG" && fail "KG2b: signalled a group that had already exited"
 printf '%s
+printf '%s\n' "$LOUT" | grep -q 'kill pgid 77800' || fail "KG5: the row never reached the signalling loop — the pre-SIGTERM guard was not the one tested"
 ' "$OUT" | grep -qi 'already exited'   || fail "KG2b: an exited group was not reported as already gone: $OUT"
 printf '%s
 ' "$OUT" | grep -qi 'could not inspect'   && fail "KG2b: an exited group was still reported as an inspection failure"
@@ -195,13 +196,21 @@ case "$*" in
 ' ;;   # this shell's own group
   *-p\ 77800*)           printf '77800 npm run dev
 ' ;;
-  # the recheck before SIGTERM: ps SUCCEEDS and the group is gone
-  *-Ao\ pgid=,command=*) exit 0 ;;
-  *-Ao\ pgid=*)          exit 0 ;;
+  # STATEFUL: alive on the FIRST scan so the row survives DISCOVERY, gone on
+  # every later one so the PRE-SIGTERM recheck is the call site exercised. An
+  # always-absent shim withheld the row at the discovery guard instead, so
+  # $groups was empty, the signalling loop never ran, and both assertions were
+  # satisfied by a guard the case is not about.
+  *-Ao\ pgid=,command=*)
+    n=0; [ -f "$KG5CTR" ] && n=$(cat "$KG5CTR"); echo $((n + 1)) > "$KG5CTR"
+    [ "$n" -ge 1 ] && exit 0
+    printf '77800 npm run dev\n' ;;
+  *-Ao\ pgid=*) exit 0 ;;
   *) exit 1 ;;
 esac
 PS
 chmod +x "$LSHIM/ps"
+KG5CTR="$T/kg5ctr"; rm -f "$KG5CTR"; export KG5CTR
 printf '2026-01-01T00:00:00Z	/r	/r	77800	77800	dev			npm run dev
 ' > "$T/ledger.tsv"
 : > "$KILLLOG"

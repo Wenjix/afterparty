@@ -170,8 +170,11 @@ DUP="$(printf '%s\n' "$LBL" | cut -f2 | sort | uniq -d)"
   || fail "W8: an unambiguous workspace was not shortened to one segment"
 # longer only where it must be
 W1="$(printf '%s\n' "$LBL" | awk -F'\t' '$1 == "/client-one/apps/web" {print $2}')"
-printf '%s' "$W1" | grep -q 'client-one' \
-  || fail "W8: a colliding workspace was not lengthened enough to distinguish it: $W1"
+# EXACT, not a substring: the absolute-path fallback "/client-one/apps/web"
+# also contains "client-one", so the substring check passed both for the
+# correct label AND for the degradation the case exists to catch.
+[ "$W1" = "client-one/apps/web" ] \
+  || fail "W8: expected the two-segment label, got '$W1' (a leading / means it fell back to the full path)"
 [ "$FAILS" -eq "$_b" ] && pass "W8: labels are the shortest suffix unique within the displayed table"
 
 # ---------- W9: uniqueness must survive rendering ----------

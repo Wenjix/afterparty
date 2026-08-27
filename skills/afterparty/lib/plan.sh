@@ -46,13 +46,20 @@ ps -Ao pid,pgid,%cpu,command 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {
   sed 's/^/C\t/' "$T/cwd"
   sed 's/^/P\t/' "$T/ps"
 } | awk -F'\t' '
+    # macOS awk (20200816) compares strings via locale collation, and reports
+    # two DIFFERENT multibyte paths as equal: "/w/プロジェクト/web" == "/w/別
+    # プロジェクト/web" evaluates TRUE, and so does the substr form. index() is
+    # byte-exact, so equality is length-plus-index. Without this a process is
+    # attributed to the WRONG workspace and two workspaces merge into one row —
+    # on the surface a person approves kills from.
+    function samepath(a, b) { return (length(a) == length(b) && index(a, b) == 1) }
   $1 == "W" { wsts[$3] = $2; next }
   $1 == "C" { cwd[$2] = $3; next }
   $1 == "P" {
     pid = $2; pg = $3; cpu = $4 + 0; cmd = $5
     dir = cwd[pid]; if (dir == "") next
     best = ""
-    for (w in wsts) if (dir == w || index(dir, w "/") == 1)
+    for (w in wsts) if (samepath(dir, w) || index(dir, w "/") == 1)
       if (length(w) > length(best)) best = w
     # First member seen fixes the group owner; a later member resolving
     # elsewhere marks the group mixed. Assigning per member would let the LAST
@@ -106,7 +113,7 @@ while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
     continue
   fi
   verdict="$(elig_verdict "$touched" "$cpu" "$NOW")"
-  name="$(awk -F'\t' -v p="$owner" '$1 == p { print $2; exit }' "$T/labels")"
+  name="$(awk -F'\t' -v p="$owner" 'function samepath(a,b){return (length(a)==length(b) && index(a,b)==1)} samepath($1,p) { print $2; exit }' "$T/labels")"
   [ -n "$name" ] || name="$(ws_label "$owner")"
   if [ -n "$touched" ]; then
     age="idle $(ws_human_age "$((NOW - touched))")"

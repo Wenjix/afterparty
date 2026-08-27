@@ -26,6 +26,10 @@ case "$*" in
     printf '4001 4001 87.3 node /w/fresh/node_modules/.bin/vitest --watch\n'
     printf '4002 4002  0.0 npm run dev\n'
     printf '4003 4002  1.5 node /w/forgot/node_modules/.bin/vite\n'
+    printf '4101 4101  0.0 node server.js\n'
+    printf '4102 4102  0.0 node server.js\n'
+    printf '4201 4201  0.0 node server.js\n'
+    printf '4202 4202  0.0 node server.js\n'
     ;;
   *) exit 1 ;;
 esac
@@ -37,6 +41,10 @@ case "$*" in
     printf 'p4001\nfcwd\nn/w/fresh\n'
     printf 'p4002\nfcwd\nn/w/forgot\n'
     printf 'p4003\nfcwd\nn/w/forgot/packages/web\n'
+    printf 'p4101\nfcwd\nn/w/aaaaaaaaaaaaaaaaaaaaaaaaaaaaX/web\n'
+    printf 'p4102\nfcwd\nn/w/aaaaaaaaaaaaaaaaaaaaaaaaaaaaY/web\n'
+    printf 'p4201\nfcwd\nn/w/プロジェクト/web\n'
+    printf 'p4202\nfcwd\nn/w/別プロジェクト/web\n'
     ;;
   *LISTEN*) printf 'node 4003 u 26u IPv6 0x1 0t0 TCP *:3001 (LISTEN)\n' ;;
   *) exit 1 ;;
@@ -48,6 +56,15 @@ R="$T/projects"; mkdir -p "$R/-w-fresh" "$R/-w-forgot" "$R/-w-quiet"
 printf '{"cwd":"/w/fresh"}\n'  > "$R/-w-fresh/a.jsonl"
 printf '{"cwd":"/w/forgot"}\n' > "$R/-w-forgot/b.jsonl"
 printf '{"cwd":"/w/quiet"}\n'  > "$R/-w-quiet/c.jsonl"
+# Long shared-prefix and multibyte workspaces, so the RENDERER is what gets
+# tested. W9 and W11 tried to pin these against ws_unique_labels, which splits
+# on "/" and rejoins and applies no width at all — so neither could observe a
+# truncating renderer or a codepoint cut. Width lives here.
+for wsp in 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaX/web' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaY/web' 'プロジェクト/web' '別プロジェクト/web'; do
+  d="$R/-w-$(printf '%s' "$wsp" | tr '/' '-')"
+  mkdir -p "$d"
+  printf '{"cwd":"/w/%s"}\n' "$wsp" > "$d/a.jsonl"
+done
 for f in "$R/-w-forgot/b.jsonl" "$R/-w-quiet/c.jsonl"; do
   touch -t 202001010000 "$f" 2>/dev/null || touch -t "$(date -v -300d +%Y%m%d%H%M)" "$f"
 done
@@ -235,6 +252,35 @@ OUT11="$(PATH="$EMPTY:/usr/bin:/bin" AFTERPARTY_TRANSCRIPT_ROOT="$T/none" AFTERP
 printf '%s\n' "$OUT11" | grep -qi 'incomplete' \
   || fail "G11: empty world produced no empty-state notice at all: $OUT11"
 [ "$FAILS" -eq "$_b" ] && pass "G11: the empty-state branch is reachable and errors nothing"
+
+# ---------- G12: the RENDERED row keeps workspaces distinguishable ----------
+# W9 tried to pin this in test-workspace.sh and could not: it compared label
+# VALUES and then ran `printf '%-28s'` on them itself — a fact about bash, not
+# about glance, executing no production formatting at all. The only way to
+# observe a truncating renderer is to read glance's own output.
+_b=$FAILS
+ROWX="$(printf '%s\n' "$OUT" | grep 'X/web' | head -1)"
+ROWY="$(printf '%s\n' "$OUT" | grep 'Y/web' | head -1)"
+if [ -z "$ROWX" ] || [ -z "$ROWY" ]; then
+  fail "G12: the long shared-prefix workspaces were not rendered at all"
+else
+  [ "$(printf '%s' "$ROWX" | cut -c1-36)" != "$(printf '%s' "$ROWY" | cut -c1-36)" ] \
+    || fail "G12: two workspaces render identically once truncated: [$(printf '%s' "$ROWX" | cut -c1-36)]"
+fi
+[ "$FAILS" -eq "$_b" ] && pass "G12: long shared-prefix workspaces stay distinguishable in the rendered row"
+
+# ---------- G13: a multibyte workspace survives rendering intact ----------
+# W11 could never observe this either: ws_unique_labels has no width logic, so
+# a codepoint cannot be cut there. Width is applied by the renderer.
+_b=$FAILS
+JN="$(printf '%s\n' "$OUT" | grep -c 'プロジェクト')"
+[ "$JN" -ge 2 ] || fail "G13: the multibyte workspaces were not rendered ($JN rows)"
+printf '%s\n' "$OUT" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 \
+  || fail "G13: glance output is not valid UTF-8 — a label was cut mid-character"
+J1="$(printf '%s\n' "$OUT" | grep 'プロジェクト' | sed -n 1p | cut -c1-36)"
+J2="$(printf '%s\n' "$OUT" | grep 'プロジェクト' | sed -n 2p | cut -c1-36)"
+[ "$J1" != "$J2" ] || fail "G13: the two multibyte workspaces render identically: [$J1]"
+[ "$FAILS" -eq "$_b" ] && pass "G13: multibyte workspaces render whole, valid and distinct"
 
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))
