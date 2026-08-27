@@ -769,10 +769,17 @@ disk_flush() {
   local row type kb label detail total=0
   for row in ${DISK_BUF[@]+"${DISK_BUF[@]}"}; do
     IFS=$'\t' read -r type kb label detail <<< "$row"
+    [ "$label" = "-" ] && label=""
     [ "$type" = meter ] && total=$((total + kb))
   done
   for row in ${DISK_BUF[@]+"${DISK_BUF[@]}"}; do
+    # "-" is the sentinel for an empty label. Tab is IFS-whitespace, so an
+    # actually-empty field collapses and every later column shifts left --
+    # which silently swallowed the pnpm line: the text landed in $label and
+    # $detail, the thing printed, was empty. Third occurrence of this hazard
+    # in the repo; CLAUDE.md documents it.
     IFS=$'\t' read -r type kb label detail <<< "$row"
+    [ "$label" = "-" ] && label=""
     if [ "$type" = meter ]; then
       if [ -n "$detail" ]; then
         printf '  %-26.26s %s %s  %s%s%s\n' "$label" \
@@ -949,9 +956,9 @@ clean_pnpm_store() {
     # row so it never inflates the section's meter shares.
     if disk_buffering; then
       if [ "$size_known" -eq 1 ]; then
-        DISK_BUF+=("$(printf 'note\t0\t\twould run pnpm store prune (store: %s)' "$(human_mb "$kb_before")")")
+        DISK_BUF+=("$(printf 'note\t0\t-\twould run pnpm store prune (store: %s)' "$(human_mb "$kb_before")")")
       else
-        DISK_BUF+=("$(printf 'note\t0\t\twould run pnpm store prune (store size unavailable)')")
+        DISK_BUF+=("$(printf 'note\t0\t-\twould run pnpm store prune (store size unavailable)')")
       fi
     else
       if [ "$size_known" -eq 1 ]; then

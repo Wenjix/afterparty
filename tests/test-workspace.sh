@@ -114,5 +114,110 @@ else
   [ "$FAILS" -eq "$_b" ] && pass "W6: pid attributed via lsof, fails closed without it"
 fi
 
+# ---------- W7: workspace labels must disambiguate ----------
+# A bare basename collides the moment two projects share a leaf name, and
+# "web", "api" and "server" are the most common leaf names there are. On the
+# APPROVAL surface an ambiguous label is a wrong approval waiting to happen:
+# two rows read identically and you cannot tell which one you are ticking.
+_b=$FAILS
+# Every pair here defeated an earlier attempt: basename collapsed the first
+# pair, and parent/leaf collapsed the second AND rendered the third as a single
+# segment because its parent and leaf are the same word.
+while IFS='|' read -r p1 p2 why; do
+  l1="$(ws_label "$p1")"; l2="$(ws_label "$p2")"
+  [ "$l1" != "$l2" ] || fail "W7: $why — both render as '$l1'"
+done <<'PAIRS'
+/Users/x/alpha/web|/Users/x/beta/web|sibling projects sharing a leaf name
+/client-one/apps/web|/client-two/apps/web|monorepo apps/ layout
+/repo/web/web|/other/web/web|repeated segment names
+PAIRS
+[ "$(ws_label /repo/web/web)" != "web" ] \
+  || fail "W7: a path whose parent and leaf match collapsed to one segment"
+[ -n "$(ws_label '')" ] || fail "W7: an empty path must still produce some label"
+
+# Width fitting must drop LEADING segments: the tail is what distinguishes two
+# workspaces, so right-truncation would reintroduce the collision.
+F1="$(ws_label_fit /client-one/apps/web 14)"
+F2="$(ws_label_fit /client-two/apps/web 14)"
+[ "$F1" != "$F2" ] || fail "W7: fitted labels collide at narrow widths: '$F1'"
+printf '%s' "$F1" | grep -q 'web' || fail "W7: fitting dropped the distinguishing tail: $F1"
+[ "${#F1}" -le 14 ] || fail "W7: fitted label is ${#F1} chars, over the 14 requested"
+# and in BYTES, which is what a %-Ns column actually pads by. A multibyte
+# marker made this overflow by 2 under a non-UTF-8 locale.
+B1="$(printf '%s' "$F1" | wc -c | tr -d '[:space:]')"
+[ "$B1" -le 14 ] || fail "W7: fitted label is $B1 BYTES, over the 14 requested"
+[ "$FAILS" -eq "$_b" ] && pass "W7: workspace labels distinguish projects that share a leaf name"
+
+# ---------- W8: labels are unique within the table being displayed ----------
+# Uniqueness only has to hold among the rows actually shown, so it is computed
+# there: one segment where that suffices, more only where it does not. A label
+# that is unambiguous but unreadable is its own failure on a surface whose job
+# is to be scanned.
+_b=$FAILS
+LBL="$(printf '%s\n' \
+  /Users/x/Documents/GitHub/proxymates \
+  /Users/x/Documents/GitHub/loupe \
+  /Users/x/orca/afterparty \
+  /client-one/apps/web \
+  /client-two/apps/web | ws_unique_labels)"
+[ "$(printf '%s\n' "$LBL" | wc -l | tr -d '[:space:]')" -eq 5 ] \
+  || fail "W8: expected one label per path"
+# every label distinct
+DUP="$(printf '%s\n' "$LBL" | cut -f2 | sort | uniq -d)"
+[ -z "$DUP" ] || fail "W8: duplicate labels rendered: $DUP"
+# short where it can be
+[ "$(printf '%s\n' "$LBL" | awk -F'\t' '$1 ~ /proxymates$/ {print $2}')" = "proxymates" ] \
+  || fail "W8: an unambiguous workspace was not shortened to one segment"
+# longer only where it must be
+W1="$(printf '%s\n' "$LBL" | awk -F'\t' '$1 == "/client-one/apps/web" {print $2}')"
+printf '%s' "$W1" | grep -q 'client-one' \
+  || fail "W8: a colliding workspace was not lengthened enough to distinguish it: $W1"
+[ "$FAILS" -eq "$_b" ] && pass "W8: labels are the shortest suffix unique within the displayed table"
+
+# ---------- W9: uniqueness must survive rendering ----------
+# Labels that ws_unique_labels made distinct were being right-truncated to a
+# fixed column width, which merged them again — reintroducing the exact
+# collision the labelling exists to prevent. Renderers pad now, never truncate.
+_b=$FAILS
+LONG_A="/Users/x/aaaaaaaaaaaaaaaaaaaaaaaaaaaaX/web"
+LONG_B="/Users/x/aaaaaaaaaaaaaaaaaaaaaaaaaaaaY/web"
+LL="$(printf '%s\n%s\n' "$LONG_A" "$LONG_B" | ws_unique_labels | cut -f2)"
+L1="$(printf '%s\n' "$LL" | sed -n 1p)"; L2="$(printf '%s\n' "$LL" | sed -n 2p)"
+[ "$L1" != "$L2" ] || fail "W9: long-prefix workspaces share a label"
+# and after the renderer's field width
+R1="$(printf '%-28s' "$L1")"; R2="$(printf '%-28s' "$L2")"
+[ "$R1" != "$R2" ] || fail "W9: labels merge once rendered into a 28-column field"
+# glance must not carry a truncating precision on the workspace column
+grep -q '%-28\.28s' "$LIB/glance.sh" \
+  && fail "W9: glance still truncates the workspace column, which can merge distinct labels"
+[ "$FAILS" -eq "$_b" ] && pass "W9: distinct labels stay distinct through rendering"
+
+# ---------- W10: repeated owners must not defeat shortening ----------
+# Callers pass one row per finding, and two process groups in one workspace is
+# the normal case. Counting a path twice made every suffix look ambiguous, so
+# that workspace fell back to its absolute path exactly when it was busiest.
+_b=$FAILS
+DL="$(printf '%s\n' /Users/x/GitHub/loupe /Users/x/GitHub/loupe /Users/x/orca/afterparty | ws_unique_labels)"
+[ "$(printf '%s\n' "$DL" | awk -F'\t' '$1 ~ /loupe$/ {print $2}' | head -1)" = "loupe" ] \
+  || fail "W10: a workspace appearing twice fell back to its full path"
+[ "$FAILS" -eq "$_b" ] && pass "W10: a repeated workspace still gets its short label"
+
+# ---------- W11: multibyte paths are never cut mid-character ----------
+# ${#var} and shell substrings measure bytes under a non-UTF-8 locale, so any
+# width-based cut can land inside a codepoint. Renderers no longer truncate,
+# so the label is emitted whole.
+_b=$FAILS
+JP1=/Users/x/プロジェクト/web
+JP2=/Users/x/別プロジェクト/web
+JL="$(printf '%s\n%s\n' "$JP1" "$JP2" | ws_unique_labels | cut -f2)"
+J1="$(printf '%s\n' "$JL" | sed -n 1p)"; J2="$(printf '%s\n' "$JL" | sed -n 2p)"
+[ "$J1" != "$J2" ] || fail "W11: multibyte workspaces share a label"
+printf '%s' "$J1" | grep -q 'プロジェクト' \
+  || fail "W11: the multibyte label was mangled: $J1"
+# a cut mid-codepoint shows up as a replacement/partial byte sequence
+printf '%s' "$J1" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 \
+  || fail "W11: the label is not valid UTF-8 — it was cut mid-character"
+[ "$FAILS" -eq "$_b" ] && pass "W11: multibyte labels stay whole and valid UTF-8"
+
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))

@@ -94,6 +94,7 @@ if [ ! -s "$T/groups" ]; then
   exit 0
 fi
 
+awk -F'\t' '{print $2}' "$T/groups" | ws_unique_labels > "$T/labels" 2>/dev/null || : > "$T/labels"
 while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
   [ -n "$pg" ] || continue
   [ "$touched" = "-" ] && touched=""
@@ -105,7 +106,8 @@ while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
     continue
   fi
   verdict="$(elig_verdict "$touched" "$cpu" "$NOW")"
-  name="$(basename "$owner")"
+  name="$(awk -F'\t' -v p="$owner" '$1 == p { print $2; exit }' "$T/labels")"
+  [ -n "$name" ] || name="$(ws_label "$owner")"
   if [ -n "$touched" ]; then
     age="idle $(ws_human_age "$((NOW - touched))")"
   else

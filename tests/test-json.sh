@@ -108,4 +108,30 @@ XDG_CACHE_HOME="$T/cache2" "$BIN" audit --report >/dev/null 2>&1; RC=$?
 pass "audit --report outside a repo still lands in ledger home"
 
 echo
+# ---------- J-glob: argv must never glob against the caller's cwd ----------
+# A process whose command line contains * had that * expanded against whatever
+# directory the audit happened to run from, replacing the command text with
+# unrelated filenames — corrupting the field AND leaking those names into a
+# machine-readable surface an agent consumes. list_matches was already guarded
+# with `set -f`; the two JSON emitters were not.
+GT="$(mktemp -d)"
+mkdir -p "$GT/shim" "$GT/cwd"
+touch "$GT/cwd/leaked-one.txt" "$GT/cwd/leaked-two.txt"
+cat > "$GT/shim/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  *pid,ppid,pgid,%cpu,etime,command*) printf '5001 1 5001 0.0 01:00:00 npm run dev -- --filter *\n' ;;
+  *) exit 1 ;;
+esac
+PS
+chmod +x "$GT/shim/ps"
+_b=$FAILS
+GOUT="$(cd "$GT/cwd" && PATH="$GT/shim:$PATH" bash "$LIB/audit-processes.sh" --json 2>/dev/null | grep '"section":"processes"')"
+printf '%s\n' "$GOUT" | grep -q 'leaked-one.txt' \
+  && fail "J-glob: a filename from the caller's cwd leaked into the JSON command field"
+printf '%s\n' "$GOUT" | grep -q -- '--filter \*' \
+  || fail "J-glob: the literal * was lost from the command field: $GOUT"
+rm -rf "$GT"
+[ "$FAILS" -eq "$_b" ] && pass "J-glob: argv is emitted literally, with no globbing against cwd"
+
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi

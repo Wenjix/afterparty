@@ -97,3 +97,102 @@ ws_owner_of() {
   [ -n "$best" ] || return 1
   printf '%s' "$best"
 }
+
+# Display label for a workspace path, unambiguous BY CONSTRUCTION.
+#
+# Two earlier attempts were not. A bare basename collides whenever two projects
+# share a leaf name, and "web"/"api"/"server" are the most common leaf names
+# there are. parent/leaf is no better in the layout it was meant to fix:
+# /client-one/apps/web and /client-two/apps/web both render as apps/web, and
+# /repo/web/web collapses to a single segment because parent and leaf match.
+#
+# On the APPROVAL surface an ambiguous label is a wrong approval waiting to
+# happen -- two rows read identically and you cannot tell which you are
+# ticking -- so the label is now the whole path, abbreviated only at $HOME.
+# Truncation for width happens in ws_label_fit and cuts from the LEFT, keeping
+# the tail that actually distinguishes one workspace from another.
+ws_label() {
+  local path="${1:-}" home="${HOME%/}"
+  [ -n "$path" ] || { printf '(unknown)'; return 0; }
+  if [ -n "$home" ]; then
+    case "$path" in
+      "$home") printf '~'; return 0 ;;
+      "$home"/*) printf '~/%s' "${path#"$home"/}"; return 0 ;;
+    esac
+  fi
+  printf '%s' "$path"
+}
+
+# Fit a label into WIDTH columns by dropping LEADING segments, never trailing
+# ones: the head of a path is the part workspaces have in common and the tail
+# is the part that tells them apart. Right-truncating would reintroduce exactly
+# the collision this label exists to prevent.
+#
+# Callers that render a TABLE should not use this at all -- they should use
+# ws_unique_labels, which is table-scoped, and pad without truncating. Cutting
+# a label to a fixed width can merge two labels that ws_unique_labels had just
+# made distinct, and a byte-wise cut can land mid-codepoint. This remains only
+# for single-value display where no set exists to be unique within.
+ws_label_fit() {
+  local label width cut
+  label="$(ws_label "$1")"
+  width="${2:-28}"
+  [ "$width" -ge 4 ] || width=4
+  if [ "${#label}" -le "$width" ]; then
+    printf '%s' "$label"
+    return 0
+  fi
+  # ASCII marker, not "…": ${#var} counts BYTES under a non-UTF-8 locale, so a
+  # 3-byte ellipsis silently overflowed the column by 2 on Git Bash. A width
+  # helper must not itself contain a character whose width it cannot count.
+  cut=$(( ${#label} - (width - 3) ))
+  [ "$cut" -gt 0 ] || cut=0
+  printf '...%s' "${label:$cut}"
+}
+
+# Shortest suffix that is unique among the paths given. Reads paths on stdin,
+# writes "<path>\t<label>".
+#
+# ws_label alone is unambiguous but unreadable in a column: every row of a
+# machine like this shares "~/Documents/GitHub/", so the distinguishing part is
+# whatever survives truncation. Uniqueness only ever needs to hold among the
+# rows actually being displayed, so compute it there: one segment where that
+# suffices ("afterparty"), two where it does not ("client-one/apps/web").
+# Falls back to the full path if even that collides.
+ws_unique_labels() {
+  awk -F/ '
+    # Deduplicate first. Uniqueness is a property of the SET of workspaces on
+    # screen, but callers pass one row per finding -- and two process groups in
+    # one workspace is the normal case, not the exception. Counting the same
+    # path twice made every suffix look ambiguous, so that workspace fell all
+    # the way back to its absolute path exactly when it was busiest.
+    !seen_path[$0]++ { paths[++n] = $0 }
+    function suffix(p, k,   parts, m, i, out) {
+      m = split(p, parts, "/")
+      out = ""
+      for (i = m - k + 1; i <= m; i++) {
+        if (parts[i] == "") continue
+        out = (out == "" ? parts[i] : out "/" parts[i])
+      }
+      return out
+    }
+    END {
+      maxk = 1
+      for (i = 1; i <= n; i++) {
+        m = split(paths[i], parts, "/")
+        if (m > maxk) maxk = m
+      }
+      for (k = 1; k <= maxk; k++) {
+        delete seen
+        for (i = 1; i <= n; i++) seen[suffix(paths[i], k)]++
+        for (i = 1; i <= n; i++) {
+          if (label[i] != "") continue
+          s = suffix(paths[i], k)
+          if (s != "" && seen[s] == 1) label[i] = s
+        }
+      }
+      for (i = 1; i <= n; i++)
+        printf "%s\t%s\n", paths[i], (label[i] != "" ? label[i] : paths[i])
+    }
+  '
+}

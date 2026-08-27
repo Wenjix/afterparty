@@ -116,6 +116,42 @@ for reserved in 1 0; do
   [ "$FAILS" -eq "$_b" ] && pass "KG2: process group $reserved refused, and said so"
 done
 
+# ---------- KG2b: a group that exited on its own is not a failure ----------
+# The kill loop drains 2s per group, so on a busy machine a target routinely
+# goes away by itself before its turn. "ps returned no members" shared a return
+# code with "ps failed", so that no-op was reported as an inspection failure,
+# counted toward N_FAILED, and turned the exit status of an otherwise clean run
+# nonzero.
+_b=$FAILS
+SHIM="$T/shim"; rm -rf "$SHIM"; mkdir -p "$SHIM"
+cat > "$SHIM/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  *pid,ppid,pgid,%cpu,etime,command*)
+    printf '77800 1 77800 0.0 01:00:00 /usr/local/bin/nodemon server.js
+' ;;
+  *pgid=,lstart=,command=*)
+    printf '77800 Tue Aug 18 09:00:00 2026 /usr/local/bin/nodemon server.js
+' ;;
+  # the group has since exited: ps SUCCEEDS and reports no members for it
+  *-Ao\ pgid=,command=*) exit 0 ;;
+  *-Ao\ pgid=*) exit 0 ;;
+  *-o\ pgid=*) printf '99999
+' ;;
+  *) exit 1 ;;
+esac
+PS
+chmod +x "$SHIM/ps"
+: > "$KILLLOG"
+OUT="$(run_kill --kill dev)"; rc=$?
+grep -q -- '-77800' "$KILLLOG" && fail "KG2b: signalled a group that had already exited"
+printf '%s
+' "$OUT" | grep -qi 'already exited'   || fail "KG2b: an exited group was not reported as already gone: $OUT"
+printf '%s
+' "$OUT" | grep -qi 'could not inspect'   && fail "KG2b: an exited group was still reported as an inspection failure"
+[ "$rc" -eq 0 ] || fail "KG2b: exit=$rc — a group vanishing on its own must not fail the run"
+[ "$FAILS" -eq "$_b" ] && pass "KG2b: a group that exited on its own is a no-op, not a failure"
+
 # ---------- KG3: identity is revalidated on an ORDINARY kill ----------
 # No --expect here. Identity enforcement used to exist only for plan-driven
 # kills, so `audit --kill dev` — the documented command — signalled whatever
@@ -141,6 +177,42 @@ OUT="$(run_kill --kill dev)"
 grep -q -- 'kill -TERM -77700' "$KILLLOG" \
   || fail "KG4: an unchanged group was not killed (said: $OUT)"
 [ "$FAILS" -eq "$_b" ] && pass "KG4: an unchanged group is still killed"
+
+# ---------- KG5: the ledger stop path also refuses an absent group ----------
+# Introducing return code 3 for "group absent" without updating every caller
+# turned a fail-CLOSED path into a signalling one: the ledger handled 0 and 2
+# only, so 3 fell through to kill -TERM. Reproduced before the fix — SIGTERM
+# was delivered to a pgid that ps had just reported absent, and the run exited
+# 0. If that id is reused in the gap an unrelated group takes the signal.
+_b=$FAILS
+LSHIM="$T/lshim"; mkdir -p "$LSHIM"
+cat > "$LSHIM/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  *-o\ pgid=*-p\ 77800*) printf '77800
+' ;;
+  *-o\ pgid=*-p*)        printf '99999
+' ;;   # this shell's own group
+  *-p\ 77800*)           printf '77800 npm run dev
+' ;;
+  # the recheck before SIGTERM: ps SUCCEEDS and the group is gone
+  *-Ao\ pgid=,command=*) exit 0 ;;
+  *-Ao\ pgid=*)          exit 0 ;;
+  *) exit 1 ;;
+esac
+PS
+chmod +x "$LSHIM/ps"
+printf '2026-01-01T00:00:00Z	/r	/r	77800	77800	dev			npm run dev
+' > "$T/ledger.tsv"
+: > "$KILLLOG"
+LOUT="$(PATH="$LSHIM:$PATH" AGENT_PROCESS_LEDGER="$T/ledger.tsv" AFTERPARTY_STYLE=never   bash "$LIB/process-ledger.sh" stop --kill --all 2>&1)"
+grep -q -- '-77800' "$KILLLOG"   && fail "KG5: ledger signalled a group ps reported absent"
+printf '%s
+' "$LOUT" | grep -qi 'already exited'   || fail "KG5: ledger did not report the group as already gone: $LOUT"
+# positive control: the log records kills when one really happens
+bash -c 'kill -TERM -424242 2>/dev/null' || true
+grep -q -- '-424242' "$KILLLOG" || fail "KG5: kill log is not recording — the check above proved nothing"
+[ "$FAILS" -eq "$_b" ] && pass "KG5: the ledger stop path treats an absent group as terminal"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi

@@ -332,6 +332,11 @@ stop_entries() {
       continue
     else
       protection_rc=$?
+      if [ "$protection_rc" -eq 3 ]; then
+        s_skip "  pgid $pgid had already exited — nothing to signal"
+        continue
+      fi
+
       if [ "$protection_rc" -eq 2 ]; then
         s_skip "  could not inspect pgid $pgid for protected members — skipped"
         n_failed=$((n_failed + 1))
@@ -402,6 +407,14 @@ stop_entries() {
       continue
     else
       protection_rc=$?
+      if [ "$protection_rc" -eq 3 ]; then
+        # Already gone: nothing to signal, and NOT a failure. Falling through
+        # here signalled a pgid that ps had just reported absent — if the id is
+        # reused in that gap an unrelated group takes the signal.
+        s_skip "  pgid $group had already exited — nothing to signal"
+        continue
+      fi
+
       if [ "$protection_rc" -eq 2 ]; then
         s_skip "  could not recheck pgid $group before SIGTERM — skipped"
         journal_action ledger_group.stop "pgid:$group" failed "protection unavailable before SIGTERM"
@@ -429,6 +442,15 @@ stop_entries() {
         continue
       else
         protection_rc=$?
+        if [ "$protection_rc" -eq 3 ]; then
+          # SIGTERM landed and the group drained. Success, not "already gone" --
+          # that verdict belongs only to a PRE-signal check.
+          s_ok "  pgid $group exited after SIGTERM"
+          N_STOPPED=$((N_STOPPED + 1))
+          journal_action ledger_group.stop "pgid:$group" succeeded "exited after SIGTERM"
+          continue
+        fi
+
         if [ "$protection_rc" -eq 2 ]; then
           s_skip "  could not recheck pgid $group before SIGKILL — skipped"
           journal_action ledger_group.stop "pgid:$group" failed "protection unavailable before SIGKILL"
@@ -444,6 +466,14 @@ stop_entries() {
         n_failed=$((n_failed + 1))
       else
         protection_rc=$?
+        if [ "$protection_rc" -eq 3 ]; then
+          # The confirmation scan found no members: the group is gone, which is
+          # exactly what this loop exists to confirm.
+          N_STOPPED=$((N_STOPPED + 1))
+          journal_action ledger_group.stop "pgid:$group" succeeded "group confirmed absent"
+          continue
+        fi
+
         if [ "$protection_rc" -eq 2 ]; then
           s_skip "  could not confirm pgid $group exited"
           journal_action ledger_group.stop "pgid:$group" failed "exit could not be confirmed"
@@ -455,6 +485,11 @@ stop_entries() {
       fi
     else
       protection_rc=$?
+      if [ "$protection_rc" -eq 3 ]; then
+        s_skip "  pgid $group had already exited — nothing to signal"
+        continue
+      fi
+
       if [ "$protection_rc" -eq 2 ]; then
         s_skip "  could not confirm pgid $group exited"
         journal_action ledger_group.stop "pgid:$group" failed "exit could not be confirmed"

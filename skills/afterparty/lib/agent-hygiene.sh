@@ -201,17 +201,29 @@ case "$cmd" in
       trap report_tmp_cleanup EXIT
       trap 'report_tmp_cleanup; exit 130' INT
       trap 'report_tmp_cleanup; exit 143' TERM
+      REPORT_RC=0
       (
         export AFTERPARTY_STYLE=never
         printf '# afterparty report — what the last session left behind\n\n'
         printf 'generated %s — afterparty audit --report\n\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
         run_audit
-      ) | sed -e 's/^=== \(.*\) ===$/## \1/' > "$REPORT_TMP"
+      # `|| REPORT_RC=$?` so `set -e` plus pipefail cannot abort HERE. A child
+      # audit exiting non-zero used to kill the script at this line: the fully
+      # rendered report was deleted by the EXIT trap, the previous report.md
+      # was left in place, and the run still exited 0 — so the SessionEnd hook
+      # believed it had written a fresh report while the reader got a stale
+      # one. A partial report is worth more than a stale one, and the failure
+      # belongs in the exit status, not in a missing file.
+      ) | sed -e 's/^=== \(.*\) ===$/## \1/' > "$REPORT_TMP" || REPORT_RC=$?
       chmod 600 "$REPORT_TMP" 2>/dev/null || true
       mv -f "$REPORT_TMP" "$REPORT_FILE"
       REPORT_TMP=""
       trap - EXIT INT TERM
       cat "$REPORT_FILE"
+      if [ "$REPORT_RC" -ne 0 ]; then
+        echo "note: report written, but at least one audit reported a problem" >&2
+        exit "$REPORT_RC"
+      fi
     else
       if [ "$STYLE_ON" -eq 1 ] && [ -z "$JSON_FLAG" ]; then
         s_banner "afterparty — last call" "let's see what the session left behind"
