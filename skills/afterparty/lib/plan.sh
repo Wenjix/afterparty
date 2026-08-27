@@ -18,6 +18,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/eligible.sh"
 . "$DIR/fingerprint.sh"
 . "$DIR/categories.sh"
+. "$DIR/vetoes.sh"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -96,9 +97,10 @@ echo
 echo '## Process groups'
 echo
 
+emit_process_groups() {
 if [ ! -s "$T/groups" ]; then
   echo '(nothing attributed to a workspace)'
-  exit 0
+  return 0
 fi
 
 awk -F'\t' '{print $2}' "$T/groups" | ws_unique_labels > "$T/labels" 2>/dev/null || : > "$T/labels"
@@ -154,6 +156,85 @@ while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
     *)       printf -- '      not offered: the group vanished before it could be fingerprinted\n' ;;
   esac
 done < "$T/groups"
+}
+
+emit_process_groups
+
+# --- worktrees ---------------------------------------------------------------
+#
+# `git --clean` discovered worktrees and removed them in one step, from a
+# staleness signal that could not carry the weight, and became report-only in
+# 0.9.0. This is where removal comes back: as a typed target, surfaced for a
+# person and executed only through apply.
+#
+# Filesystem items are ALWAYS unchecked. Restarting a dev server and deleting a
+# worktree are not the same consequence, and a default that treats them alike
+# is a default that will eventually be wrong in the expensive direction.
+echo
+echo '## Worktrees'
+echo
+
+# The pid->cwd map, as a "pid<TAB>cwd" file, is what the occupancy veto reads.
+WT_ROWS="$T/wt-rows"; : > "$WT_ROWS"
+seen_repos=""
+while IFS=$'\t' read -r _ts wsdir; do
+  [ -n "$wsdir" ] || continue
+  [ -d "$wsdir" ] || continue
+  common="$(git -C "$wsdir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+    || common="$(git -C "$wsdir" rev-parse --git-common-dir 2>/dev/null)" || continue
+  [ -n "$common" ] || continue
+  # One repo can be the cwd of several transcripts; enumerate its worktrees once.
+  case " $seen_repos " in *" $common "*) continue ;; esac
+  seen_repos="$seen_repos $common"
+  repo_root="$(git -C "$wsdir" rev-parse --show-toplevel 2>/dev/null)" || repo_root="$wsdir"
+  git -C "$wsdir" worktree list --porcelain 2>/dev/null \
+    | awk -v repo="$repo_root" '
+        /^worktree / { if (p != "") print p "\t" b "\t" repo; p = substr($0, 10); b = "(detached)"; next }
+        /^branch /   { b = substr($0, 8); sub(/^refs\/heads\//, "", b) }
+        END { if (p != "") print p "\t" b "\t" repo }' >> "$WT_ROWS"
+done < "$T/ws"
+
+if [ ! -s "$WT_ROWS" ]; then
+  echo '(no worktrees in any indexed workspace)'
+else
+  while IFS=$'\t' read -r wtpath branch repo; do
+    [ -n "$wtpath" ] || continue
+    reason="$(veto_for worktree "$wtpath" "$repo" "$T/cwd")"
+    # Staleness: the worktree's own transcript if it has one, else the repo's.
+    # A worktree is part of the work someone does in that repo, so the repo
+    # being fresh is a reason to leave its worktrees alone.
+    touched="$(awk -F'\t' -v w="$wtpath" 'function samepath(a,b){return (length(a)==length(b) && index(a,b)==1)} samepath($2,w) { print $1; exit }' "$T/ws")"
+    [ -n "$touched" ] || touched="$(awk -F'\t' -v w="$repo" 'function samepath(a,b){return (length(a)==length(b) && index(a,b)==1)} samepath($2,w) { print $1; exit }' "$T/ws")"
+    if [ -n "$touched" ]; then
+      age="idle $(ws_human_age "$((NOW - touched))")"
+    else
+      age="no transcript"
+    fi
+    detail="$branch · $age"
+    if [ -n "$reason" ]; then
+      # main-worktree is structural noise, not a decision a person needs to
+      # read: every repo has exactly one and it is never a candidate.
+      [ "$reason" = "main-worktree" ] && continue
+      printf -- '- [⊘] %-8s path %s  %s\n' "$reason" "$wtpath" "$detail"
+      case "$reason" in
+        dirty)    printf -- '      not offered: dirty — uncommitted work inside it; commit or stash, then re-plan\n' ;;
+        occupied) printf -- '      not offered: occupied — a live process is running in it\n' ;;
+        current)  printf -- '      not offered: current — you are standing in it\n' ;;
+        *)        printf -- '      not offered: %s\n' "$reason" ;;
+      esac
+      continue
+    fi
+    verdict="$(elig_verdict "$touched" 0 "$NOW")"
+    fp="$(fp_for_worktree "$wtpath" 2>/dev/null)" || fp=""
+    if [ -z "$fp" ]; then
+      printf -- '- [⊘] %-8s path %s  %s\n' "gone" "$wtpath" "$detail"
+      printf -- '      not offered: it vanished before it could be fingerprinted\n'
+      continue
+    fi
+    printf -- '- [ ] %-8s path %s  %s\n' "$verdict" "$wtpath" "$detail"
+    printf -- '      type: worktree  repo: %s  fingerprint: %s\n' "$repo" "$fp"
+  done < "$WT_ROWS"
+fi
 
 echo
 echo '## Why'

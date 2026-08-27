@@ -92,14 +92,41 @@ veto_is_dirty() {
   [ -n "$st" ]
 }
 
-# veto_for <type> <path> <root> -> reason token on stdout, empty when clear.
+# True when any live process in the pid->cwd map on stdin ($1 = map file) has
+# its working directory at or under $2. Removing a directory out from under a
+# running process breaks every relative path it holds; that is a fact about the
+# machine right now, not a judgement about staleness, so it belongs here rather
+# than in eligible.sh where a tick could override it.
+# Both the physical and the as-given form of the target are compared, and the
+# difference is not academic: on macOS `pwd -P` resolves /var -> /private/var,
+# so a worktree at /var/folders/.../wt has a physical path that matches nothing
+# a tool reporting the /var form ever emits. Checking one form only meant the
+# occupancy veto silently never fired for any target under a symlinked prefix
+# -- which on macOS is every temporary directory.
+veto_is_occupied() {
+  local map="$1" phys="$2" lex="${3:-}" dir
+  [ -n "$map" ] && [ -f "$map" ] || return 1
+  while IFS=$'\t' read -r _ dir; do
+    [ -n "$dir" ] || continue
+    [ "$dir" = "$phys" ] && return 0
+    case "$dir" in "$phys"/*) return 0 ;; esac
+    [ -n "$lex" ] || continue
+    [ "$dir" = "$lex" ] && return 0
+    case "$dir" in "$lex"/*) return 0 ;; esac
+  done < "$map"
+  return 1
+}
+
+# veto_for <type> <path> <root> [cwdmap] -> reason token on stdout, empty when
+# clear. cwdmap is an optional "pid<TAB>cwd" file; without it occupancy simply
+# is not checked, which is why plan and apply both pass one.
 #
 #   artifact  root is the scan SCOPE; the target must sit physically inside it.
 #   worktree  root is the owning REPO; a linked worktree legitimately lives
 #             outside it, so containment is not the test -- occupancy,
 #             main-worktree status and cleanliness are.
 veto_for() {
-  local type="${1:-}" path="${2:-}" root="${3:-}" phys rphys cwd
+  local type="${1:-}" path="${2:-}" root="${3:-}" map="${4:-}" phys rphys cwd
 
   case "$type" in
     artifact|worktree) : ;;
@@ -128,6 +155,9 @@ veto_for() {
     fi
     if veto_is_main_worktree "$phys"; then
       printf 'main-worktree'; return 0
+    fi
+    if veto_is_occupied "$map" "$phys" "${path%/}"; then
+      printf 'occupied'; return 0
     fi
     if veto_is_dirty "$phys"; then
       printf 'dirty'; return 0

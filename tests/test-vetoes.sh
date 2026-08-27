@@ -100,6 +100,30 @@ V="$(cd "$T/wt" && veto_for worktree "$T/wt" "$T/wt")"
 [ "$V" = "current" ] || fail "V7: removing the worktree you stand in gave '$V', want 'current'"
 [ "$FAILS" -eq "$_b" ] && pass "V7: the worktree the caller occupies is vetoed"
 
+# ---------- V10: a worktree with a live process inside it is vetoed ----------
+_b=$FAILS
+MAP="$T/cwdmap"
+printf '4242\t%s/nested/deep\n' "$T/wt" > "$MAP"
+V="$(veto_for worktree "$T/wt" "$PWD" "$MAP")"
+[ "$V" = "occupied" ] || fail "V10: a worktree hosting a live process gave '$V', want 'occupied'"
+# control: the same map, a worktree nobody is standing in
+printf '4242\t%s/elsewhere\n' "$T" > "$MAP"
+V="$(veto_for worktree "$T/wt" "$PWD" "$MAP")"
+[ -z "$V" ] || fail "V10: control — an unoccupied worktree was vetoed as '$V'"
+# and a SIBLING path that merely shares a prefix must not count as inside it
+printf '4242\t%s-sibling/x\n' "$T/wt" > "$MAP"
+V="$(veto_for worktree "$T/wt" "$PWD" "$MAP")"
+[ -z "$V" ] || fail "V10: a sibling sharing the path prefix was read as inside: '$V'"
+# The PHYSICAL form too. On macOS $T is under /var, whose physical path is
+# /private/var, so a check written against one form only never fires for the
+# other -- and every temp dir on the platform takes that branch.
+PHYS_WT="$(cd "$T/wt" && pwd -P)"
+printf '4242\t%s/nested\n' "$PHYS_WT" > "$MAP"
+V="$(veto_for worktree "$T/wt" "$PWD" "$MAP")"
+[ "$V" = "occupied" ] || fail "V10: a cwd recorded in physical form gave '$V', want 'occupied'"
+[ "$PHYS_WT" != "$T/wt" ] || echo "  note: /tmp is not symlinked here, so the two forms coincide" >&2
+[ "$FAILS" -eq "$_b" ] && pass "V10: a live process inside a worktree vetoes it, in either path form"
+
 # ---------- V8: a missing path is 'gone', not a silent pass ----------
 _b=$FAILS
 V="$(veto_for artifact "$PWD/never-existed" "$PWD")"
