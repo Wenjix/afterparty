@@ -174,32 +174,46 @@ echo
 echo '## Worktrees'
 echo
 
-# The pid->cwd map, as a "pid<TAB>cwd" file, is what the occupancy veto reads.
+# Filesystem decisions need a complete scan. Process reporting above keeps its
+# best-effort attribution, but a failed strict scan must not look unoccupied.
+ws_pid_cwd --strict > "$T/wt-cwd" 2>/dev/null || rm -f "$T/wt-cwd"
 WT_ROWS="$T/wt-rows"; : > "$WT_ROWS"
-seen_repos=""
-while IFS=$'\t' read -r _ts wsdir; do
+# Discovery does not require a staleness signal. A standalone or Codex session
+# may have no Claude history, but its current repository still has worktrees.
+printf '%s\n' "$(pwd -P)" > "$T/repo-candidates"
+awk -F'\t' '{ print $2 }' "$T/ws" >> "$T/repo-candidates"
+: > "$T/seen-repos"
+while IFS= read -r wsdir; do
   [ -n "$wsdir" ] || continue
   [ -d "$wsdir" ] || continue
   common="$(git -C "$wsdir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
     || common="$(git -C "$wsdir" rev-parse --git-common-dir 2>/dev/null)" || continue
   [ -n "$common" ] || continue
-  # One repo can be the cwd of several transcripts; enumerate its worktrees once.
-  case " $seen_repos " in *" $common "*) continue ;; esac
-  seen_repos="$seen_repos $common"
-  repo_root="$(git -C "$wsdir" rev-parse --show-toplevel 2>/dev/null)" || repo_root="$wsdir"
-  git -C "$wsdir" worktree list --porcelain 2>/dev/null \
+  case "$common" in
+    /*|[a-zA-Z]:/*) : ;;
+    *) common="$wsdir/$common" ;;
+  esac
+  common="$(veto_phys "$common")" || continue
+  # Full lines keep repositories containing spaces distinct. The current cwd
+  # and several transcripts may all refer to different worktrees of one repo.
+  grep -Fxq -- "$common" "$T/seen-repos" && continue
+  listing="$(git -C "$wsdir" worktree list --porcelain 2>/dev/null)" || continue
+  [ -n "$listing" ] || continue
+  printf '%s\n' "$common" >> "$T/seen-repos"
+  repo_root="$(printf '%s\n' "${listing%%$'\n'*}" | sed -n 's/^worktree //p')"
+  printf '%s\n' "$listing" \
     | awk -v repo="$repo_root" '
         /^worktree / { if (p != "") print p "\t" b "\t" repo; p = substr($0, 10); b = "(detached)"; next }
         /^branch /   { b = substr($0, 8); sub(/^refs\/heads\//, "", b) }
         END { if (p != "") print p "\t" b "\t" repo }' >> "$WT_ROWS"
-done < "$T/ws"
+done < "$T/repo-candidates"
 
 if [ ! -s "$WT_ROWS" ]; then
-  echo '(no worktrees in any indexed workspace)'
+  echo '(no worktrees in the current repository or indexed workspaces)'
 else
   while IFS=$'\t' read -r wtpath branch repo; do
     [ -n "$wtpath" ] || continue
-    reason="$(veto_for worktree "$wtpath" "$repo" "$T/cwd")"
+    reason="$(veto_for worktree "$wtpath" "$repo" "$T/wt-cwd")"
     # Staleness: the worktree's own transcript if it has one, else the repo's.
     # A worktree is part of the work someone does in that repo, so the repo
     # being fresh is a reason to leave its worktrees alone.
@@ -219,6 +233,7 @@ else
       case "$reason" in
         dirty)    printf -- '      not offered: dirty — uncommitted work inside it; commit or stash, then re-plan\n' ;;
         occupied) printf -- '      not offered: occupied — a live process is running in it\n' ;;
+        occupancy-unavailable) printf -- '      not offered: occupancy-unavailable — cannot complete the process cwd scan\n' ;;
         current)  printf -- '      not offered: current — you are standing in it\n' ;;
         *)        printf -- '      not offered: %s\n' "$reason" ;;
       esac
@@ -227,8 +242,13 @@ else
     verdict="$(elig_verdict "$touched" 0 "$NOW")"
     fp="$(fp_for_worktree "$wtpath" 2>/dev/null)" || fp=""
     if [ -z "$fp" ]; then
-      printf -- '- [⊘] %-8s path %s  %s\n' "gone" "$wtpath" "$detail"
-      printf -- '      not offered: it vanished before it could be fingerprinted\n'
+      if [ -d "$wtpath" ]; then
+        printf -- '- [⊘] %-8s path %s  %s\n' "identity-unavailable" "$wtpath" "$detail"
+        printf -- '      not offered: identity-unavailable — cannot establish filesystem creation identity\n'
+      else
+        printf -- '- [⊘] %-8s path %s  %s\n' "gone" "$wtpath" "$detail"
+        printf -- '      not offered: it vanished before it could be fingerprinted\n'
+      fi
       continue
     fi
     printf -- '- [ ] %-8s path %s  %s\n' "$verdict" "$wtpath" "$detail"

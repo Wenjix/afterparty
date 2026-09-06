@@ -50,30 +50,60 @@ fp_for_pgid() {
 # reinstall, a checkout, a restore from backup. Killing the wrong process and
 # deleting the wrong directory are the same class of mistake.
 
-# dev:inode:mtime for $1, portably. GNU stat takes -c, BSD stat takes -f, and
-# neither accepts the other's flag; try GNU first and fall back, the same
-# GNU-then-BSD shape the touch and date calls in the tests use.
+# Artifact identity includes the available fractional mtime, ctime and birth
+# time. Whole-second mtime plus inode collides when Linux immediately reuses a
+# deleted directory's inode. GNU's textual time fields preserve nanoseconds;
+# BSD's F time format requires explicit precision (its default is six digits).
+# Fix locale/timezone so formatting does not change an unchanged identity.
 fp_stat_id() {
   local out
-  out="$(stat -c '%d:%i:%Y' -- "$1" 2>/dev/null)" && [ -n "$out" ] && { printf '%s' "$out"; return 0; }
-  out="$(stat -f '%d:%i:%m' -- "$1" 2>/dev/null)" && [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+  out="$(LC_ALL=C TZ=UTC0 stat -c '%d:%i:%y:%z:%w' -- "$1" 2>/dev/null)" && [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+  out="$(LC_ALL=C TZ=UTC0 stat -f '%d:%i:%.9Fm:%.9Fc:%.9FB' -- "$1" 2>/dev/null)" && [ -n "$out" ] && { printf '%s' "$out"; return 0; }
   return 1
+}
+
+# Stable directory identity for a worktree or its Git administration. mtime
+# and ctime are deliberately excluded: git status can replace the index and
+# ignored build output can change directory metadata without replacing the
+# worktree. Require creation time; inode alone can be recycled after removal.
+# Filesystems/stat versions without birth time cannot establish this identity
+# and therefore cannot authorize a worktree removal. Even supported birth time
+# is limited by the filesystem's actual clock resolution and restore behavior.
+fp_stat_object_id() {
+  local out birth
+  if out="$(LC_ALL=C TZ=UTC0 stat -c '%d:%i:%w' -- "$1" 2>/dev/null)" && [ -n "$out" ]; then
+    birth="${out#*:}"; birth="${birth#*:}"
+  elif out="$(LC_ALL=C TZ=UTC0 stat -f '%d:%i:%.9FB' -- "$1" 2>/dev/null)" && [ -n "$out" ]; then
+    birth="${out#*:}"; birth="${birth#*:}"
+  else
+    return 1
+  fi
+  case "$birth" in ''|'-'|'?'|0|0.*|-1|-1.*) return 1 ;; esac
+  printf '%s' "$out"
 }
 
 # Fingerprint of the worktree at $1. Nonzero when it is gone or not a worktree.
 #
-# Path, HEAD, branch and cleanliness -- because "is this still the worktree I
-# reviewed" is not answered by the path alone. Someone committing inside it, or
-# leaving uncommitted work in it, changed the thing under review even though
-# every byte of the path is identical. Cleanliness is IN the fingerprint as well
-# as being a hard veto: the veto refuses the removal, and the fingerprint makes
-# the plan visibly stale so the person re-reads it rather than re-ticking it.
+# Bind both the physical directory and its owning Git administration. Path,
+# HEAD, branch and cleanliness alone also describe a replacement made from
+# another clone, which is not the worktree a person approved. Cleanliness is IN
+# the fingerprint as well as being a hard veto so changed work is visibly stale.
 fp_for_worktree() {
-  local p="$1" top head branch dirty
+  local p="$1" top head branch dirty admin common top_id admin_id common_id
   [ -n "$p" ] || return 1
   [ -d "$p" ] || return 1
   top="$(git -C "$p" rev-parse --show-toplevel 2>/dev/null)" || return 1
   [ -n "$top" ] || return 1
+  top="$(cd "$top" && pwd -P)" || return 1
+  admin="$(git -C "$top" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  common="$(git -C "$top" rev-parse --git-common-dir 2>/dev/null)" || return 1
+  # --git-common-dir may be relative to the worktree; normalize both Git paths
+  # physically so symlink aliases do not change their identity.
+  admin="$(cd "$top" && cd "$admin" && pwd -P)" || return 1
+  common="$(cd "$top" && cd "$common" && pwd -P)" || return 1
+  top_id="$(fp_stat_object_id "$top")" || return 1
+  admin_id="$(fp_stat_object_id "$admin")" || return 1
+  common_id="$(fp_stat_object_id "$common")" || return 1
   head="$(git -C "$p" rev-parse HEAD 2>/dev/null)" || head="(unborn)"
   branch="$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null)" || branch="(detached)"
   # Cannot-prove-clean counts as dirty, matching veto_is_dirty: a failing
@@ -82,14 +112,16 @@ fp_for_worktree() {
     dirty="unknown"
   fi
   [ -n "$dirty" ] && dirty="dirty" || dirty="clean"
-  printf '%s\n%s\n%s\n%s\n' "$top" "$head" "$branch" "$dirty" | fp_hash
+  printf '%s\n' "$top" "$top_id" "$admin" "$admin_id" "$common" "$common_id" \
+    "$head" "$branch" "$dirty" | fp_hash
 }
 
 # Fingerprint of the artifact at $1. Nonzero when it is gone.
 #
-# What this proves is bounded, and the bound is worth stating: dev:inode
-# identifies the directory itself, so a path re-created under the same name
-# reads as a different item and is refused. It does NOT prove the contents are
+# What this proves is bounded: device, inode and available timestamp precision
+# identify ordinary replacements, including rapid inode reuse. Coarse clocks,
+# unavailable birth time or restored metadata can still collide; this is not a
+# filesystem generation number. It does NOT prove the contents are
 # unchanged -- a directory's mtime does not move when a file deep inside it
 # changes. Contents are not what approval was given for; the person approved
 # "this artifact directory, which I judged abandoned", and staleness is

@@ -2,6 +2,28 @@
 
 All notable changes to Afterparty are documented here. Versions follow semantic versioning.
 
+## [0.10.0] - 2026-09-06
+
+### Added
+
+- Linked worktrees in the plan/apply checklist, always unchecked by default.
+  The current repository is discovered without requiring Claude transcripts;
+  missing transcript history is shown as unknown staleness.
+- Worktree removal checks fresh occupancy, nested repositories (including
+  ignored paths), and directory and Git administrative identity. Incomplete
+  scans and unavailable identity refuse removal, even for a checked item.
+
+### Fixed
+
+- A replaced worktree cannot inherit an approval from another directory or
+  clone at the same path. Regenerate worktree plans created before 0.10.0.
+- Artifact fingerprints retain available timestamp precision to distinguish
+  rapid replacement when an inode is reused.
+- KG5's signalling-loop assertion now executes. Symlink fixtures verify native
+  support, and report-only tests isolate devclean's machine-level commands.
+- Documentation directs Git cleanup through the worktree checklist;
+  `git --clean` remains report-only and exits 2.
+
 ## [0.9.0] - 2026-08-19
 
 ### Changed

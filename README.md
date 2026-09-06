@@ -108,11 +108,11 @@ gets touched.
 | Command | Reports | Acts with |
 | --- | --- | --- |
 | `afterparty glance` | every workspace holding processes, sorted by how long it has been left alone | *(reports only)* |
-| `afterparty plan` | an editable checklist of what could be cleaned, one box per process group | *(proposes only)* |
-| `afterparty apply <plan>` | executes the boxes you checked, refusing anything that moved | *(the only mutating step)* |
+| `afterparty plan` | an editable checklist of process groups and linked worktrees | *(proposes only)* |
+| `afterparty apply <plan>` | executes the boxes you checked, refusing anything that moved | *(acts on approved targets)* |
 | `afterparty audit` | recorded processes, dev servers, watchers, browsers, git litter | `--kill tests\|dev\|browser` |
 | `afterparty stop` | ledger-recorded process groups | `--kill` |
-| `afterparty git` | stale worktrees, agent branches, lock files, conflict litter | `--clean` |
+| `afterparty git` | stale worktrees, agent branches, lock files, conflict litter | worktrees through `plan` / `apply`; `--clean` is report-only |
 | `afterparty artifacts` | rebuildable build/cache output | `--clean` |
 | `afterparty devclean` | orphans, plus `--deep` / `--optimize` / `--disk` targets | `--apply` |
 
@@ -131,7 +131,9 @@ afterparty add --pid <PID> --kind dev --port <PORT> --purpose "<why>" -- <comman
 afterparty list --json             # the ledger, for machines
 afterparty stop --kill             # stop this repo's recorded groups
 afterparty prune                   # drop this repo's dead ledger entries
-afterparty git --clean             # apply the safe git subset
+afterparty git                     # report git leftovers
+afterparty plan > cleanup-plan.md  # save the checklist, then review its boxes
+afterparty apply cleanup-plan.md   # apply the checked items
 afterparty artifacts --clean       # delete rebuildable artifacts
 afterparty devclean --disk         # report disk-heavy targets
 afterparty doctor                  # every dry-run report in one pass
@@ -221,8 +223,8 @@ still working. Thresholds are `AFTERPARTY_IDLE_HOURS` (default 4) and
 
 ### Approving a cleanup
 
-`afterparty plan` writes a checklist, one box per process group — the unit that
-actually gets killed. It is a proposal, not a decision:
+`afterparty plan > cleanup-plan.md` saves a checklist of process groups and
+linked worktrees. Each process box represents an entire group:
 
 - Only items that pass the two-signal gate arrive **checked**.
 - Everything else is listed **unchecked with the reason stated**, so withholding
@@ -231,7 +233,11 @@ actually gets killed. It is a proposal, not a decision:
   `unknown` (no transcript, so no staleness signal to trust), and `no-rule`
   (no kill discipline exists for that command — stop it yourself).
 
-Edit the boxes, then `afterparty apply <plan>`. Every approved item is
+Worktrees in the current repository are discovered even without Claude history;
+repositories found in Claude transcripts are included too. Worktree boxes always
+start unchecked, and missing transcript history reads as unknown staleness.
+
+Edit the boxes, then `afterparty apply cleanup-plan.md`. Every approved item is
 re-checked before anything happens: a **moved fingerprint** means a recycled
 process group now holds something you never reviewed, and it is refused rather
 than re-targeted. The checkbox is the authority — unchecking a box makes it
@@ -251,22 +257,21 @@ and MCP processes.
 
 ## Git cleanup
 
-Agent fleets work through worktrees and branches, then vanish. `afterparty
-git` reports what they left behind; `--clean` applies only the provably safe
-subset:
+`afterparty git` reports stale worktrees, agent branches, lock files, conflict
+litter, and stashes. `--clean` also reports and exits 2. Worktree removal goes
+through the checklist in `plan` and the checked items in `apply`.
 
-- prune worktree admin data whose directory is already gone
-- remove **clean** worktrees idle past `--age` days (default 7; never
-  `--force`)
-- delete agent-named branches (`claude`, `codex`, `cursor`, `copilot`,
-  `aider`, `agent` prefixes, slash- or dash-separated) that are **merged**
-  into HEAD (`-d`, never `-D`)
-- remove a `.git/index.lock` older than 60 minutes
-- delete **untracked** merge-conflict litter (`*.orig`, `*.rej`,
-  `*.BACKUP.*`, ...)
+Before removing a worktree, apply refreshes its occupancy scan and checks its
+identity and structure. Dirty or occupied worktrees, nested repositories
+(including those under ignored directories), symlinks, and unavailable scans
+are refused. The current and main worktrees are protected. Removal uses
+`git worktree remove` without `--force` and confirms that the target disappeared.
 
-Unmerged branches, dirty worktrees, and stashes are report-only, always. For
-those, the report names the exact manual command instead of guessing for you.
+Worktree identity includes the physical directory and its owning Git metadata,
+so replacing a worktree invalidates its old approval. The filesystem must expose
+usable creation identity; otherwise removal is withheld. Regenerate worktree
+plans created before 0.10.0. Branches, lock files, conflict litter, and stashes
+remain report-only.
 
 ## Artifacts
 
@@ -362,8 +367,8 @@ always get byte-stable plain text, `NO_COLOR` is honored, and
   `--allow-non-repo-root` is explicit, and filesystem/home roots are rejected.
 - Global cache and optimize paths are physically resolved beneath `HOME`;
   symlink parents cannot redirect a mutation outside the reviewed scope.
-- Git: apply only the safe subset; everything ambiguous stays report-only,
-  with the manual command spelled out.
+- Git: only checked worktrees are removed, after fresh identity, occupancy,
+  and structural checks. Other Git cleanup stays report-only.
 
 ## Requirements
 
@@ -374,7 +379,8 @@ always get byte-stable plain text, `NO_COLOR` is honored, and
   application integration.
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for process
   matching; the audit falls back to `grep -E` when it is missing.
-- `lsof` (optional) for the localhost listener report.
+- `lsof` for the localhost listener report and worktree occupancy checks.
+  Reports can run without it; worktree removal requires a successful scan.
 - macOS-only devclean steps (`launchctl` agents, Xcode caches, iOS
   simulators) are skipped on other platforms.
 

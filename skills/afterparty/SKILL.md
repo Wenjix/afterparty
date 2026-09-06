@@ -5,31 +5,30 @@ license: ./LICENSE
 compatibility: Requires Bash 3.2+, Git, and standard Unix process tools. macOS/Linux terminals and WSL are supported; Git Bash provides Git/filesystem commands with degraded process audits.
 metadata:
   author: Wenjix
-  version: "0.9.0"
+  version: "0.10.0"
 ---
 
 # Afterparty
 
-This is the memory hook; deterministic behavior lives in the bundled CLI.
-`$CLAUDE_SKILL_DIR` is this skill's directory. Requirements: a macOS/Linux
-terminal (Windows: WSL, or Git Bash with degraded process audits), Git, and
-standard Unix process tools.
+`$CLAUDE_SKILL_DIR` is this self-contained skill's directory. Use its bundled CLI.
 
-Returning to the machine, see what every workspace still holds, sorted by how
-long each was left alone (reports only; it never acts):
+On return, report what workspaces still hold:
 
 ```bash
 "$CLAUDE_SKILL_DIR/bin/afterparty" glance
 ```
 
-Cleaning up for real is two steps, so a person approves before anything dies:
+Save a checklist, have the user review its boxes, then apply:
 
 ```bash
-"$CLAUDE_SKILL_DIR/bin/afterparty" plan          # writes a checklist
-"$CLAUDE_SKILL_DIR/bin/afterparty" apply <plan>  # runs only the checked boxes
+"$CLAUDE_SKILL_DIR/bin/afterparty" plan > cleanup-plan.md
+"$CLAUDE_SKILL_DIR/bin/afterparty" apply cleanup-plan.md
 ```
 
-Audit before starting duplicate services and before ending a session:
+Worktrees start unchecked;
+unavailable scans, nested repositories, and changed identity block removal.
+
+Audit before starting services and ending sessions:
 
 ```bash
 "$CLAUDE_SKILL_DIR/bin/afterparty" audit
@@ -46,14 +45,14 @@ Only act after reviewing the dry run:
 ```bash
 "$CLAUDE_SKILL_DIR/bin/afterparty" stop --kill
 "$CLAUDE_SKILL_DIR/bin/afterparty" audit --kill dev --pgid <reviewed-pgid>
-"$CLAUDE_SKILL_DIR/bin/afterparty" git --clean
 "$CLAUDE_SKILL_DIR/bin/afterparty" artifacts --clean
 "$CLAUDE_SKILL_DIR/bin/afterparty" devclean --apply
 ```
 
-Use `--json` for versioned JSON Lines. `audit --report` persists the next
-session's report; locate it with `report-path`. `actions` shows the private
-local mutation journal.
+`git` reports leftovers; approve worktree removal through `plan`/`apply`.
+
+`--json` emits JSON Lines. `audit --report` persists a report; `report-path`
+locates it. `actions` shows mutation history.
 
 Never kill the editor, Codex, the user's shell, or shared MCP servers unless the
 script proves they are safe orphaned targets.

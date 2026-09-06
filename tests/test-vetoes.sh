@@ -71,26 +71,31 @@ _b=$FAILS
 # written as a string prefix test passes this and deletes outside the scope.
 mkdir -p "$T/outside/precious"
 echo 'irreplaceable' > "$T/outside/precious/data"
-ln -s "$T/outside/precious" "$PWD/escape"
-V="$(veto_for artifact "$PWD/escape" "$PWD")"
-[ "$V" = "symlink" ] || fail "V5: a symlink target gave '$V', want 'symlink'"
-[ -f "$T/outside/precious/data" ] || fail "V5: the file outside the scope is gone"
-# and the physical escape is caught even when the symlink is a path COMPONENT
-mkdir -p "$T/outside/holder"
-ln -s "$T/outside/holder" "$PWD/via"
-mkdir -p "$T/outside/holder/node_modules"
-V="$(veto_for artifact "$PWD/via/node_modules" "$PWD")"
-[ "$V" = "scope-escape" ] || fail "V5: escape through a symlinked component gave '$V', want 'scope-escape'"
-[ "$FAILS" -eq "$_b" ] && pass "V5: symlink targets and symlinked path components are both vetoed"
+if ln -s "$T/outside/precious" "$PWD/escape" 2>/dev/null && [ -L "$PWD/escape" ]; then
+  V="$(veto_for artifact "$PWD/escape" "$PWD")"
+  [ "$V" = "symlink" ] || fail "V5: a symlink target gave '$V', want 'symlink'"
+  [ -f "$T/outside/precious/data" ] || fail "V5: the file outside the scope is gone"
+  # and the physical escape is caught even when the symlink is a path COMPONENT
+  mkdir -p "$T/outside/holder"
+  ln -s "$T/outside/holder" "$PWD/via"
+  [ -L "$PWD/via" ] || fail "V5: the component fixture is not a symlink"
+  mkdir -p "$T/outside/holder/node_modules"
+  V="$(veto_for artifact "$PWD/via/node_modules" "$PWD")"
+  [ "$V" = "scope-escape" ] || fail "V5: escape through a symlinked component gave '$V', want 'scope-escape'"
+  [ "$FAILS" -eq "$_b" ] && pass "V5: symlink targets and symlinked path components are both vetoed"
+else
+  echo "SKIP: V5: this filesystem does not create real symlinks"
+fi
 
 # ---------- V6: a dirty worktree is a hard veto for the worktree type ----------
 _b=$FAILS
 git worktree add -q "$T/wt" -b agent/x HEAD
+MAP="$T/cwdmap"; : > "$MAP" # Explicit, complete empty map for unit fixtures.
 echo 'uncommitted' > "$T/wt/scratch.txt"
-V="$(veto_for worktree "$T/wt" "$PWD")"
+V="$(veto_for worktree "$T/wt" "$PWD" "$MAP")"
 [ "$V" = "dirty" ] || fail "V6: a dirty worktree gave '$V', want 'dirty'"
 rm -f "$T/wt/scratch.txt"
-V="$(veto_for worktree "$T/wt" "$PWD")"
+V="$(veto_for worktree "$T/wt" "$PWD" "$MAP")"
 [ -z "$V" ] || fail "V6: control — a clean worktree was vetoed as '$V'"
 [ "$FAILS" -eq "$_b" ] && pass "V6: uncommitted work vetoes a worktree, clean control passes"
 
@@ -123,6 +128,52 @@ V="$(veto_for worktree "$T/wt" "$PWD" "$MAP")"
 [ "$V" = "occupied" ] || fail "V10: a cwd recorded in physical form gave '$V', want 'occupied'"
 [ "$PHYS_WT" != "$T/wt" ] || echo "  note: /tmp is not symlinked here, so the two forms coincide" >&2
 [ "$FAILS" -eq "$_b" ] && pass "V10: a live process inside a worktree vetoes it, in either path form"
+
+# ---------- V11: unavailable occupancy evidence is a veto ----------
+_b=$FAILS
+V="$(veto_for worktree "$T/wt" "$PWD" "$T/missing-map")"
+[ "$V" = "occupancy-unavailable" ] || fail "V11: missing map gave '$V', want 'occupancy-unavailable'"
+V="$(veto_for worktree "$T/wt" "$PWD")"
+[ "$V" = "occupancy-unavailable" ] || fail "V11: omitted map gave '$V', want 'occupancy-unavailable'"
+[ "$FAILS" -eq "$_b" ] && pass "V11: missing occupancy evidence fails closed"
+
+# ---------- V12: ignored nested history is protected in worktrees ----------
+_b=$FAILS
+: > "$MAP"
+printf 'private/\n' >> .git/info/exclude
+git init -q "$T/wt/private"
+printf 'unique history\n' > "$T/wt/private/only-copy"
+git -C "$T/wt/private" add only-copy
+git -C "$T/wt/private" -c user.email=t@t.local -c user.name=t commit -qm unique
+[ -z "$(git -C "$T/wt" status --porcelain)" ] || fail "V12: ignored nested fixture is not clean to its outer repo"
+V="$(veto_for worktree "$T/wt" "$PWD" "$MAP")"
+[ "$V" = "nested-repo" ] || fail "V12: ignored nested repository gave '$V', want 'nested-repo'"
+mv "$T/wt/private" "$T/saved-private"
+V="$(veto_for worktree "$T/wt" "$PWD" "$MAP")"
+[ -z "$V" ] || fail "V12: control — worktree root .git was mistaken for a nested repo: '$V'"
+[ "$FAILS" -eq "$_b" ] && pass "V12: nested repos are vetoed while root worktree metadata is excluded"
+
+# ---------- V13: incomplete filesystem scans cannot prove safety ----------
+_b=$FAILS
+V="$(find() { return 1; }; veto_for worktree "$T/wt" "$PWD" "$MAP")"
+[ "$V" = "scan-incomplete" ] || fail "V13: failed worktree scan gave '$V', want 'scan-incomplete'"
+V="$(find() { return 1; }; veto_for artifact "$PWD/node_modules" "$PWD")"
+[ "$V" = "scan-incomplete" ] || fail "V13: failed artifact scan gave '$V', want 'scan-incomplete'"
+[ "$FAILS" -eq "$_b" ] && pass "V13: failed nested repository scans fail closed"
+
+# ---------- V14: bare repository backups are also nested repositories ----------
+_b=$FAILS
+printf 'archive.git/\nplain-dir/\n' >> .git/info/exclude
+git init --bare -q "$T/wt/archive.git"
+[ -z "$(git -C "$T/wt" status --porcelain)" ] || fail "V14: bare fixture is not ignored"
+V="$(veto_for worktree "$T/wt" "$PWD" "$MAP")"
+[ "$V" = "nested-repo" ] || fail "V14: ignored bare repository gave '$V', want 'nested-repo'"
+mv "$T/wt/archive.git" "$T/saved-archive.git"
+mkdir -p "$T/wt/plain-dir"
+printf 'ordinary file\n' > "$T/wt/plain-dir/HEAD"
+V="$(veto_for worktree "$T/wt" "$PWD" "$MAP")"
+[ -z "$V" ] || fail "V14: an ordinary HEAD file was mistaken for a repository: '$V'"
+[ "$FAILS" -eq "$_b" ] && pass "V14: bare repositories are protected and ordinary HEAD files are not repositories"
 
 # ---------- V8: a missing path is 'gone', not a silent pass ----------
 _b=$FAILS

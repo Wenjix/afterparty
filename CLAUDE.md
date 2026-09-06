@@ -75,11 +75,15 @@ mechanics when you touch them.
   incomplete scans stay hard vetoes even when a human ticks the box, and
   filesystem items default to unchecked because deleting a worktree and
   restarting a dev server are not the same consequence.
-- Three mutation paths: `stop --kill` stops ledger-recorded groups;
-  `audit --kill tests|dev|browser` kills by pattern category; `git --clean`
-  applies only the safe git subset (worktree prune, clean stale worktrees,
-  merged agent branches, aged index.lock, untracked conflict litter) —
-  unmerged branches, dirty worktrees, and stashes stay report-only.
+- `stop --kill` stops ledger-recorded groups; `audit --kill
+  tests|dev|browser` kills by pattern category. Worktree removal requires a
+  checked plan item and `apply`; `git --clean` remains report-only. Worktree
+  fingerprints include physical directory and Git administrative creation
+  identity, so replacements cannot inherit approval. Unsupported identity is
+  a refusal. Filesystem occupancy uses `ws_pid_cwd --strict`; remove the map
+  on discovery failure, and refresh it after process cleanup for each worktree.
+  A nested-repository scan excludes only the worktree's own root `.git` entry;
+  ignored nested repositories and scan failures still veto removal.
 - Mutation receipts are postcondition-based: signal delivery and `rm` return
   codes are not enough. Confirm the process/group is absent or the target path
   disappeared, count partial failures, return nonzero, and append the outcome

@@ -303,8 +303,14 @@ while IFS= read -r t; do
   want_fp="${t%%:*}"
   wtpath="${t#*:}"
   if ! have_fp="$(fp_for_worktree "$wtpath" 2>/dev/null)" || [ -z "$have_fp" ]; then
-    s_skip "  $wtpath — gone, refused (no longer a worktree)"
-    N_GONE=$((N_GONE + 1)); N_OK=$((N_OK - 1))
+    if [ -e "$wtpath" ] || [ -L "$wtpath" ]; then
+      s_skip "  $wtpath — refused, identity-unavailable (cannot verify the worktree)"
+      N_FAILED=$((N_FAILED + 1))
+    else
+      s_skip "  $wtpath — gone, refused (no longer a worktree)"
+      N_GONE=$((N_GONE + 1))
+    fi
+    N_OK=$((N_OK - 1))
     continue
   fi
   if [ "$have_fp" != "$want_fp" ]; then
@@ -319,13 +325,26 @@ while IFS= read -r t; do
     N_FAILED=$((N_FAILED + 1)); N_OK=$((N_OK - 1))
     continue
   fi
-  # The vetoes run HERE, against the world as it is now, not as the plan
-  # described it. A ticked box gets the item considered; it does not get the
-  # structural checks skipped.
-  reason="$(veto_for worktree "$wtpath" "$repo" "$T/cwd")"
+  # Refresh after process cleanup and for each target. The earlier map can be
+  # stale by now; a failed refresh must not become an empty, safe-looking map.
+  ws_pid_cwd --strict > "$T/wt-cwd" 2>/dev/null || rm -f "$T/wt-cwd"
+  # A ticked box gets the item considered; structural checks still apply.
+  reason="$(veto_for worktree "$wtpath" "$repo" "$T/wt-cwd")"
   if [ -n "$reason" ]; then
     s_skip "  $wtpath — refused by the $reason veto, approval does not override it"
     N_VETOED=$((N_VETOED + 1)); N_OK=$((N_OK - 1))
+    continue
+  fi
+  # lsof and filesystem scans can take time. A replacement during those
+  # checks is still a different target, even if it passes every veto itself.
+  if ! have_fp="$(fp_for_worktree "$wtpath" 2>/dev/null)" || [ -z "$have_fp" ]; then
+    s_skip "  $wtpath — refused, identity-unavailable at the removal boundary"
+    N_FAILED=$((N_FAILED + 1)); N_OK=$((N_OK - 1))
+    continue
+  fi
+  if [ "$have_fp" != "$want_fp" ]; then
+    s_skip "  $wtpath — refused, identity changed during safety checks; re-plan"
+    N_DRIFT=$((N_DRIFT + 1)); N_OK=$((N_OK - 1))
     continue
   fi
   s_would "  removing worktree: $wtpath"

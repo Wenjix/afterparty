@@ -19,11 +19,71 @@ trap 'cd /; rm -rf "$T"' EXIT
 export XDG_STATE_HOME="$T/state" XDG_CACHE_HOME="$T/cache" HOME="$T/home"
 mkdir -p "$HOME"
 
+# Every apply fixture uses harmless process/service/package shims, even when
+# the intended plan contains only filesystem targets.
+SHIM="$T/shim"; mkdir -p "$SHIM"
+export TEST_SIDE_EFFECT_LOG="$T/side-effects" TEST_LSOF_LOG="$T/lsof-calls"
+export TEST_LSOF_MODE=clean TEST_AUDIT_MARKER="$T/audit-ran"
+: > "$TEST_SIDE_EFFECT_LOG"; : > "$TEST_LSOF_LOG"
+for tool in pgrep launchctl pnpm; do
+  cat > "$SHIM/$tool" <<'SAFE'
+#!/usr/bin/env bash
+printf '%s %s\n' "${0##*/}" "$*" >> "$TEST_SIDE_EFFECT_LOG"
+case "${0##*/}" in pgrep) exit 1 ;; esac
+exit 0
+SAFE
+done
+cat > "$SHIM/lsof" <<'LSOF'
+#!/usr/bin/env bash
+printf '%s\n' "$TEST_LSOF_MODE" >> "$TEST_LSOF_LOG"
+case "$TEST_LSOF_MODE" in
+  failed) exit 1 ;;
+  empty) exit 0 ;;
+  malformed) printf 'p4242\nfcwd\nnrelative-path\n'; exit 0 ;;
+  missing-descriptor) printf 'p4242\nn%s\n' "$TEST_REPO"; exit 0 ;;
+  readlink-error) printf 'p4242\nfcwd\nn/proc/4242/cwd (readlink: Permission denied)\n'; exit 0 ;;
+  incomplete) printf 'p4242\nfcwd\nn%s\np4343\nfcwd\n' "$TEST_REPO"; exit 0 ;;
+  warning) printf 'lsof: WARNING: cannot inspect a filesystem\n' >&2 ;;
+  after-audit)
+    if [ -e "$TEST_AUDIT_MARKER" ]; then
+      printf 'p9902\nfcwd\nn%s\n' "$TEST_BUSY_PATH"; exit 0
+    fi ;;
+  replace-during-scan)
+    if [ -e "$TEST_REPLACEMENT_SEEN" ]; then
+      branch="$(git -C "$TEST_BUSY_PATH" symbolic-ref --short HEAD)" || exit 1
+      git -C "$TEST_REPO" worktree move "$TEST_BUSY_PATH" "$TEST_BUSY_PATH-old" || exit 1
+      git -C "$TEST_BUSY_PATH-old" checkout -q --detach HEAD || exit 1
+      git -C "$TEST_REPO" worktree add -q "$TEST_BUSY_PATH" "$branch" || exit 1
+    else
+      : > "$TEST_REPLACEMENT_SEEN"
+    fi ;;
+esac
+printf 'p9901\nfcwd\nn%s\n' "$TEST_REPO"
+[ "$TEST_LSOF_MODE" != partial-error ]
+LSOF
+cat > "$SHIM/audit-processes.sh" <<'AUDIT'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$TEST_AUDIT_MARKER"
+exit 0
+AUDIT
+cat > "$SHIM/ps" <<'PS'
+#!/usr/bin/env bash
+[ ! -e "$TEST_AUDIT_MARKER" ] || exit 0
+case "$*" in
+  *pgid=,lstart=,command=*) printf '9901 Tue Aug 18 09:00:00 2026 npm run dev\n' ;;
+  *pid,pgid,%cpu*) printf '9901 9901 0.0\n' ;;
+  *) exit 1 ;;
+esac
+PS
+chmod +x "$SHIM/"*
+export PATH="$SHIM:$PATH"
+
 W="$T/proj"
 git init -qb main "$W"
 git -C "$W" config user.email t@t.local
 git -C "$W" config user.name tester
 git -C "$W" commit -q --allow-empty -m one
+export TEST_REPO="$W"
 
 mkwt() { git -C "$W" worktree add -q "$T/$1" -b "agent/$1" HEAD; }
 for n in gozip stayput dirtied swapped; do mkwt "$n"; done
@@ -42,6 +102,29 @@ plan_for() { # plan_for <path> <fingerprint> [checked]
 }
 
 run_apply() { AFTERPARTY_STYLE=never bash "$LIB/apply.sh" "$1" 2>&1; }
+
+# No supported creation identity must mean refusal, not "gone" or success.
+# If this host cannot provide it, test that production refusal first, then
+# supply a deterministic birth field so the independent veto tests still run.
+_b=$FAILS
+if ! fp_for_worktree "$T/gozip" >/dev/null 2>&1; then
+  plan_for "$T/gozip" deadbeef > "$T/no-identity.md"
+  OUT="$(cd "$W" && run_apply "$T/no-identity.md")"; RC=$?
+  printf '%s\n' "$OUT" | grep -q 'identity-unavailable' || fail "AW0: unsupported identity was not named: $OUT"
+  [ "$RC" -ne 0 ] && [ -d "$T/gozip" ] || fail "AW0: unsupported identity did not preserve the worktree and fail"
+  export TEST_REAL_STAT="$(command -v stat)"
+  cat > "$SHIM/stat" <<'STAT'
+#!/usr/bin/env bash
+case "$1:$2" in
+  '-c:%d:%i:%w') exec "$TEST_REAL_STAT" -c '%d:%i:2000-01-01 00:00:00.123456789 +0000' "${@:3}" ;;
+  '-f:%d:%i:%.9FB') exec "$TEST_REAL_STAT" -f '%d:%i:946684800.123456789' "${@:3}" ;;
+esac
+exec "$TEST_REAL_STAT" "$@"
+STAT
+  chmod +x "$SHIM/stat"
+  echo '  note: native creation identity unavailable; remaining veto fixtures supply a deterministic birth field'
+fi
+[ "$FAILS" -eq "$_b" ] || exit 1
 
 # ---------- AW1: an approved, clean, unoccupied worktree is removed ----------
 _b=$FAILS
@@ -126,6 +209,125 @@ OUT="$(cd "$T/standingin" && run_apply "$T/p6.md")"
 printf '%s\n' "$OUT" | grep -q 'current' \
   || fail "AW6: the refusal does not name 'current': $OUT"
 [ "$FAILS" -eq "$_b" ] && pass "AW6: apply refuses to remove its own working directory"
+
+# ---------- AW7: ignored nested repositories retain their unique history ----------
+_b=$FAILS
+mkwt nested
+printf 'private/\n' >> "$W/.git/info/exclude"
+git init -q "$T/nested/private"
+printf 'only copy\n' > "$T/nested/private/keep"
+git -C "$T/nested/private" add keep
+git -C "$T/nested/private" -c user.email=t@t.local -c user.name=t commit -qm unique
+NESTED_HEAD="$(git -C "$T/nested/private" rev-parse HEAD)"
+[ -z "$(git -C "$T/nested" status --porcelain)" ] || fail "AW7: fixture is not clean to its outer repo"
+plan_for "$T/nested" "$(fp_for_worktree "$T/nested")" > "$T/p7.md"
+OUT="$(cd "$W" && run_apply "$T/p7.md")"; RC=$?
+printf '%s\n' "$OUT" | grep -q 'nested-repo veto' || fail "AW7: nested guard was not reached: $OUT"
+[ "$RC" -ne 0 ] || fail "AW7: nested refusal exited 0"
+[ -f "$T/nested/private/keep" ] || fail "AW7: ignored nested history was deleted"
+[ "$(git -C "$T/nested/private" rev-parse HEAD 2>/dev/null)" = "$NESTED_HEAD" ] \
+  || fail "AW7: unique nested commit is no longer available"
+[ "$FAILS" -eq "$_b" ] && pass "AW7: ignored nested history survives approved worktree removal"
+
+# ---------- AW8: broken cwd discovery never becomes an empty safe map ----------
+_b=$FAILS
+for mode in failed partial-error empty malformed missing-descriptor readlink-error incomplete warning; do
+  mkwt "scan-$mode"
+  plan_for "$T/scan-$mode" "$(fp_for_worktree "$T/scan-$mode")" > "$T/p8-$mode.md"
+  OUT="$(cd "$W" && TEST_LSOF_MODE="$mode" run_apply "$T/p8-$mode.md")"; RC=$?
+  printf '%s\n' "$OUT" | grep -q 'occupancy-unavailable veto' \
+    || fail "AW8/$mode: occupancy refusal was not reached: $OUT"
+  [ -d "$T/scan-$mode" ] || fail "AW8/$mode: worktree was removed without complete occupancy evidence"
+  [ "$RC" -ne 0 ] || fail "AW8/$mode: unavailable occupancy exited 0"
+done
+[ "$FAILS" -eq "$_b" ] && pass "AW8: failed, partial, empty, malformed and incomplete cwd scans refuse removal"
+
+# ---------- AW9: refresh occupancy after process cleanup, at removal ----------
+_b=$FAILS
+mkwt refreshed
+export TEST_BUSY_PATH="$T/refreshed"
+R="$T/transcripts"; mkdir -p "$R/proj"
+printf '{"cwd":"%s"}\n' "$W" > "$R/proj/a.jsonl"
+touch -d '300 days ago' "$R/proj/a.jsonl" 2>/dev/null \
+  || touch -t "$(date -v -300d +%Y%m%d%H%M)" "$R/proj/a.jsonl"
+{
+  printf -- '- [x] eligible pgid 9901\n      category: dev  fingerprint: %s\n' "$(fp_for_pgid 9901)"
+  plan_for "$T/refreshed" "$(fp_for_worktree "$T/refreshed")"
+} > "$T/p9.md"
+OUT="$(cd "$W" && TEST_LSOF_MODE=after-audit AFTERPARTY_TRANSCRIPT_ROOT="$R" run_apply "$T/p9.md")"; RC=$?
+[ -s "$TEST_AUDIT_MARKER" ] || fail "AW9: process cleanup delegation was not reached: $OUT"
+printf '%s\n' "$OUT" | grep -q 'occupied veto' || fail "AW9: refreshed occupancy was not checked: $OUT"
+[ -d "$T/refreshed" ] || fail "AW9: worktree became occupied during cleanup and was still removed"
+[ "$RC" -ne 0 ] || fail "AW9: occupied refusal exited 0"
+[ "$FAILS" -eq "$_b" ] && pass "AW9: occupancy is refreshed after process cleanup before worktree removal"
+
+# ---------- AW10: incomplete filesystem scans cannot authorize deletion ----------
+_b=$FAILS
+mkwt unscannable
+plan_for "$T/unscannable" "$(fp_for_worktree "$T/unscannable")" > "$T/p10.md"
+cat > "$SHIM/find" <<'FIND'
+#!/usr/bin/env bash
+exit 1
+FIND
+chmod +x "$SHIM/find"
+OUT="$(cd "$W" && run_apply "$T/p10.md")"; RC=$?
+rm -f "$SHIM/find"
+printf '%s\n' "$OUT" | grep -q 'scan-incomplete veto' || fail "AW10: failed scan refusal was not reached: $OUT"
+[ -d "$T/unscannable" ] || fail "AW10: incompletely scanned worktree was removed"
+[ "$RC" -ne 0 ] || fail "AW10: incomplete scan exited 0"
+[ "$FAILS" -eq "$_b" ] && pass "AW10: an incomplete filesystem scan vetoes worktree removal"
+
+# ---------- AW11: unavailable identity on an extant target is a failed refusal ----------
+_b=$FAILS
+mkwt noidentity
+plan_for "$T/noidentity" deadbeef > "$T/p11.md"
+[ ! -e "$SHIM/stat" ] || mv "$SHIM/stat" "$SHIM/stat-saved"
+cat > "$SHIM/stat" <<'STAT'
+#!/usr/bin/env bash
+exit 1
+STAT
+chmod +x "$SHIM/stat"
+OUT="$(cd "$W" && run_apply "$T/p11.md")"; RC=$?
+rm -f "$SHIM/stat"
+[ ! -e "$SHIM/stat-saved" ] || mv "$SHIM/stat-saved" "$SHIM/stat"
+printf '%s\n' "$OUT" | grep -q 'identity-unavailable' || fail "AW11: unavailable identity was not named: $OUT"
+[ "$RC" -ne 0 ] || fail "AW11: unavailable identity exited 0"
+[ -d "$T/noidentity" ] || fail "AW11: unavailable identity removed the worktree"
+[ "$FAILS" -eq "$_b" ] && pass "AW11: extant worktrees with unavailable identity are refused visibly"
+
+# ---------- AW12: ignored bare repository backups retain unique commits ----------
+_b=$FAILS
+mkwt bare
+printf 'archive.git/\n' >> "$W/.git/info/exclude"
+git init -q "$T/bare-seed"
+printf 'unique bare history\n' > "$T/bare-seed/keep"
+git -C "$T/bare-seed" add keep
+git -C "$T/bare-seed" -c user.email=t@t.local -c user.name=t commit -qm unique
+BARE_HEAD="$(git -C "$T/bare-seed" rev-parse HEAD)"
+git clone --bare -q "$T/bare-seed" "$T/bare/archive.git"
+rm -rf "$T/bare-seed"
+[ -z "$(git -C "$T/bare" status --porcelain)" ] || fail "AW12: bare fixture is not clean to the outer repository"
+plan_for "$T/bare" "$(fp_for_worktree "$T/bare")" > "$T/p12.md"
+OUT="$(cd "$W" && run_apply "$T/p12.md")"; RC=$?
+printf '%s\n' "$OUT" | grep -q 'nested-repo veto' || fail "AW12: bare repository guard was not reached: $OUT"
+[ "$RC" -ne 0 ] || fail "AW12: bare repository refusal exited 0"
+[ "$(git --git-dir="$T/bare/archive.git" rev-parse HEAD 2>/dev/null)" = "$BARE_HEAD" ] \
+  || fail "AW12: unique bare repository history was deleted"
+[ "$FAILS" -eq "$_b" ] && pass "AW12: ignored bare repositories retain unique history"
+
+# ---------- AW13: recheck identity after potentially slow safety scans ----------
+_b=$FAILS
+mkwt raced
+export TEST_BUSY_PATH="$T/raced" TEST_REPLACEMENT_SEEN="$T/replacement-scan-seen"
+plan_for "$T/raced" "$(fp_for_worktree "$T/raced")" > "$T/p13.md"
+OUT="$(cd "$W" && TEST_LSOF_MODE=replace-during-scan run_apply "$T/p13.md")"
+[ -d "$T/raced-old" ] || fail "AW13: the scan did not replace the worktree fixture: $OUT"
+printf '%s\n' "$OUT" | grep -q 'identity changed during safety checks' \
+  || fail "AW13: removal-boundary identity guard was not reached: $OUT"
+[ -d "$T/raced" ] || fail "AW13: a worktree replaced during safety checks was removed"
+[ "$FAILS" -eq "$_b" ] && pass "AW13: replacement during safety scans invalidates approval before removal"
+
+[ ! -s "$TEST_SIDE_EFFECT_LOG" ] || fail "apply reached a HOME-immune mutation command: $(cat "$TEST_SIDE_EFFECT_LOG")"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi

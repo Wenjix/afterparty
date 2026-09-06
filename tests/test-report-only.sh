@@ -43,14 +43,41 @@ git show-ref --verify -q refs/heads/claude/merged \
 printf '%s\n' "$OUT" | grep -q 'wt-stale' \
   || fail "R1: the worktree was not even reported — that is a no-op, not report-only"
 [ "$FAILS" -eq "$_b" ] && pass "R1: git --clean reports the worktree and refuses to remove it"
-cd "$REPO" || exit 1
+
+# HOME does not isolate orphan processes, launchd services, or pnpm's shared
+# store. Intercept all three machine-wide tools before any --apply, and run
+# the current-repo artifact pass from a disposable non-repository directory.
+SHIM="$T/shim"
+mkdir -p "$SHIM" "$T/run" || exit 1
+for tool in pgrep launchctl pnpm; do
+  cat > "$SHIM/$tool" <<'SH' || exit 1
+#!/usr/bin/env bash
+printf '%s\t%s\t%s\n' "${0##*/}" "$PWD" "$*" >> "$AFTERPARTY_TEST_MACHINE_CALLS"
+exit 1
+SH
+  chmod +x "$SHIM/$tool" || exit 1
+done
+
+run_disk_apply() (
+  cd "$T/run" || exit 1
+  export PATH="$SHIM:$PATH"
+  local tool
+  for tool in pgrep launchctl pnpm; do
+    [ "$(command -v "$tool")" = "$SHIM/$tool" ] || {
+      echo "refusing test apply: $tool is not intercepted" >&2
+      exit 1
+    }
+  done
+  HOME="$1" XDG_CACHE_HOME="$2" AFTERPARTY_TEST_MACHINE_CALLS="$3" \
+    bash "$LIB/devclean.sh" --disk --apply
+)
 
 # ---------- R2: the roaming project scan withholds under --apply ----------
 _b=$FAILS
 H="$T/home"; mkdir -p "$H/Documents/proj/node_modules/pkg"
 dd if=/dev/zero of="$H/Documents/proj/node_modules/pkg/big.bin" bs=1024 count=2048 2>/dev/null
 printf '{"name":"x"}\n' > "$H/Documents/proj/package.json"
-OUT="$(HOME="$H" XDG_CACHE_HOME="$T/cache" bash "$LIB/devclean.sh" --disk --apply 2>&1)"
+OUT="$(run_disk_apply "$H" "$T/cache" "$T/r2-tools.log" 2>&1)"
 [ -d "$H/Documents/proj/node_modules" ] \
   || fail "R2: node_modules in an unnamed project was deleted"
 printf '%s\n' "$OUT" | grep -q 'withheld project node_modules/' \
@@ -65,10 +92,22 @@ printf '%s\n' "$OUT" | grep -q 'afterparty plan' \
 _b=$FAILS
 H2="$T/home2"; mkdir -p "$H2/.gradle/caches/modules"
 dd if=/dev/zero of="$H2/.gradle/caches/modules/blob.bin" bs=1024 count=2048 2>/dev/null
-HOME="$H2" XDG_CACHE_HOME="$T/cache2" bash "$LIB/devclean.sh" --disk --apply >/dev/null 2>&1
+run_disk_apply "$H2" "$T/cache2" "$T/r3-tools.log" >/dev/null 2>&1
 [ -d "$H2/.gradle/caches" ] \
   && fail "R3: an exact allowlisted cache path was NOT cleaned — the cut went too far"
 [ "$FAILS" -eq "$_b" ] && pass "R3: exact allowlisted cache paths are still cleaned"
+
+# ---------- R4: each apply really used the machine-tool shims ----------
+_b=$FAILS
+for calls in "$T/r2-tools.log" "$T/r3-tools.log"; do
+  for tool in pgrep pnpm; do
+    grep -q "^$tool$(printf '\t')" "$calls" \
+      || fail "R4: $tool was not intercepted during $(basename "$calls")"
+  done
+  awk -F '\t' -v want="$T/run" '$2 != want { bad = 1 } END { exit bad }' "$calls" \
+    || fail "R4: an apply ran outside the disposable working directory"
+done
+[ "$FAILS" -eq "$_b" ] && pass "R4: apply uses intercepted machine tools from a disposable cwd"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi

@@ -75,13 +75,40 @@ veto_is_tracked() {
   [ -n "$listed" ]
 }
 
-# True when a nested git repository lives anywhere below $1. The outer repo
-# cannot see those files with ls-files, so tracked-ness does not protect them.
-veto_has_nested_repo() {
-  local found
-  found="$(find "$1" -mindepth 1 \( -type d -name .git -o -type f -name .git \) -print 2>/dev/null)" || return 1
-  [ -n "$found" ]
-}
+# Return 0 for a nested repo, 1 for a complete clear scan, 2 for an incomplete
+# scan. The outer repo cannot see ignored repositories with git status. A
+# worktree scan excludes its own root .git entry, then traverses ignored dirs
+# normally. Bare repositories have no .git entry: HEAD plus objects/refs is a
+# candidate, confirmed by Git. Finish the filesystem scan before deciding, so
+# inaccessible siblings cannot be mistaken for a complete scan.
+veto_has_nested_repo() (
+  local scan entry dir
+  scan="$(mktemp -d)" || return 2
+  trap 'rm -rf "$scan"' EXIT
+  cd -- "$1" 2>/dev/null || return 2
+  # NUL records preserve filenames containing tabs and newlines. Worktrees
+  # must exclude only their own .git metadata, never an ignored child's.
+  if [ "${2:-}" = worktree ]; then
+    find . -path './.git' -prune -o \( -name .git -o -type f -name HEAD \) -print0 -prune \
+      > "$scan/entries" 2>/dev/null || return 2
+  else
+    find . -mindepth 1 \( -name .git -o -type f -name HEAD \) -print0 -prune \
+      > "$scan/entries" 2>/dev/null || return 2
+  fi
+  while IFS= read -r -d '' entry; do
+    case "${entry##*/}" in
+      .git) return 0 ;;
+      HEAD)
+        dir="${entry%/*}"
+        if [ -d "$dir/objects" ] && [ -d "$dir/refs" ]; then
+          git --git-dir="$dir" rev-parse --is-bare-repository >/dev/null 2>&1 || return 2
+          return 0
+        fi
+        ;;
+    esac
+  done < "$scan/entries"
+  return 1
+)
 
 # True when $1 has uncommitted work -- tracked modifications OR untracked files.
 # Cannot-prove-clean counts as dirty: `git status` failing is not evidence of a
@@ -118,15 +145,15 @@ veto_is_occupied() {
 }
 
 # veto_for <type> <path> <root> [cwdmap] -> reason token on stdout, empty when
-# clear. cwdmap is an optional "pid<TAB>cwd" file; without it occupancy simply
-# is not checked, which is why plan and apply both pass one.
+# clear. For worktrees cwdmap must be a readable "pid<TAB>cwd" file produced
+# by successful strict discovery. Missing evidence is an occupancy veto.
 #
 #   artifact  root is the scan SCOPE; the target must sit physically inside it.
 #   worktree  root is the owning REPO; a linked worktree legitimately lives
 #             outside it, so containment is not the test -- occupancy,
 #             main-worktree status and cleanliness are.
 veto_for() {
-  local type="${1:-}" path="${2:-}" root="${3:-}" map="${4:-}" phys rphys cwd
+  local type="${1:-}" path="${2:-}" root="${3:-}" map="${4:-}" phys rphys cwd nested
 
   case "$type" in
     artifact|worktree) : ;;
@@ -156,9 +183,18 @@ veto_for() {
     if veto_is_main_worktree "$phys"; then
       printf 'main-worktree'; return 0
     fi
+    if [ -z "$map" ] || [ ! -f "$map" ] || [ ! -r "$map" ]; then
+      printf 'occupancy-unavailable'; return 0
+    fi
     if veto_is_occupied "$map" "$phys" "${path%/}"; then
       printf 'occupied'; return 0
     fi
+    veto_has_nested_repo "$phys" worktree; nested=$?
+    case "$nested" in
+      0) printf 'nested-repo'; return 0 ;;
+      1) : ;;
+      *) printf 'scan-incomplete'; return 0 ;;
+    esac
     if veto_is_dirty "$phys"; then
       printf 'dirty'; return 0
     fi
@@ -185,9 +221,12 @@ veto_for() {
   if veto_is_repo_root "$phys"; then
     printf 'repo-root'; return 0
   fi
-  if veto_has_nested_repo "$phys"; then
-    printf 'nested-repo'; return 0
-  fi
+  veto_has_nested_repo "$phys"; nested=$?
+  case "$nested" in
+    0) printf 'nested-repo'; return 0 ;;
+    1) : ;;
+    *) printf 'scan-incomplete'; return 0 ;;
+  esac
   if veto_is_tracked "$phys"; then
     printf 'tracked'; return 0
   fi

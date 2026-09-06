@@ -61,6 +61,7 @@ PW="$(cd "$W" && pwd -P)"
 PBUSY="$(cd "$T/wt-busy" && pwd -P)"
 cat > "$SHIM/lsof" <<LS
 #!/usr/bin/env bash
+[ "\${PLAN_LSOF_EMPTY:-0}" = 1 ] && exit 0
 case "\$*" in
   *-d\ cwd*) printf 'p9001\nfcwd\nn%s\n' "$PW"
              printf 'p9002\nfcwd\nn%s\n' "$PBUSY" ;;
@@ -77,6 +78,12 @@ section() { awk -v want="## $1" '$0 == want { on = 1; next } on && /^## / { exit
 
 run_plan() { PATH="$SHIM:$PATH" AFTERPARTY_TRANSCRIPT_ROOT="$R" AFTERPARTY_STYLE=never \
   bash "$LIB/plan.sh" 2>/dev/null; }
+WT_ID_AVAILABLE=1
+# Probe the host capability independently. Choosing expectations from the
+# fingerprint function itself would let a broken fingerprint skip its test.
+WT_BIRTH="$(LC_ALL=C TZ=UTC0 stat -c '%w' -- "$T/wt-clean" 2>/dev/null \
+  || LC_ALL=C TZ=UTC0 stat -f '%.9FB' -- "$T/wt-clean" 2>/dev/null)" || WT_BIRTH=""
+case "$WT_BIRTH" in ''|'-'|'?'|0|0.*|-1|-1.*) WT_ID_AVAILABLE=0 ;; esac
 OUT="$(cd "$T" && run_plan)"
 WT="$(printf '%s\n' "$OUT" | section Worktrees)"
 PR="$(printf '%s\n' "$OUT" | section "Process groups")"
@@ -85,16 +92,26 @@ PR="$(printf '%s\n' "$OUT" | section "Process groups")"
 _b=$FAILS
 printf '%s\n' "$OUT" | grep -q '^## Worktrees$' || fail "PW1: no Worktrees section"
 printf '%s\n' "$WT" | grep -q 'wt-clean' || fail "PW1: the clean stale worktree was not listed at all"
-printf '%s\n' "$WT" | grep -A1 'wt-clean' | grep -q 'type: worktree' \
-  || fail "PW1: wt-clean carries no type"
-printf '%s\n' "$WT" | grep -A1 'wt-clean' | grep -Eq 'fingerprint: [0-9a-f]{12}' \
-  || fail "PW1: wt-clean carries no fingerprint: $(printf '%s\n' "$WT" | grep -A1 wt-clean | tr '\n' '|')"
-[ "$FAILS" -eq "$_b" ] && pass "PW1: a clean stale worktree is surfaced with type and fingerprint"
+if [ "$WT_ID_AVAILABLE" -eq 1 ]; then
+  printf '%s\n' "$WT" | grep -A1 'wt-clean' | grep -q 'type: worktree' \
+    || fail "PW1: wt-clean carries no type"
+  printf '%s\n' "$WT" | grep -A1 'wt-clean' | grep -Eq 'fingerprint: [0-9a-f]{12}' \
+    || fail "PW1: wt-clean carries no fingerprint: $(printf '%s\n' "$WT" | grep -A1 wt-clean | tr '\n' '|')"
+else
+  printf '%s\n' "$WT" | grep -q '^- \[⊘\] identity-unavailable .*path .*/wt-clean  ' \
+    || fail "PW1: unavailable creation identity did not withhold wt-clean: $WT"
+fi
+[ "$FAILS" -eq "$_b" ] && pass "PW1: a clean worktree is surfaced with identity or its explicit unavailability"
 
 # ---------- PW2: filesystem items arrive UNCHECKED, processes may not ----------
 _b=$FAILS
-printf '%s\n' "$WT" | grep 'wt-clean' | grep -q '^- \[ \]' \
-  || fail "PW2: wt-clean was not offered unchecked: $(printf '%s\n' "$WT" | grep wt-clean)"
+if [ "$WT_ID_AVAILABLE" -eq 1 ]; then
+  printf '%s\n' "$WT" | grep 'wt-clean' | grep -q '^- \[ \]' \
+    || fail "PW2: wt-clean was not offered unchecked: $(printf '%s\n' "$WT" | grep wt-clean)"
+else
+  printf '%s\n' "$WT" | grep -q '^- \[⊘\] identity-unavailable .*path .*/wt-clean  ' \
+    || fail "PW2: wt-clean with unavailable identity was not withheld"
+fi
 # positive control: this same run DID pre-check something, so the absence above
 # is the filesystem rule and not an empty plan
 printf '%s\n' "$PR" | grep -q '^- \[x\].*pgid 9001' \
@@ -153,6 +170,40 @@ printf '%s\n' "$WT2" | grep 'wt-clean' | grep -q '\[⊘\]' \
 printf '%s\n' "$WT2" | grep -A1 'wt-clean' | grep -q 'current' \
   || fail "PW6: the reason is not 'current'"
 [ "$FAILS" -eq "$_b" ] && pass "PW6: the worktree the caller occupies is withheld"
+
+# ---------- PW7: the current repo needs no Claude transcript to be found ----------
+_b=$FAILS
+mkdir -p "$W/subdir"
+WT3="$(cd "$W/subdir" && R="$T/no-projects" run_plan | section Worktrees)"
+if [ "$WT_ID_AVAILABLE" -eq 1 ]; then
+  printf '%s\n' "$WT3" | grep -Eq '^- \[ \] unknown[[:space:]]+path .*/wt-clean  .*no transcript' \
+    || fail "PW7: a current-repo worktree without a transcript was not offered unchecked as unknown: $WT3"
+  printf '%s\n' "$WT3" | grep -A1 'path .*/wt-clean  ' | grep -Eq 'type: worktree  fingerprint: [0-9a-f]{12}' \
+    || fail "PW7: the discovered worktree has no executable target metadata"
+else
+  printf '%s\n' "$WT3" | grep -q '^- \[⊘\] identity-unavailable .*path .*/wt-clean  .*no transcript' \
+    || fail "PW7: the current-repo worktree was not discovered with its unavailable identity: $WT3"
+fi
+[ "$FAILS" -eq "$_b" ] && pass "PW7: current-repo worktrees are discoverable without Claude history"
+
+# ---------- PW8: current and transcript discovery share one repo listing ----------
+_b=$FAILS
+mkdir -p "$R/linked"
+printf '{"cwd":"%s"}\n' "$(cd "$T/wt-clean" && pwd -P)" > "$R/linked/session.jsonl"
+WT4="$(cd "$W/subdir" && run_plan | section Worktrees)"
+N_CLEAN="$(printf '%s\n' "$WT4" | grep -cE '^- \[[^]]*\].*path .*/wt-clean  ')"
+[ "$N_CLEAN" -eq 1 ] \
+  || fail "PW8: current repo and its transcripts produced $N_CLEAN copies of wt-clean: $WT4"
+[ "$FAILS" -eq "$_b" ] && pass "PW8: a repository found through multiple workspaces is listed once"
+
+# ---------- PW9: an empty global scan cannot approve an unoccupied worktree ----------
+_b=$FAILS
+WT5="$(cd "$W" && PLAN_LSOF_EMPTY=1 run_plan | section Worktrees)"
+printf '%s\n' "$WT5" | grep -q '^- \[⊘\] occupancy-unavailable .*path .*/wt-clean  ' \
+  || fail "PW9: an empty cwd scan did not withhold the discovered worktree: $WT5"
+printf '%s\n' "$WT5" | grep -A1 'path .*/wt-clean  ' | grep -q 'fingerprint:' \
+  && fail "PW9: a worktree with unknown occupancy carries actionable metadata"
+[ "$FAILS" -eq "$_b" ] && pass "PW9: unavailable occupancy is visible and cannot be approved"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi

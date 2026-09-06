@@ -74,14 +74,59 @@ ws_for_pid() {
 
 # Emit "<pid>\t<cwd>" for every process, from ONE lsof call. Per-pid lookup
 # would be ~500 forks on a normal machine; this is ~0.4s for all of them.
-# Shared by glance and plan so the attribution model has a single definition.
+# Default discovery is best-effort for read-only attribution. Filesystem
+# removal uses --strict: only a complete, validated scan may establish that a
+# directory is unoccupied. A failed strict scan emits nothing and returns 1;
+# callers must remove its output file rather than retain an empty safe map.
 ws_pid_cwd() {
+  if [ "${1:-}" = --strict ]; then
+    ws_pid_cwd_strict
+    return $?
+  fi
   command -v lsof >/dev/null 2>&1 || return 0
   lsof -a -d cwd -Fpn 2>/dev/null | awk '
     /^p/ { pid = substr($0, 2); next }
     /^n/ { if (pid != "") { print pid "\t" substr($0, 2); pid = "" } }
   '
 }
+
+ws_pid_cwd_strict() (
+  local scan
+  command -v lsof >/dev/null 2>&1 || return 1
+  scan="$(mktemp -d)" || return 1
+  trap 'rm -rf "$scan"' EXIT
+  lsof -a -d cwd -Fpn > "$scan/raw" 2> "$scan/errors" || return 1
+  # lsof can exit 0 while warning that part of a filesystem was inaccessible.
+  # An empty global scan is not positive evidence either: at least the scanner
+  # itself has a cwd. Neither case authorizes removal.
+  [ ! -s "$scan/errors" ] && [ -s "$scan/raw" ] || return 1
+  awk '
+    /^p[1-9][0-9]*$/ {
+      if (pid != "" || seen[$0]++) bad = 1
+      pid = substr($0, 2); file = 0; next
+    }
+    /^fcwd$/ {
+      if (pid == "" || file++) bad = 1
+      next
+    }
+    /^n\// {
+      # Tabs cannot be represented in the TSV contract. lsof also escapes
+      # unusual filename bytes with backslashes; do not mistake those escaped
+      # names for another physical directory and declare the real one vacant.
+      if (pid == "" || file != 1 || $0 ~ /[[:cntrl:]]/ || index($0, "\\") != 0) bad = 1
+      # Linux can report /proc/<pid>/cwd (readlink: Permission denied) as
+      # the name, even without a failing exit status or stderr warning.
+      if ($0 ~ / \((readlink|stat|lstat):/) bad = 1
+      rows[++count] = pid "\t" substr($0, 2)
+      pid = ""; next
+    }
+    { bad = 1 }
+    END {
+      if (bad || pid != "" || count == 0) exit 1
+      for (i = 1; i <= count; i++) print rows[i]
+    }
+  ' "$scan/raw"
+)
 
 # Longest workspace path prefixing <cwd> wins, so a process in
 # repo/packages/web belongs to repo rather than to a shorter ancestor.
