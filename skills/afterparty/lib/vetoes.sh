@@ -61,17 +61,18 @@ veto_is_main_worktree() {
   [ "$(veto_phys "$gitdir")" = "$(veto_phys "$common")" ]
 }
 
-# True when git tracks anything at or under $1.
+# 0 tracked, 1 verified untracked, 2 inspection unavailable.
 veto_is_tracked() {
   local p="$1" repo rel listed
-  repo="$(git -C "$(dirname -- "$p")" rev-parse --show-toplevel 2>/dev/null)" || return 1
-  [ -n "$repo" ] || return 1
+  repo="$(git -C "$(dirname -- "$p")" rev-parse --show-toplevel 2>/dev/null)" || return 2
+  repo="$(veto_phys "$repo")" || return 2
+  [ -n "$repo" ] || return 2
   rel="${p#"$repo"/}"
   # No `| head -1`: this file is sourced into scripts running `set -o pipefail`,
   # where closing the pipe early SIGPIPEs the producer and the pipeline reports
   # failure even though the value was captured. That is the bug that made every
   # process fingerprint come back empty in production.
-  listed="$(git -C "$repo" ls-files -- "$rel" 2>/dev/null)" || return 1
+  listed="$(git -C "$repo" ls-files -- "$rel" 2>/dev/null)" || return 2
   [ -n "$listed" ]
 }
 
@@ -85,6 +86,7 @@ veto_has_nested_repo() (
   local scan entry dir
   scan="$(mktemp -d)" || return 2
   trap 'rm -rf "$scan"' EXIT
+  [ ! -f "$1" ] || return 1
   cd -- "$1" 2>/dev/null || return 2
   # NUL records preserve filenames containing tabs and newlines. Worktrees
   # must exclude only their own .git metadata, never an ignored child's.
@@ -117,6 +119,35 @@ veto_is_dirty() {
   local st
   st="$(git -C "$1" status --porcelain 2>/dev/null)" || return 0
   [ -n "$st" ]
+}
+
+# Ignored files are still local data. Only narrowly recognized rebuildable
+# output may accompany worktree removal; ignored config, databases and unknown
+# directories require the user to preserve/remove them before planning again.
+# NUL-delimited Git output preserves unusual filenames and fails closed.
+veto_has_local_data() (
+  local scan entry base
+  scan="$(mktemp)" || return 2
+  trap 'rm -f "$scan"' EXIT
+  git -C "$1" ls-files --others --ignored --exclude-standard -z > "$scan" 2>/dev/null || return 2
+  while IFS= read -r -d '' entry; do
+    base="${entry##*/}"
+    case "$base" in .env|.env.*|*.db|*.sqlite|*.sqlite3|*.pem|*.key) return 0 ;; esac
+    case "$entry" in
+      node_modules/*|.next/*|.turbo/*|.vite/*|.parcel-cache/*|.svelte-kit/*|.astro/*|coverage/*) continue ;;
+      *.tsbuildinfo|.eslintcache) continue ;;
+      *) return 0 ;;
+    esac
+  done < "$scan"
+  return 1
+)
+
+# The typed artifact path must be one of the bundled collector's target kinds.
+veto_artifact_name() {
+  case "${1##*/}" in
+    .turbo|.vite|.cache|.parcel-cache|.rollup.cache|.next|dist|build|out|.output|.svelte-kit|.astro|storybook-static|coverage|.nyc_output|test-results|playwright-report|.playwright-mcp|.vitest|*.tsbuildinfo|.eslintcache) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # True when any live process in the pid->cwd map on stdin ($1 = map file) has
@@ -153,7 +184,7 @@ veto_is_occupied() {
 #             outside it, so containment is not the test -- occupancy,
 #             main-worktree status and cleanliness are.
 veto_for() {
-  local type="${1:-}" path="${2:-}" root="${3:-}" map="${4:-}" phys rphys cwd nested
+  local type="${1:-}" path="${2:-}" root="${3:-}" map="${4:-}" phys rphys cwd nested owner
 
   case "$type" in
     artifact|worktree) : ;;
@@ -198,6 +229,12 @@ veto_for() {
     if veto_is_dirty "$phys"; then
       printf 'dirty'; return 0
     fi
+    veto_has_local_data "$phys"; nested=$?
+    case "$nested" in
+      0) printf 'ignored-local-data'; return 0 ;;
+      1) : ;;
+      *) printf 'git-unavailable'; return 0 ;;
+    esac
     printf ''
     return 0
   fi
@@ -205,6 +242,10 @@ veto_for() {
   # --- artifact ---------------------------------------------------------
   if ! rphys="$(veto_phys "$root")" || [ -z "$rphys" ]; then
     printf 'unreachable-scope'; return 0
+  fi
+  case "$rphys" in /|/[A-Za-z]|[A-Za-z]:/) printf 'broad-scope'; return 0 ;; esac
+  if [ -n "${HOME:-}" ] && [ -d "$HOME" ] && [ "$rphys" = "$(veto_phys "$HOME")" ]; then
+    printf 'broad-scope'; return 0
   fi
   # The scan root itself is scope, never a candidate: `find` applies its
   # predicates to the starting point too, and a repository may legitimately be
@@ -221,14 +262,24 @@ veto_for() {
   if veto_is_repo_root "$phys"; then
     printf 'repo-root'; return 0
   fi
+  owner="$(git -C "$(dirname -- "$phys")" rev-parse --show-toplevel 2>/dev/null)" || {
+    printf 'git-unavailable'; return 0;
+  }
+  owner="$(veto_phys "$owner")" || { printf 'git-unavailable'; return 0; }
+  if [ "$owner" != "$rphys" ]; then
+    printf 'nested-repo'; return 0
+  fi
   veto_has_nested_repo "$phys"; nested=$?
   case "$nested" in
     0) printf 'nested-repo'; return 0 ;;
     1) : ;;
     *) printf 'scan-incomplete'; return 0 ;;
   esac
-  if veto_is_tracked "$phys"; then
-    printf 'tracked'; return 0
-  fi
+  veto_is_tracked "$phys"; nested=$?
+  case "$nested" in
+    0) printf 'tracked'; return 0 ;;
+    1) : ;;
+    *) printf 'git-unavailable'; return 0 ;;
+  esac
   printf ''
 }

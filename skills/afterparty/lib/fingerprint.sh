@@ -42,6 +42,41 @@ fp_for_pgid() {
   printf '%s' "$sig" | fp_hash
 }
 
+# A member token binds PID, PGID, start time and command. Keeping the original
+# members lets a group retain its identity after its launcher exits: an
+# unchanged surviving member proves continuity; a recycled group has none.
+# Return 0 with comma-separated PID:hash tokens, 1 absent, 2 unavailable.
+fp_members_for_pgid() {
+  local pg="$1" snapshot rows line pid token result=""
+  case "$pg" in ''|*[!0-9]*) return 2 ;; esac
+  snapshot="$(LC_ALL=C ps -Ao pid=,pgid=,lstart=,command= 2>/dev/null)" || return 2
+  # A complete table includes at least the process doing the inspection.
+  printf '%s\n' "$snapshot" | awk 'NF < 8 || $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ {bad=1} END {exit (bad || NR == 0)}' || return 2
+  rows="$(printf '%s\n' "$snapshot" | awk -v g="$pg" '$2 == g {$1=$1; print}')" || return 2
+  [ -n "$rows" ] || return 1
+  while IFS= read -r line; do
+    pid="${line#"${line%%[![:space:]]*}"}"; pid="${pid%%[[:space:]]*}"
+    token="$(printf '%s' "$line" | fp_hash)" || return 2
+    result="${result:+$result,}$pid:$token"
+  done <<< "$rows"
+  printf '%s' "$result"
+}
+
+fp_group_state() { fp_members_for_pgid "$1" >/dev/null; }
+
+# 0 original member present; 1 group absent; 2 unavailable; 3 unverified/drift.
+fp_group_matches() {
+  local have pair expected="$2" previous_ifs
+  have="$(fp_members_for_pgid "$1")" || return $?
+  [ -n "$expected" ] && [ "$expected" != - ] || return 3
+  previous_ifs="$IFS"; IFS=','
+  for pair in $have; do
+    case ",$expected," in *",$pair,"*) IFS="$previous_ifs"; return 0 ;; esac
+  done
+  IFS="$previous_ifs"
+  return 3
+}
+
 # --- filesystem targets ---------------------------------------------------
 #
 # Process identity is "which process holds this pgid". Filesystem identity is

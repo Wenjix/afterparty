@@ -11,6 +11,14 @@ state_cache_root() {
   fi
 }
 
+state_ledger_path() {
+  if [ -n "${AGENT_PROCESS_LEDGER:-}" ]; then
+    printf '%s' "$AGENT_PROCESS_LEDGER"
+  else
+    printf '%s/ledger.tsv' "$(state_cache_root)"
+  fi
+}
+
 state_workspace_scope() {
   local dir="${1:-$PWD}" root
   if root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)"; then

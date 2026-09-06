@@ -543,7 +543,8 @@ print_git_card() {
     [ "$N_LITTER" -gt 0 ] && s_card_line "   $(s_n "$N_LITTER" 'litter file' 'litter files') (${LITTER_BYTES} B)"
     [ "$N_STASH" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_STASH" 'stash on the shelf — your call' 'stashes on the shelf — your call'))${C_RESET}"
     s_card_line
-    s_card_line "   closing time: ${C_CYAN}afterparty git --clean${C_RESET}"
+    printf -v quoted_root %q "$ROOT"
+    s_card_line "   review: ${C_CYAN}afterparty plan --root $quoted_root${C_RESET}"
   else
     s_card_line "${C_BOLD}${C_GRN}✨ spotless — no git mess left behind${C_RESET}"
     [ "$N_STASH" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_STASH" 'stash on the shelf — your call' 'stashes on the shelf — your call'))${C_RESET}"
@@ -581,16 +582,16 @@ if [ "$JSON" -eq 0 ]; then
   [ "$N_FAILED" -eq 0 ] || printf ', %s failed' "$N_FAILED"
   printf '\n'
   [ "$DO_CLEAN" -eq 1 ] || echo "Nothing was changed."
-  if [ "$GIT_CLEAN_WITHHELD" -eq 1 ]; then
-    echo "--clean is report-only: removing a worktree needs approval, not a stale mtime." >&2
-    echo "Review and approve with: afterparty plan  then  afterparty apply <plan>" >&2
-    exit 2
-  fi
   tally_add git.findings "$((N_PRUNABLE + N_WT + N_BRANCH + N_LOCK + N_LITTER))"
   tally_add git.litter_bytes "$LITTER_BYTES"
   tally_add git.stashes "$N_STASH"
   tally_add git.failed "$N_FAILED"
   if cards_on; then print_git_card; fi
 fi
+if [ "$GIT_CLEAN_WITHHELD" -eq 1 ]; then
+    echo "--clean is report-only: removing a worktree needs approval, not a stale mtime." >&2
+    echo "Review and approve with: afterparty plan  then  afterparty apply <plan>" >&2
+    exit 2
+  fi
 if [ "$DO_CLEAN" -eq 1 ] && [ "$N_FAILED" -gt 0 ]; then exit 1; fi
 exit 0

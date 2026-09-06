@@ -2,6 +2,40 @@
 
 All notable changes to Afterparty are documented here. Versions follow semantic versioning.
 
+## [0.11.0] - 2026-09-06
+
+### Changed
+
+- All plan actions start unchecked; scope defaults to the current repository.
+  `--root`, `--all`, `--artifacts-only` and `--caches-only` make review scope explicit.
+- Artifacts use typed plan/apply approvals. `artifacts --clean` is report-only
+  and exits 2. Malformed checked plans are rejected before any action.
+- Devclean mutation requires individual preview target IDs. Disk, history,
+  orphan, deep and optimize modes have separate consequences; disk mode does
+  not stop processes. History retention requires stale observed activity.
+- SessionEnd records a bounded session marker without scanning. Explicit audits
+  retain session archives, complete/incomplete status and failed sections.
+
+### Fixed
+
+- Artifact cleanup protects nested history and refuses failed Git inspection.
+  Worktree cleanup preserves ignored local data added after approval.
+- Ledger ownership includes process-member identity; reused IDs, unavailable
+  inspection and unverifiable legacy rows cannot authorize stopping processes.
+  Original workers can be cleaned after launcher exit without accepting a
+  replacement group. Category selection checks executable/subcommand evidence.
+- Missing process/listener evidence stays unavailable; glance retains
+  unattributed processes. JSON numbers and cleanup exit semantics are consistent.
+- Journal failures return nonzero independently of confirmed mutation results.
+  Persisted display text redacts common credentials; actions gains workspace/date
+  filters and opt-in retention.
+- Claude skill path substitution, slash failure handling and installed bundle
+  lifecycle coverage are corrected. Optimize edits effective JSONC settings with
+  backup and restoration instructions.
+
+Regenerate cleanup plans for the new defaults. Legacy ledger rows remain visible
+as unverified; record the current process again before authorizing its cleanup.
+
 ## [0.10.0] - 2026-09-06
 
 ### Added

@@ -45,6 +45,7 @@ SHIM="$T/shim"; mkdir -p "$SHIM"
 cat > "$SHIM/ps" <<'PS'
 #!/usr/bin/env bash
 case "$*" in
+  *pgid=,command=*) printf '9001 npm run dev\n9002 vitest --watch\n9003 next dev\n' ;;
   *pgid=,lstart=,command=*) printf '9001 Tue Aug 18 09:00:00 2026 npm run dev\n' ;;
   *pid,pgid,%cpu,command*)  printf '9001 9001  0.0 npm run dev\n'
                             printf '9002 9002  0.0 node watcher.js\n' ;;
@@ -77,7 +78,7 @@ chmod +x "$SHIM/ps" "$SHIM/lsof"
 section() { awk -v want="## $1" '$0 == want { on = 1; next } on && /^## / { exit } on { print }'; }
 
 run_plan() { PATH="$SHIM:$PATH" AFTERPARTY_TRANSCRIPT_ROOT="$R" AFTERPARTY_STYLE=never \
-  bash "$LIB/plan.sh" 2>/dev/null; }
+  bash "$LIB/plan.sh" --all 2>/dev/null; }
 WT_ID_AVAILABLE=1
 # Probe the host capability independently. Choosing expectations from the
 # fingerprint function itself would let a broken fingerprint skip its test.
@@ -114,9 +115,9 @@ else
 fi
 # positive control: this same run DID pre-check something, so the absence above
 # is the filesystem rule and not an empty plan
-printf '%s\n' "$PR" | grep -q '^- \[x\].*pgid 9001' \
-  || fail "PW2: control — the run pre-checked no process, so nothing proves [ ] is a decision"
-[ "$FAILS" -eq "$_b" ] && pass "PW2: worktrees arrive unchecked while an eligible process arrives checked"
+printf '%s\n' "$PR" | grep -q '^- \[ \].*pgid 9001' \
+  || fail "PW2: control — the run offered no process, so the empty state would make this vacuous"
+[ "$FAILS" -eq "$_b" ] && pass "PW2: worktrees arrive unchecked and eligible processes both arrive unchecked"
 
 # ---------- PW3: a dirty worktree is withheld, and says why ----------
 _b=$FAILS

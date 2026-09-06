@@ -5,6 +5,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$REPO/tests/devclean-fixtures.sh"
 LIB="$REPO/skills/afterparty/lib"
 FAILS=0
 fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
@@ -69,7 +70,7 @@ run_disk_apply() (
     }
   done
   HOME="$1" XDG_CACHE_HOME="$2" AFTERPARTY_TEST_MACHINE_CALLS="$3" \
-    bash "$LIB/devclean.sh" --disk --apply
+    reviewed_devclean "$LIB/devclean.sh" --disk
 )
 
 # ---------- R2: the roaming project scan withholds under --apply ----------
@@ -82,8 +83,8 @@ OUT="$(run_disk_apply "$H" "$T/cache" "$T/r2-tools.log" 2>&1)"
   || fail "R2: node_modules in an unnamed project was deleted"
 printf '%s\n' "$OUT" | grep -q 'withheld project node_modules/' \
   || fail "R2: no withholding message — the scan may simply not have run"
-printf '%s\n' "$OUT" | grep -q 'afterparty plan' \
-  || fail "R2: withholding does not point at the approval surface"
+printf '%s\n' "$OUT" | grep -q 'report-only; review this directory manually' \
+  || fail "R2: withholding does not explain manual review of unsupported roaming targets"
 [ "$FAILS" -eq "$_b" ] && pass "R2: the roaming project scan reports and withholds under --apply"
 
 # ---------- R3: exact allowlisted cache paths still work ----------
@@ -100,10 +101,11 @@ run_disk_apply "$H2" "$T/cache2" "$T/r3-tools.log" >/dev/null 2>&1
 # ---------- R4: each apply really used the machine-tool shims ----------
 _b=$FAILS
 for calls in "$T/r2-tools.log" "$T/r3-tools.log"; do
-  for tool in pgrep pnpm; do
+  for tool in pnpm; do
     grep -q "^$tool$(printf '\t')" "$calls" \
       || fail "R4: $tool was not intercepted during $(basename "$calls")"
   done
+  grep -q '^pgrep' "$calls" && fail "R4: --disk unexpectedly scanned orphan processes"
   awk -F '\t' -v want="$T/run" '$2 != want { bad = 1 } END { exit bad }' "$calls" \
     || fail "R4: an apply ran outside the disposable working directory"
 done

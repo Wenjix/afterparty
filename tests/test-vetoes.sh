@@ -172,7 +172,7 @@ mv "$T/wt/archive.git" "$T/saved-archive.git"
 mkdir -p "$T/wt/plain-dir"
 printf 'ordinary file\n' > "$T/wt/plain-dir/HEAD"
 V="$(veto_for worktree "$T/wt" "$PWD" "$MAP")"
-[ -z "$V" ] || fail "V14: an ordinary HEAD file was mistaken for a repository: '$V'"
+[ "$V" = "ignored-local-data" ] || fail "V14: ordinary ignored data should be preserved without claiming it is a repository: '$V'"
 [ "$FAILS" -eq "$_b" ] && pass "V14: bare repositories are protected and ordinary HEAD files are not repositories"
 
 # ---------- V8: a missing path is 'gone', not a silent pass ----------

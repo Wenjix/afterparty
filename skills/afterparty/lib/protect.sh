@@ -17,7 +17,7 @@
 # "/usr/local/bin/claude ...", but never "/Users/x/.claude/anything".
 # This is an audit/ledger kill guard only -- devclean does not source this
 # file, so its deliberate orphan-targeting of agent processes is unaffected.
-PROTECT_RE='Cursor|Code Helper|Electron|/MacOS/Code|Codex|node_repl|extension-host|chrome-devtools-mcp|playwright-mcp|@playwright/mcp|cursor-server|(^|[[:space:]/])claude([[:space:]]|$)|(^|[[:space:]/])-?(bash|zsh|fish)$'
+PROTECT_RE='Cursor|Code Helper|Electron|/MacOS/Code|node_repl|extension-host|chrome-devtools-mcp|playwright-mcp|@playwright/mcp|cursor-server|(^|[[:space:]/])(claude|codex)([[:space:]]|$)|(^|[[:space:]/])-?(bash|zsh|fish|sh|dash|ksh)([[:space:]]+(-l|-i|--login|--interactive))*$'
 
 # True if any live process in process group $1 matches PROTECT_RE. Group kills
 # must check this: filtering protected rows out of a listing does not stop a

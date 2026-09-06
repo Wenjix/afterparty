@@ -17,8 +17,8 @@ An agent session ends and leaves things behind: a dev server still bound to
 no owner, worktrees and `claude/*` branches no one will return to, and a
 gigabyte of `.next` and `node_modules/.cache`.
 
-Afterparty finds all of it, reports exactly what it found, and changes
-nothing until you approve.
+Afterparty inventories these leftovers, reports what it could inspect, and
+requires specific approval before cleanup. Missing evidence withholds actions.
 
 ## Why Afterparty
 
@@ -30,8 +30,8 @@ nothing until you approve.
   session starts by reading what the last one left running instead of
   starting yet another server on `localhost:3000`.
 - **Dry-run isn't a mode, it's the default.** Every mutation hides behind an
-  explicit flag — `--kill`, `--clean`, `--apply` — scoped to exactly what the
-  dry run showed you.
+  approval — checked plan items, reviewed process groups, or devclean target
+  IDs. `git --clean` and `artifacts --clean` are report-only compatibility flags.
 - **Group cleanup protects the live session.** Ledger and audit kills refuse
   any process group containing an editor, interactive shell, running agent
   (Claude Code, Codex), or shared MCP process. Devclean uses a separate,
@@ -57,19 +57,25 @@ nothing until you approve.
 
 The plugin adds lifecycle wiring around the same terminal CLI:
 
-- an asynchronous `SessionEnd` hook runs `afterparty audit --report` when a session ends,
-  so the leftovers report is already on disk when the next session starts;
-- a lightweight `SessionStart` hook points at that prior report without
-  rerunning the audit or delaying startup;
-- a `/afterparty` slash command runs the audit on demand
-  (`/afterparty clean` walks the gated cleanup paths).
+- a bounded synchronous `SessionEnd` hook records the session ID and end time;
+  it performs no audit or cleanup;
+- a lightweight `SessionStart` hook shows the last explicit audit's age and
+  completion status, plus the session-end marker;
+- `/afterparty:afterparty` runs the audit on demand; `clean` requests reviewed
+  cleanup. A failing audit stays visible without aborting the instructions.
+
+Run `afterparty audit --report` when you need a durable current snapshot. The
+session-end marker explicitly says no exit-time scan occurred; it does not
+promise that background work finishes after Claude exits.
 
 ### As a plain agent skill
 
 Afterparty follows the [Agent Skills](https://agentskills.io) standard, and
 the skill folder is self-contained — `SKILL.md`, `VERSION`, `LICENSE`, plus every script it runs,
-with commands anchored to `${CLAUDE_SKILL_DIR}` so they work from whatever
-project the agent happens to be in. Copying the folder is the whole install.
+with commands anchored to Claude's literal `${CLAUDE_SKILL_DIR}` substitution.
+In another agent, resolve the absolute directory of the loaded `SKILL.md` and
+run its `bin/afterparty`; this Claude substitution is not a universal environment
+variable. Copying the folder supplies the CLI and supporting files.
 For Claude Code:
 
 ```bash
@@ -108,18 +114,18 @@ gets touched.
 | Command | Reports | Acts with |
 | --- | --- | --- |
 | `afterparty glance` | every workspace holding processes, sorted by how long it has been left alone | *(reports only)* |
-| `afterparty plan` | an editable checklist of process groups and linked worktrees | *(proposes only)* |
+| `afterparty plan` | unchecked process, worktree, and artifact checklist for the current repository | *(proposes only)* |
 | `afterparty apply <plan>` | executes the boxes you checked, refusing anything that moved | *(acts on approved targets)* |
 | `afterparty audit` | recorded processes, dev servers, watchers, browsers, git litter | `--kill tests\|dev\|browser` |
 | `afterparty stop` | ledger-recorded process groups | `--kill` |
 | `afterparty git` | stale worktrees, agent branches, lock files, conflict litter | worktrees through `plan` / `apply`; `--clean` is report-only |
-| `afterparty artifacts` | rebuildable build/cache output | `--clean` |
-| `afterparty devclean` | orphans, plus `--deep` / `--optimize` / `--disk` targets | `--apply` |
+| `afterparty artifacts` | rebuildable build/cache output | checked `plan` / `apply` items |
+| `afterparty devclean` | orphan candidates; separate `--deep`, `--optimize`, `--disk`, `--history` modes | `--apply --target <reviewed-id>` |
 
 The bookkeeping commands — `list`, `add`, `prune` — only ever touch
-Afterparty's own ledger, never your system. `doctor` runs every dry-run
-report in one pass and changes nothing. `doctor --strict` also returns
-nonzero when any audit capability is unavailable.
+Afterparty's own ledger, never your system. `doctor` combines the default read-only diagnostics. `doctor --strict` returns
+nonzero for unavailable audit capabilities; it does not authorize cleanup or
+replace the fresh checks at each mutation boundary.
 
 ```bash
 afterparty audit                   # full dry-run report
@@ -134,23 +140,25 @@ afterparty prune                   # drop this repo's dead ledger entries
 afterparty git                     # report git leftovers
 afterparty plan > cleanup-plan.md  # save the checklist, then review its boxes
 afterparty apply cleanup-plan.md   # apply the checked items
-afterparty artifacts --clean       # delete rebuildable artifacts
+afterparty plan --artifacts-only   # preview unchecked artifact removals
 afterparty devclean --disk         # report disk-heavy targets
 afterparty doctor                  # every dry-run report in one pass
 afterparty doctor --strict         # fail if the audit is degraded
-afterparty actions                 # local JSONL mutation history
+afterparty actions                 # this workspace's JSONL mutation history
+afterparty actions --all --since 2026-09-01 # filter global history
 afterparty --version               # installed package version
 ```
 
 The ledger commands (`list`, `stop`, `prune`) scope to the current repo by
 default; pass `--all` to cover every repo, or `--root <dir>` for another
-(`git` and `artifacts` accept `--root` too). `list` and `stop` can also
+(`plan`, `git` and `artifacts` accept `--root` too). `list` and `stop` can also
 filter by `--kind`.
 
 There are two kill paths, and they answer different questions. `stop --kill`
 stops what Afterparty *recorded*: process groups from the ledger, where
-ownership is already established. `audit --kill <tests|dev|browser>` handles
-the strays nobody recorded, matched by category pattern. Both accept
+current member identities must still match the recorded ownership. `audit --kill <tests|dev|browser>` handles
+the strays nobody recorded, classified by executable and supported subcommand. Audit discovery is
+machine-wide; use reviewed `--pgid` values to narrow mutation. Both accept
 `--keep <pgid>` to spare a group. Category cleanup additionally accepts
 `--pgid <id[,id...]>`, which restricts mutation to the exact groups you
 reviewed.
@@ -168,8 +176,10 @@ The post-session report is the point, so it comes in three shapes:
   otherwise to a workspace-keyed path under
   `~/.cache/agent-processes/reports/` (or `$XDG_CACHE_HOME`).
   Add `report.md` to a repo's `.gitignore` to opt in to per-repo reports. The
-  plugin's `SessionEnd` hook leans on this. `afterparty report-path` prints
-  the canonical location.
+  `afterparty report-path` prints the canonical latest-audit location. Each
+  explicit audit also gets its own session snapshot, so concurrent sessions
+  retain their reports. Status, failed sections, timestamp, and session ID stay
+  in the saved report; `report --show` returns nonzero for an incomplete report.
 
 One rule ties them together: `--json` is strictly report-only. It refuses to
 combine with `--kill`, and `audit --report` and `--json` are mutually
@@ -179,12 +189,14 @@ exclusive.
 
 `afterparty add` records long-running processes in
 `~/.cache/agent-processes/ledger.tsv` — timestamp, repo root, cwd, PID,
-PGID, kind, port, purpose, and command. The result: the next agent can see
+PGID, kind, port, purpose, command, and observed process-member identities. The result: the next agent can see
 what is running *and why* before spinning up a duplicate.
 
 Ledger state is private (`0700` directory, `0600` file where the platform
 supports POSIX modes). `add` and `prune` use a portable advisory lock so a
-concurrent prune cannot overwrite a newly recorded process.
+concurrent prune cannot overwrite a newly recorded process. Legacy entries
+without identity remain visible as unverified and cannot authorize stopping a
+process. Prune retains records when inspection fails or workers still survive.
 
 ## The audit
 
@@ -203,7 +215,8 @@ concurrent prune cannot overwrite a newly recorded process.
 
 `afterparty glance` answers the question you actually arrive with: what was I
 doing, and what is still running from it? It is machine-wide, grouped by
-workspace, and sorted so the workspaces nobody has touched sink to the bottom.
+workspace, with unindexed or unattributed processes kept visible. Agent
+transcript activity is an observation, not proof of recent human use.
 `--oneline` fits a tmux status line; `--json` emits JSON Lines.
 
 Severity in the glance is **magnitude** — cpu, count, how long since anyone
@@ -223,25 +236,27 @@ still working. Thresholds are `AFTERPARTY_IDLE_HOURS` (default 4) and
 
 ### Approving a cleanup
 
-`afterparty plan > cleanup-plan.md` saves a checklist of process groups and
-linked worktrees. Each process box represents an entire group:
+`afterparty plan > cleanup-plan.md` saves a checklist for the current repository.
+Use `--root DIR` for another repository; `--all` widens process and worktree
+discovery to indexed workspaces across the machine. Artifact scope stays the
+explicit repository printed in its section. `--artifacts-only` narrows the
+proposal, and `--caches-only` omits build and test outputs.
 
-- Only items that pass the two-signal gate arrive **checked**.
-- Everything else is listed **unchecked with the reason stated**, so withholding
-  is visible rather than silent: `in-use` (you touched that workspace recently),
-  `working` (quiet transcript but the cpu says a long task is running),
-  `unknown` (no transcript, so no staleness signal to trust), and `no-rule`
-  (no kill discipline exists for that command — stop it yourself).
-
-Worktrees in the current repository are discovered even without Claude history;
-repositories found in Claude transcripts are included too. Worktree boxes always
-start unchecked, and missing transcript history reads as unknown staleness.
+Every actionable item starts **unchecked**. Process rows show members, recorded
+purpose, available listener ports, workspace, activity evidence and group-wide
+consequences. In-use, busy, unknown, protected, mixed-workspace and unsupported
+items are withheld with their reasons. Unknown activity cannot establish
+abandonment. Worktree discovery does not require a Claude transcript.
 
 Edit the boxes, then `afterparty apply cleanup-plan.md`. Every approved item is
 re-checked before anything happens: a **moved fingerprint** means a recycled
 process group now holds something you never reviewed, and it is refused rather
 than re-targeted. The checkbox is the authority — unchecking a box makes it
-inert regardless of what else the line says.
+inert regardless of what else the line says. Apply validates every checked
+entry before mutation; malformed metadata, mismatched paths, unsupported
+schemas, and duplicate targets reject the entire plan. Refused or held approved
+actions return nonzero. Filesystem plans use absolute paths and reject control
+characters. Regenerate existing plans to get the current scope and defaults.
 
 `apply` never signals a process itself. It hands approved groups to the same
 gated `audit --kill` path, so the protect list, group semantics, and
@@ -252,8 +267,8 @@ The protect list covers editors, interactive shells, running agent sessions
 `chrome-devtools-mcp`. Agent entries are anchored on the executable, so a
 session is protected while the shells it spawns — which carry an agent path
 in their arguments — stay killable. This guard applies to ledger and audit
-kills; devclean's orphan cleanup deliberately still targets *orphaned* agent
-and MCP processes.
+kills. Devclean additionally requires reviewed PID identity and conservative
+owner/parent/activity evidence; active or protected agents are withheld.
 
 ## Git cleanup
 
@@ -264,7 +279,10 @@ through the checklist in `plan` and the checked items in `apply`.
 Before removing a worktree, apply refreshes its occupancy scan and checks its
 identity and structure. Dirty or occupied worktrees, nested repositories
 (including those under ignored directories), symlinks, and unavailable scans
-are refused. The current and main worktrees are protected. Removal uses
+are refused. Ignored local configuration, databases and unknown ignored data
+also block removal. Recognized rebuildable caches such as `.next` may remain;
+`.env`, database and key files are still protected. The current and main
+worktrees are protected. Removal uses
 `git worktree remove` without `--force` and confirms that the target disappeared.
 
 Worktree identity includes the physical directory and its owning Git metadata,
@@ -285,52 +303,70 @@ report prints it:
 - **Test artifacts** — `coverage`, `.nyc_output`, `test-results`,
   `playwright-report`, `.playwright-mcp`, `.vitest`
 
-It skips git-tracked paths and nested git repositories, and never descends
-into a matched directory. `--caches-only` keeps build outputs; `--root <dir>`
-points it at another repo.
+Use `afterparty plan --artifacts-only --root <repo>` to create a proposal,
+review its boxes, then `afterparty apply <plan>`. `artifacts --clean` reports and
+exits 2. Only typed, checked artifact targets can be deleted. Failed Git or
+filesystem inspection, tracked content, nested repositories in either
+containment direction, unavailable occupancy, occupied target directories,
+symlinks and scope escapes withhold removal. Identity is checked at the removal
+boundary. The cwd check detects processes inside the target; it cannot establish
+that a process elsewhere will never read or rebuild those files.
+
+`--caches-only` omits build and test outputs. Entire dependency installations
+such as `node_modules` are not selected; their `.cache` directories may be.
+Roaming reports of other directories require manual investigation.
 
 ## Devclean
 
-`afterparty devclean` borrows its shape from the `devclean` utility: safe
-orphan cleanup by default, with explicit escalation modes.
+Devclean previews one or more explicitly selected modes. Mutation requires IDs
+copied from that preview; `--apply` alone is refused.
 
 ```bash
-afterparty devclean            # safe orphan cleanup
-afterparty devclean --deep     # heavy daemon audit
-afterparty devclean --optimize # crashpad files, crash-reporter settings
-afterparty devclean --disk     # disk-heavy caches and artifacts
+afterparty devclean            # orphan candidates, read-only
+afterparty devclean --deep     # global daemon/simulator candidates
+afterparty devclean --optimize # individual dump/configuration/startup targets
+afterparty devclean --disk     # rebuildable caches; no process stopping
+afterparty devclean --history  # stale transcripts/logs/recordings
+# Review the exact target and consequence, then preserve the same mode/scope:
+afterparty devclean --disk --apply --target <reviewed-id>
 ```
 
-`--disk` covers global dev caches (npm, pnpm, Gradle, pub, CocoaPods —
-plus Xcode caches on macOS), Codex sessions and logs, project artifacts
-under `--documents-root`, and the current repo's artifact pass. `--apply`
-also answers to `--kill` and `--clean` — whichever mutation verb you reach
-for works — and `--dry-run` forces the default.
+Repeat `--target` for multiple approvals. IDs bind process identity or the named
+filesystem/configuration target. Changed, unknown, or withheld targets stay
+visible and make apply return nonzero. Add `--orphans` explicitly to combine
+orphan inspection with another mode. PPID 1 and a matching name alone do not
+prove abandonment; activity and identity must pass conservative checks too.
 
-It is conservative on purpose. It does not treat every `crashpad_handler` as
-a safe orphan — active apps on macOS use those helpers — so crashpad cleanup
-lives behind `--optimize`, where you review the exact targets first. Codex
-session transcripts are age-gated: only date folders older than 30 days
-(override with the `CODEX_SESSION_AGE_DAYS` environment variable) are
-eligible, because transcripts
-power resume and are the audit trail of what your agents actually did. The
-shared pnpm store is pruned (`pnpm store prune`, unreferenced packages
-only), never deleted outright — other projects still link into it. Scope
-the `--disk` project scan with `--documents-root DIR` and
-`--project-maxdepth N`, and skip the current-repo artifact pass with
-`--no-repo-artifacts`. Applied scans reject filesystem roots, `HOME`, and
-any ancestor of `HOME` by default; `--allow-broad-documents-root` is the
-explicit escape hatch after reviewing that scope.
+`--optimize` separates deletions from persistent settings and launch-agent
+changes. Each requires its own target ID; settings changes use effective JSONC
+values, retain a backup, and show restoration instructions. JSONC editing needs
+Python 3; unavailable parsing withholds that target.
+
+`--history` permanently deletes resume/diagnostic history only after a complete
+activity scan establishes age beyond `CODEX_SESSION_AGE_DAYS` (default 30).
+An old folder name does not override a recent write. `--disk` keeps the shared
+pnpm store intact and uses `pnpm store prune` for unreferenced packages.
+Scope the roaming project report with `--documents-root DIR` and
+`--project-maxdepth N`; it remains report-only. `--no-repo-artifacts` omits the
+current repository artifact inventory. Repository artifacts use plan/apply.
 
 ## Local state and action history
 
 Afterparty keeps reports, the ledger, locks, and `actions.jsonl` under
 `${XDG_CACHE_HOME:-~/.cache}/agent-processes/` unless you override the ledger
 path. Files containing session or mutation details are created with private
-permissions where supported. `afterparty actions` prints the append-only,
-versioned history of confirmed and failed mutations; `actions --path` prints
-its location. Set `AFTERPARTY_JOURNAL=0` only when local action history is not
-appropriate for the environment.
+permissions where supported. `afterparty actions` prints this workspace's
+versioned history. Use `--all`, `--workspace DIR`, and `--since YYYY-MM-DD` to
+change its scope; `--path` prints the journal location. History is retained by
+default. A positive `AFTERPARTY_RETENTION_DAYS` opts into trimming old action
+receipts on writes; 0 preserves them. Session report archives are retained.
+
+Common credential arguments, assignments and URL credentials are redacted in
+persisted display text. This is best effort; avoid secrets in command arguments
+and free-form reasons. Identity checks use original identity evidence, not
+redacted display strings. A successful mutation with a failed receipt is
+reported distinctly and returns nonzero. `AFTERPARTY_JOURNAL=0` explicitly
+opts out of recording.
 
 ## Style
 
@@ -362,9 +398,9 @@ always get byte-stable plain text, `NO_COLOR` is honored, and
   outage is reported as unavailable and can never produce a spotless claim.
 - Mutation success requires a verified postcondition. Partial failures are
   visible in output, return a nonzero status, and are locally journaled.
-- Artifacts: delete only known rebuildable output, skipping git-tracked paths
-  and nested repos. Destructive cleanup requires a Git repository unless
-  `--allow-non-repo-root` is explicit, and filesystem/home roots are rejected.
+- Artifacts: only checked typed targets in a Git repository can be removed.
+  Tracked paths, nested repositories, incomplete scans and filesystem/home
+  roots are hard vetoes. Direct `--clean` never deletes.
 - Global cache and optimize paths are physically resolved beneath `HOME`;
   symlink parents cannot redirect a mutation outside the reviewed scope.
 - Git: only checked worktrees are removed, after fresh identity, occupancy,
@@ -379,8 +415,10 @@ always get byte-stable plain text, `NO_COLOR` is honored, and
   application integration.
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for process
   matching; the audit falls back to `grep -E` when it is missing.
-- `lsof` for the localhost listener report and worktree occupancy checks.
-  Reports can run without it; worktree removal requires a successful scan.
+- `lsof` for listener reports and filesystem occupancy checks. Reports expose
+  missing tools; worktree and artifact removal require a successful scan.
+- Python 3 for effective JSONC configuration edits; missing support withholds
+  those optimize targets.
 - macOS-only devclean steps (`launchctl` agents, Xcode caches, iOS
   simulators) are skipped on other platforms.
 

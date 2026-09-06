@@ -79,7 +79,7 @@ pass "--report/--json mutually exclusive"
 # ---------- audit --report in an opted-in repo (report.md gitignored) ----------
 rm -f "$REPO/report.md"
 (cd "$REPO" && AGENT_PROCESS_LEDGER="$FAKE" "$BIN" audit --report) >"$T/r.out" 2>"$T/r.err"; RC=$?
-[ "$RC" -eq 0 ] || fail "audit --report exit=$RC"
+[ "$RC" -eq 0 ] || { [ "$RC" -eq 1 ] && grep -q 'Status: incomplete' "$REPO/report.md"; } || fail "audit --report exit=$RC without an incomplete report"
 [ -f "$REPO/report.md" ] || fail "report.md not written at opted-in repo root"
 grep -q '^# afterparty report — what the last session left behind$' "$REPO/report.md" || fail "report header missing"
 grep -q '^## Worktrees$' "$REPO/report.md" || fail "git section missing from report"
@@ -94,7 +94,7 @@ pass "audit --report writes gitignored repo-root report.md"
 mkdir -p "$T/plain" && cd "$T/plain" && git init -q
 FALLBACK_REPORT="$(XDG_CACHE_HOME="$T/cache" "$BIN" report-path)"
 XDG_CACHE_HOME="$T/cache" AGENT_PROCESS_LEDGER="$FAKE" "$BIN" audit --report >/dev/null 2>"$T/r2.err"; RC=$?
-[ "$RC" -eq 0 ] || fail "audit --report (plain repo) exit=$RC"
+[ "$RC" -eq 0 ] || { [ "$RC" -eq 1 ] && grep -q 'Status: incomplete' "$FALLBACK_REPORT"; } || fail "audit --report (plain repo) exit=$RC without an incomplete report"
 [ -f "$FALLBACK_REPORT" ] || fail "fallback report.md not written to repo-scoped cache"
 [ -f "$T/plain/report.md" ] && fail "litter: report.md written into non-opted-in repo"
 pass "litter guard: non-opted-in repo falls back to ledger home"
@@ -103,7 +103,7 @@ pass "litter guard: non-opted-in repo falls back to ledger home"
 cd "$T"
 NO_REPO_REPORT="$(XDG_CACHE_HOME="$T/cache2" "$BIN" report-path)"
 XDG_CACHE_HOME="$T/cache2" "$BIN" audit --report >/dev/null 2>&1; RC=$?
-[ "$RC" -eq 0 ] || fail "audit --report (no repo) exit=$RC"
+[ "$RC" -eq 0 ] || { [ "$RC" -eq 1 ] && grep -q 'Status: incomplete' "$NO_REPO_REPORT"; } || fail "audit --report (no repo) exit=$RC without an incomplete report"
 [ -f "$NO_REPO_REPORT" ] || fail "no-repo report not written to workspace-scoped cache"
 pass "audit --report outside a repo still lands in ledger home"
 

@@ -25,6 +25,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/state.sh"
 . "$DIR/journal.sh"
 . "$DIR/vetoes.sh"
+. "$DIR/plan-format.sh"
 
 # The reason a person typed under "## Why". plan promises this is recorded, so
 # it has to actually reach the journal rather than dying with the file.
@@ -43,7 +44,7 @@ plan_reason() {
 }
 
 PLAN="${1:-}"
-if [ -z "$PLAN" ]; then
+if [ "$#" -ne 1 ]; then
   echo "apply: needs a plan file (write one with 'afterparty plan')" >&2
   exit 2
 fi
@@ -56,13 +57,15 @@ fi
 # tests observe delegation without signalling anything real.
 AUDIT="$(command -v audit-processes.sh 2>/dev/null || printf '%s' "$DIR/audit-processes.sh")"
 
-N_OK=0 N_DRIFT=0 N_GONE=0 N_HELD=0 N_FAILED=0 N_SURVIVED=0 N_VETOED=0
+N_OK=0 N_DRIFT=0 N_GONE=0 N_HELD=0 N_FAILED=0 N_SURVIVED=0 N_VETOED=0 N_RECORD_FAILED=0
+record() { journal_action "$@" || N_RECORD_FAILED=$((N_RECORD_FAILED + 1)); }
 declare_targets=""
 wt_targets=""
 
 NOW="$(date +%s)"
 T="$(mktemp -d)" || exit 1
 trap 'rm -rf "$T"' EXIT
+plan_read_checked "$PLAN" > "$T/checked" || exit 2
 ws_index   > "$T/ws"  2>/dev/null || : > "$T/ws"
 ws_pid_cwd > "$T/cwd" 2>/dev/null || : > "$T/cwd"
 
@@ -113,47 +116,28 @@ group_facts() {
   }
 }
 
-# Parse: a checked line names a pgid, and the line under it carries the
-# category and fingerprint. Anything not matching "- [x]" is ignored outright,
-# so an unchecked or withheld item can never be acted on by accident.
-pending_pgid=""
-while IFS= read -r line; do
-  case "$line" in
-    '- [x]'*)
-      # Any checked line arms the next attribute line. Keying this on a pgid
-      # having been parsed would drop every worktree item silently, since a
-      # worktree line carries a path and no pgid -- the item would be counted
-      # nowhere and the receipt would look clean.
-      pending_pgid="$(printf '%s\n' "$line" | sed -n 's/.*pgid \([0-9][0-9]*\).*/\1/p')"
-      [ -n "$pending_pgid" ] || pending_pgid="-"
-      continue
-      ;;
-  esac
-  [ -n "$pending_pgid" ] || continue
-  case "$line" in
-    # A worktree item is recognised by its type token, not by shape. The path
-    # is read from 'path:' to end of line, which is the one parse that survives
-    # a path containing spaces -- every other field is a fixed-width token.
-    *"type: worktree"*)
-      want_fp="$(printf '%s\n' "$line" | sed -n 's/.*fingerprint: \([0-9a-f][0-9a-f]*\).*/\1/p')"
-      wtpath="$(printf '%s\n' "$line" | sed -n 's/.*[[:space:]]path: //p')"
-      pending_pgid=""
-      [ -n "$want_fp" ] && [ -n "$wtpath" ] || continue
-      wt_targets="${wt_targets}${want_fp}:${wtpath}"$'\n'
+# All checked rows were validated before live inspection or any mutation.
+while IFS=$'\t' read -r type target want_fp category scope; do
+  case "$type" in
+    artifact)
+      printf '%s\t%s\t%s\n' "$want_fp" "$scope" "$target" >> "$T/artifacts"
       N_OK=$((N_OK + 1))
-      continue
-      ;;
-    *fingerprint:*)
-      want_fp="$(printf '%s\n' "$line" | sed -n 's/.*fingerprint: \([0-9a-f][0-9a-f]*\).*/\1/p')"
-      category="$(printf '%s\n' "$line" | sed -n 's/.*category: \([a-z][a-z]*\).*/\1/p')"
-      pg="$pending_pgid"
-      pending_pgid=""
-      [ "$pg" = "-" ] && continue
-      [ -n "$pg" ] && [ -n "$want_fp" ] && [ -n "$category" ] || continue
-
+      continue ;;
+    worktree)
+      wt_targets="${wt_targets}${want_fp}:${target}"$'\n'
+      N_OK=$((N_OK + 1))
+      continue ;;
+    process-group)
+      pg="$target"
       if ! have_fp="$(fp_for_pgid "$pg" 2>/dev/null)" || [ -z "$have_fp" ]; then
-        s_skip "  pgid $pg — gone, refused (the group no longer exists)"
-        N_GONE=$((N_GONE + 1))
+        fp_group_state "$pg"; state_rc=$?
+        if [ "$state_rc" -eq 1 ]; then
+          s_skip "  pgid $pg — gone (verified absent)"
+          N_GONE=$((N_GONE + 1))
+        else
+          s_skip "  pgid $pg — refused, identity-unavailable"
+          N_FAILED=$((N_FAILED + 1))
+        fi
         continue
       fi
       if [ "$have_fp" != "$want_fp" ]; then
@@ -163,7 +147,10 @@ while IFS= read -r line; do
         continue
       fi
       # Re-check eligibility against the live world, not the plan's snapshot.
-      facts="$(group_facts "$pg")"
+      if ! ws_pid_cwd --strict > "$T/cwd" 2>/dev/null || ! facts="$(group_facts "$pg")"; then
+        s_skip "  pgid $pg — refused, scan-incomplete"
+        N_FAILED=$((N_FAILED + 1)); continue
+      fi
       touched="${facts%%	*}"; cpu="${facts##*	}"
       if [ "$touched" = "mixed" ]; then
         s_skip "  pgid $pg — held, now spans more than one workspace"
@@ -194,9 +181,8 @@ while IFS= read -r line; do
       declare_targets="${declare_targets}${category}:${pg}:${have_fp} "
       N_OK=$((N_OK + 1))
       ;;
-    *) pending_pgid="" ;;
   esac
-done < "$PLAN"
+done < "$T/checked"
 
 # The reason is recorded before any work, because "I reviewed this and approved
 # nothing, here is why" is worth keeping and the run may exit early. But it is
@@ -213,22 +199,22 @@ journal_outcome() {
   # A survivor is not the same as a failure. audit declining to kill a
   # protected group is a CORRECT outcome; the work simply was not confirmed.
   # Filing that as "failed" made the receipt misdescribe a working refusal.
-  { [ "$N_SURVIVED" -gt 0 ] || [ "$N_VETOED" -gt 0 ]; } && status=incomplete
+  { [ "$N_SURVIVED" -gt 0 ] || [ "$N_VETOED" -gt 0 ] || [ "$N_DRIFT" -gt 0 ] || [ "$N_HELD" -gt 0 ]; } && status=incomplete
   [ "$N_FAILED" -gt 0 ] && status=failed
-  journal_action plan.apply "plan:$(basename "$PLAN")" "$status" \
+  record plan.apply "plan:$(basename "$PLAN")" "$status" \
     "applied=$N_OK refused=$N_DRIFT gone=$N_GONE held=$N_HELD vetoed=$N_VETOED survived=$N_SURVIVED failed=$N_FAILED"
 }
 
 REASON="$(plan_reason "$PLAN")"
 if [ -n "$REASON" ]; then
-  journal_action plan.reason "plan:$(basename "$PLAN")" recorded "$REASON"
+  record plan.reason "plan:$(basename "$PLAN")" recorded "$REASON"
 fi
 
 if [ "$N_OK" -eq 0 ]; then
   s_dim "  nothing approved is still what the plan described"
   journal_outcome
-  printf '0 applied · %s refused (drift) · %s gone · %s held · 0 survived · 0 failed\n' "$N_DRIFT" "$N_GONE" "$N_HELD"
-  exit 0
+  printf '0 applied · %s refused (drift) · %s gone · %s held · 0 survived · %s failed · %s receipt failures\n' "$N_DRIFT" "$N_GONE" "$N_HELD" "$N_FAILED" "$N_RECORD_FAILED"
+  [ "$((N_DRIFT + N_HELD + N_FAILED + N_RECORD_FAILED))" -eq 0 ]; exit $?
 fi
 
 # Group the approved pgids by category and delegate once per category, because
@@ -273,10 +259,13 @@ for cat in tests dev browser; do
   OLD_IFS="$IFS"; IFS=','
   for pgx in $list; do
     IFS="$OLD_IFS"
-    if fp_for_pgid "$pgx" >/dev/null 2>&1; then
-      s_skip "  pgid $pgx — survived; audit declined to kill it"
-      N_SURVIVED=$((N_SURVIVED + 1))
-      N_OK=$((N_OK - 1))
+    fp_group_state "$pgx"; state_rc=$?
+    if [ "$state_rc" -eq 0 ]; then
+      s_skip "  pgid $pgx — survived; cleanup was not completed"
+      N_SURVIVED=$((N_SURVIVED + 1)); N_OK=$((N_OK - 1))
+    elif [ "$state_rc" -ne 1 ]; then
+      s_skip "  pgid $pgx — completion unavailable; process inspection failed"
+      N_FAILED=$((N_FAILED + 1)); N_OK=$((N_OK - 1))
     fi
     IFS=','
   done
@@ -353,24 +342,63 @@ while IFS= read -r t; do
   # directory behind if a file inside it is held open.
   if [ -e "$wtpath" ]; then
     s_skip "  $wtpath — survived removal: ${rm_err:-still present}"
-    journal_action worktree.remove "$wtpath" failed "${rm_err:-target still exists}"
+    record worktree.remove "$wtpath" failed "${rm_err:-target still exists}"
     N_SURVIVED=$((N_SURVIVED + 1)); N_OK=$((N_OK - 1))
     continue
   fi
-  journal_action worktree.remove "$wtpath" succeeded "repo=$repo"
+  record worktree.remove "$wtpath" succeeded "repo=$repo"
 done <<WT_EOF
 $wt_targets
 WT_EOF
 
+# Artifact destruction uses the same checked identities and fresh hard vetoes.
+if [ -f "$T/artifacts" ]; then
+  while IFS=$'\t' read -r want_fp scope target; do
+    reason=""
+    if [ ! -e "$target" ] && [ ! -L "$target" ]; then
+      s_skip "  $target — gone (verified absent)"
+      N_GONE=$((N_GONE + 1)); N_OK=$((N_OK - 1)); continue
+    fi
+    if ! veto_artifact_name "$target"; then reason=unsupported-artifact; fi
+    if [ -z "$reason" ]; then reason="$(veto_for artifact "$target" "$scope")"; fi
+    if [ -z "$reason" ]; then
+      if ! ws_pid_cwd --strict > "$T/artifact-cwd" 2>/dev/null; then reason=occupancy-unavailable
+      elif veto_is_occupied "$T/artifact-cwd" "$(veto_phys "$target")" "$target"; then reason=occupied; fi
+    fi
+    # Occupancy may be slow; refresh filesystem evidence after it completes.
+    if [ -z "$reason" ]; then reason="$(veto_for artifact "$target" "$scope")"; fi
+    if [ -n "$reason" ]; then
+      s_skip "  $target — refused by the $reason veto"
+      N_VETOED=$((N_VETOED + 1)); N_OK=$((N_OK - 1)); continue
+    fi
+    if ! have_fp="$(fp_for_artifact "$target")"; then
+      s_skip "  $target — refused, identity-unavailable"
+      N_FAILED=$((N_FAILED + 1)); N_OK=$((N_OK - 1)); continue
+    fi
+    if [ "$have_fp" != "$want_fp" ]; then
+      s_skip "  $target — refused, fingerprint moved"
+      N_DRIFT=$((N_DRIFT + 1)); N_OK=$((N_OK - 1)); continue
+    fi
+    s_would "  deleting artifact: $target"
+    if rm -rf -- "$target" 2>/dev/null && [ ! -e "$target" ] && [ ! -L "$target" ]; then
+      record artifact.clean "$target" succeeded "root=$scope"
+    else
+      s_skip "  $target — failed to delete (target remains or removal failed)"
+      record artifact.clean "$target" failed "removal was not confirmed"
+      N_FAILED=$((N_FAILED + 1)); N_OK=$((N_OK - 1))
+    fi
+  done < "$T/artifacts"
+fi
+
 journal_outcome
-printf '%s applied · %s refused (drift) · %s gone · %s held · %s vetoed · %s survived · %s failed\n' \
-  "$N_OK" "$N_DRIFT" "$N_GONE" "$N_HELD" "$N_VETOED" "$N_SURVIVED" "$N_FAILED"
+printf '%s applied · %s refused (drift) · %s gone · %s held · %s vetoed · %s survived · %s failed · %s receipt failures\n' \
+  "$N_OK" "$N_DRIFT" "$N_GONE" "$N_HELD" "$N_VETOED" "$N_SURVIVED" "$N_FAILED" "$N_RECORD_FAILED"
 # Receipts are postcondition-based: a delegation that failed did not do the
 # work, so the exit status must say so.
 # A run where every approved group SURVIVED did no work, and a caller cannot
 # tell that from "cleaned up" if both exit 0. Survivors are counted as a
 # failure of the run, matching the postcondition rule: the receipt describes
 # what was confirmed, and nothing was.
-if [ "$N_FAILED" -ne 0 ] || [ "$N_SURVIVED" -ne 0 ] || [ "$N_VETOED" -ne 0 ]; then
+if [ "$((N_FAILED + N_SURVIVED + N_VETOED + N_DRIFT + N_HELD + N_RECORD_FAILED))" -ne 0 ]; then
   exit 1
 fi

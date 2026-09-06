@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # plan.sh - write a proposal for what could be cleaned, one checkbox per
-# process group, for a person to edit.
+# target, for a person to edit.
 #
-# A proposal, not a decision. Only items that pass the two-signal gate arrive
-# checked; in-use, still-working, and no-signal items are listed unchecked with
+# A proposal, not a decision. Items that pass the two-signal gate arrive
+# unchecked; in-use, still-working, and no-signal items are withheld with
 # the reason stated, so the withholding is visible rather than silent. Every
 # checked line carries a fingerprint, which is what lets apply refuse an item
 # that moved between planning and applying.
 #
 # Usage:
-#   plan.sh
+#   plan.sh [--root DIR] [--all] [--artifacts-only] [--caches-only]
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,9 +19,17 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/fingerprint.sh"
 . "$DIR/categories.sh"
 . "$DIR/vetoes.sh"
+. "$DIR/privacy.sh"
+. "$DIR/protect.sh"
+. "$DIR/state.sh"
 
+ROOT="$PWD" ALL=0 ARTIFACTS_ONLY=0 CACHES_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
+    --root) ROOT="${2:?}"; shift 2 ;;
+    --all) ALL=1; shift ;;
+    --artifacts-only) ARTIFACTS_ONLY=1; shift ;;
+    --caches-only) CACHES_ONLY=1; shift ;;
     -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
     *) echo "plan: unknown option: $1" >&2
        echo "plan proposes; 'apply' is what acts on it." >&2
@@ -29,6 +37,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+[ -d "$ROOT" ] || { echo "plan: scope is not a directory: $ROOT" >&2; exit 2; }
+ROOT="$(cd "$ROOT" && pwd -P)"
+case "$ROOT" in *$'\n'*|*$'\r'*|*$'\t'*) echo "plan: unsupported control character in root" >&2; exit 2 ;; esac
+if top="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)"; then ROOT="$(veto_phys "$top")"; fi
+if [ "$ARTIFACTS_ONLY" -eq 1 ]; then
+  artifact_args=(--plan --root "$ROOT")
+  [ "$CACHES_ONLY" -eq 0 ] || artifact_args+=(--caches-only)
+  exec "$DIR/clean-artifacts.sh" "${artifact_args[@]}"
+fi
 NOW="$(date +%s)"
 T="$(mktemp -d)" || exit 1
 trap 'rm -rf "$T"' EXIT
@@ -40,6 +57,11 @@ ps -Ao pid,pgid,%cpu,command 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {
   $1 = ""; $2 = ""; $3 = ""; sub(/^[ \t]+/, "")
   print pid "\t" pg "\t" cpu "\t" $0
 }' > "$T/ps" || : > "$T/ps"
+
+PORT_STATUS=none
+if lsof -nP -iTCP -sTCP:LISTEN -Fpn > "$T/listeners" 2> "$T/listeners.err"; then port_rc=0; else port_rc=$?; fi
+if [ "$port_rc" -gt 1 ] || [ -s "$T/listeners.err" ]; then PORT_STATUS=unavailable; fi
+awk '/^p[0-9]+$/ {pid=substr($0,2)} /^n.*:[0-9]+$/ {port=$0; sub(/^.*:/,"",port); print pid "\t" port}' "$T/listeners" > "$T/ports"
 
 # Aggregate to the unit that actually gets killed: the process group.
 {
@@ -58,7 +80,7 @@ ps -Ao pid,pgid,%cpu,command 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {
   $1 == "C" { cwd[$2] = $3; next }
   $1 == "P" {
     pid = $2; pg = $3; cpu = $4 + 0; cmd = $5
-    dir = cwd[pid]; if (dir == "") next
+    dir = cwd[pid]; if (dir == "") { mixed[pg] = 1; next }
     best = ""
     for (w in wsts) if (samepath(dir, w) || index(dir, w "/") == 1)
       if (length(w) > length(best)) best = w
@@ -70,7 +92,7 @@ ps -Ao pid,pgid,%cpu,command 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {
     if (!(pg in owner)) {
       owner[pg] = resolved
       known[pg] = (best != "" ? wsts[best] : "")
-    } else if (owner[pg] != resolved) {
+    } else if (!samepath(owner[pg], resolved)) {
       mixed[pg] = 1
     }
     procs[pg]++
@@ -90,10 +112,12 @@ ps -Ao pid,pgid,%cpu,command 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {
   }
 ' | sort -n > "$T/groups"
 
+printf '# afterparty plan schema: 1\n'
 printf '# afterparty plan — %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 printf '# Check a box to approve it. apply refuses any item whose fingerprint moved,\n'
 printf '# and re-checks eligibility, so a plan cannot outlive what it described.\n'
 echo
+printf 'Scope: %s; process/worktree discovery: %s. All actions start unchecked.\n' "$ROOT" "$([ "$ALL" -eq 1 ] && echo machine-wide || echo current-repository)"
 echo '## Process groups'
 echo
 
@@ -106,6 +130,9 @@ fi
 awk -F'\t' '{print $2}' "$T/groups" | ws_unique_labels > "$T/labels" 2>/dev/null || : > "$T/labels"
 while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
   [ -n "$pg" ] || continue
+  if [ "$ALL" -eq 0 ]; then
+    case "$owner" in "$ROOT"|"$ROOT"/*) : ;; *) continue ;; esac
+  fi
   [ "$touched" = "-" ] && touched=""
   # Scope: a group belongs in the plan only if it sits in a workspace. With no
   # transcript the fallback test is "is this a git repo" -- that catches a
@@ -136,10 +163,25 @@ while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
   fi
   category="$(cat_for_command "$cmd" 2>/dev/null)" || category=""
   if [ "$verdict" = "eligible" ] && [ -n "$category" ]; then
+    pgid_has_protected "$pg"; protection_rc=$?
+    if [ "$protection_rc" -ne 1 ]; then
+      case "$protection_rc" in 0) protection_reason=protected ;; 3) protection_reason=gone ;; *) protection_reason=inspection-unavailable ;; esac
+      printf -- '- [⊘] %s pgid %s  %s\n      not offered: group protection check %s\n' "$protection_reason" "$pg" "$detail" "$protection_reason"
+      continue
+    fi
     fp="$(fp_for_pgid "$pg" 2>/dev/null)" || fp=""
     if [ -n "$fp" ]; then
-      printf -- '- [x] eligible  pgid %s  %s\n' "$pg" "$detail"
+      printf -- '- [ ] eligible  pgid %s  %s\n' "$pg" "$detail"
       printf -- '      category: %s  fingerprint: %s\n' "$category" "$fp"
+      printf '      workspace: %s\n' "$owner"
+      awk -F'\t' -v pg="$pg" '$2 == pg {printf "      member %s: %s\n", $1, $4}' "$T/ps" | privacy_redact
+      ports="$(awk -F'\t' -v pg="$pg" 'NR == FNR { if ($2 == pg) p[$1]=1; next } $1 in p {printf "%s ", $2}' "$T/ps" "$T/ports")"
+      printf '      listening ports: %s\n' "${ports:-$PORT_STATUS}"
+      ledger="$(state_ledger_path)"
+      purpose=""
+      if [ -r "$ledger" ]; then purpose="$(awk -F'\t' -v pg="$pg" '$5 == pg {print $8}' "$ledger" | privacy_redact)"; fi
+      printf '      recorded purpose: %s\n' "${purpose:-not recorded}"
+      printf '      consequence: stop every member of pgid %s (TERM, then KILL if needed); restart services manually\n' "$pg"
       continue
     fi
   fi
@@ -180,8 +222,8 @@ ws_pid_cwd --strict > "$T/wt-cwd" 2>/dev/null || rm -f "$T/wt-cwd"
 WT_ROWS="$T/wt-rows"; : > "$WT_ROWS"
 # Discovery does not require a staleness signal. A standalone or Codex session
 # may have no Claude history, but its current repository still has worktrees.
-printf '%s\n' "$(pwd -P)" > "$T/repo-candidates"
-awk -F'\t' '{ print $2 }' "$T/ws" >> "$T/repo-candidates"
+printf '%s\n' "$ROOT" > "$T/repo-candidates"
+[ "$ALL" -eq 0 ] || awk -F'\t' '{ print $2 }' "$T/ws" >> "$T/repo-candidates"
 : > "$T/seen-repos"
 while IFS= read -r wsdir; do
   [ -n "$wsdir" ] || continue
@@ -231,6 +273,7 @@ else
       [ "$reason" = "main-worktree" ] && continue
       printf -- '- [⊘] %-8s path %s  %s\n' "$reason" "$wtpath" "$detail"
       case "$reason" in
+        ignored-local-data) printf -- '      not offered: ignored local files remain; preserve them before removal\n' ;;
         dirty)    printf -- '      not offered: dirty — uncommitted work inside it; commit or stash, then re-plan\n' ;;
         occupied) printf -- '      not offered: occupied — a live process is running in it\n' ;;
         occupancy-unavailable) printf -- '      not offered: occupancy-unavailable — cannot complete the process cwd scan\n' ;;
@@ -259,9 +302,16 @@ else
     # a field a person could edit into disagreeing with the target is a field
     # worth not having.
     printf -- '      type: worktree  fingerprint: %s  path: %s\n' "$fp" "$wtpath"
+    printf '      consequence: delete this directory and rebuildable ignored output; other local data blocks removal\n'
   done < "$WT_ROWS"
 fi
 
 echo
+artifact_args=(--plan --root "$ROOT")
+[ "$CACHES_ONLY" -eq 0 ] || artifact_args+=(--caches-only)
+ARTIFACT_RC=0
+"$DIR/clean-artifacts.sh" "${artifact_args[@]}" || ARTIFACT_RC=$?
 echo '## Why'
 echo '> (free text; apply records this with the receipt)'
+
+exit "$ARTIFACT_RC"

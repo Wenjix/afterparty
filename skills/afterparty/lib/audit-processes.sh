@@ -66,14 +66,18 @@ match_q()  { if [ "$HAVE_RG" -eq 1 ]; then rg --no-config -q -- "$1"; else grep 
 
 # Print matching processes for a category, excluding protected and self.
 list_matches() {
-  local re="$1"
-  [ "$PS_STATUS" = "ok" ] || return 2
-  printf '%s\n' "$PS_SNAPSHOT" \
-    | match_i "$re" \
-    | match_iv "$PROTECT_RE" \
-    | match_v "audit-processes.sh" \
-    | match_v 'rg (--no-config )?-i --|grep -Ei --' \
-    | awk -v self="$SELF_PGID" '$3 != self'
+  local category="$1" line actual IFS=$' \t\n'
+  [ "$PS_STATUS" = ok ] || return 2
+  printf '%s\n' "$PS_SNAPSHOT" | match_iv "$PROTECT_RE" \
+    | awk -v self="$SELF_PGID" '$1 ~ /^[0-9]+$/ && $3 != self' \
+    | while IFS= read -r line; do
+        # shellcheck disable=SC2086
+        set -f; set -- $line; set +f
+        [ "$#" -ge 6 ] || continue
+        shift 5
+        actual="$(cat_for_command "$*")" || continue
+        [ "$actual" = "$category" ] && printf '%s\n' "$line"
+      done
 }
 
 # Print a human report for a category. Sets LAST_N to the row count so the
@@ -124,10 +128,7 @@ report_localhost() {
     s_skip "  unavailable: $LSOF_REASON"
     return
   fi
-  rows=$(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null \
-    | awk 'NR > 1 && /127\.0\.0\.1|localhost|\[::1\]|\*:/' \
-    | match_i "$LOCALHOST_RE" \
-    | match_iv "$PROTECT_RE" || true)
+  rows="$LSOF_ROWS"
   if [ -z "$rows" ]; then
     s_dim "  (none)"
     return
@@ -150,16 +151,7 @@ pgids_for() {
 # Return 0 when a process group still has members, 1 when it is absent, and 2
 # when membership could not be inspected. Keeping this tri-state avoids
 # treating a failed `ps` call as proof that a group exited.
-pgid_exists() {
-  local pg="$1" members
-  if ! members=$(ps -Ao pgid= 2>/dev/null); then
-    return 2
-  fi
-  if printf '%s\n' "$members" | tr -d ' ' | match_q "^${pg}$"; then
-    return 0
-  fi
-  return 1
-}
+pgid_exists() { fp_group_state "$1"; }
 
 # SIGTERM then SIGKILL a process group. Returns 0 only after the group is
 # confirmed absent, so receipts describe outcomes rather than signal attempts.
@@ -195,16 +187,20 @@ expected_fp_for() {
 # True when the group is not what the caller approved. Checked immediately
 # before every signal: pgid alone is not identity, and a group that exits and
 # has its id reused between approval and SIGTERM would otherwise be killed on
-# an approval that was never given for it. Unconstrained groups always pass.
+# an approval that was never given for it. Missing proof also refuses signals.
 identity_moved() {
   local pg="$1" want have
-  want="$(expected_fp_for "$pg")" || return 1
+  want="$(expected_fp_for "$pg")" || return 0
   have="$(fp_for_pgid "$pg" 2>/dev/null)" || return 0
   [ "$have" != "$want" ]
 }
 
+record_process_outcome() {
+  journal_action "$@" || { s_skip "  process outcome occurred but its receipt could not be recorded"; return 1; }
+}
+
 kill_group() {
-  local pg="$1" state_rc protection_rc
+  local pg="$1" state_rc protection_rc member_proof
   # kill -TERM -1 means every process this user owns; -0 means afterparty's own
   # group. Every other pgid entry point validates this; the one that actually
   # signals did not, and a pgid comes straight out of a ps column.
@@ -213,7 +209,7 @@ kill_group() {
   esac
   if [ "$pg" -le 1 ]; then
     s_skip "  refusing process group $pg — 0 and 1 are never valid kill targets"
-    journal_action process_group.stop "pgid:$pg" failed "refused reserved process group"
+    record_process_outcome process_group.stop "pgid:$pg" failed "refused reserved process group"
     return 1
   fi
   # Re-evaluate the live group immediately before each signal. The discovery
@@ -237,9 +233,13 @@ kill_group() {
       return 1
     fi
   fi
+  if ! member_proof="$(fp_members_for_pgid "$pg")"; then
+    s_skip "  pgid $pg: identity unavailable before SIGTERM — not signalled"
+    return 1
+  fi
   if identity_moved "$pg"; then
-    s_skip "  pgid $pg: identity changed since approval — not signalled"
-    journal_action process_group.stop "pgid:$pg" failed "identity changed before SIGTERM"
+    s_skip "  pgid $pg: identity changed or unavailable since approval — not signalled"
+    record_process_outcome process_group.stop "pgid:$pg" failed "identity changed before SIGTERM"
     return 5
   fi
   if kill -TERM -"$pg" 2>/dev/null; then
@@ -250,7 +250,7 @@ kill_group() {
   if pgid_exists "$pg"; then
     if pgid_has_protected "$pg"; then
       s_skip "  pgid $pg became protected before SIGKILL — skipped"
-      journal_action process_group.stop "pgid:$pg" failed "protected member detected before SIGKILL"
+      record_process_outcome process_group.stop "pgid:$pg" failed "protected member detected before SIGKILL"
       return 4
     else
       protection_rc=$?
@@ -262,18 +262,23 @@ kill_group() {
         # that actually happened, which is the mirror image of claiming work
         # that did not. "Already gone" is only ever a PRE-signal verdict.
         s_ok "  pgid $pg exited after SIGTERM"
-        journal_action process_group.stop "pgid:$pg" succeeded "exited after SIGTERM"
+        record_process_outcome process_group.stop "pgid:$pg" succeeded "exited after SIGTERM" || return 7
         return 0
       fi
       if [ "$protection_rc" -eq 2 ]; then
         s_skip "  could not recheck pgid $pg before SIGKILL — skipped"
-        journal_action process_group.stop "pgid:$pg" failed "protection unavailable before SIGKILL"
+        record_process_outcome process_group.stop "pgid:$pg" failed "protection unavailable before SIGKILL"
         return 1
       fi
     fi
-    if identity_moved "$pg"; then
-      s_skip "  pgid $pg: identity changed before SIGKILL — not signalled"
-      journal_action process_group.stop "pgid:$pg" failed "identity changed before SIGKILL"
+    if fp_group_matches "$pg" "$member_proof"; then :; else
+      state_rc=$?
+      if [ "$state_rc" -eq 1 ]; then
+        record_process_outcome process_group.stop "pgid:$pg" succeeded "group confirmed absent" || return 7
+        return 0
+      fi
+      s_skip "  pgid $pg: identity changed or unavailable before SIGKILL — not signalled"
+      record_process_outcome process_group.stop "pgid:$pg" failed "identity changed before SIGKILL"
       return 5
     fi
     if kill -KILL -"$pg" 2>/dev/null; then
@@ -282,13 +287,13 @@ kill_group() {
     sleep 0.1
     if pgid_exists "$pg"; then
       s_skip "  failed to stop pgid $pg"
-      journal_action process_group.stop "pgid:$pg" failed "group still has members"
+      record_process_outcome process_group.stop "pgid:$pg" failed "group still has members"
       return 1
     else
       state_rc=$?
       if [ "$state_rc" -eq 2 ]; then
         s_skip "  could not confirm pgid $pg exited"
-        journal_action process_group.stop "pgid:$pg" failed "exit could not be confirmed"
+        record_process_outcome process_group.stop "pgid:$pg" failed "exit could not be confirmed"
         return 1
       fi
     fi
@@ -296,19 +301,19 @@ kill_group() {
     state_rc=$?
     if [ "$state_rc" -eq 2 ]; then
       s_skip "  could not confirm pgid $pg exited"
-      journal_action process_group.stop "pgid:$pg" failed "exit could not be confirmed"
+      record_process_outcome process_group.stop "pgid:$pg" failed "exit could not be confirmed"
       return 1
     fi
   fi
-  journal_action process_group.stop "pgid:$pg" succeeded "group confirmed absent"
+  record_process_outcome process_group.stop "pgid:$pg" succeeded "group confirmed absent" || return 7
   return 0
 }
 
 category_re() {
   case "$1" in
-    tests) echo "$TESTS_RE" ;;
-    dev) echo "$DEV_RE" ;;
-    browser) echo "$BROWSER_RE" ;;
+    tests) echo tests ;;
+    dev) echo dev ;;
+    browser) echo browser ;;
     *) echo "" ;;
   esac
 }
@@ -338,10 +343,7 @@ json_report() {
 json_report_localhost() {
   [ "$LSOF_STATUS" = "ok" ] || return 0
   local line
-  lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null \
-    | awk 'NR > 1 && /127\.0\.0\.1|localhost|\[::1\]|\*:/' \
-    | match_i "$LOCALHOST_RE" \
-    | match_iv "$PROTECT_RE" \
+  printf '%s\n' "$LSOF_ROWS" \
     | while IFS= read -r line; do
         [ -n "$line" ] || continue
         # shellcheck disable=SC2086
@@ -407,13 +409,38 @@ if [ "$JSON" -eq 1 ] && [ -n "$KILL_CATS" ]; then
   exit 2
 fi
 
+LSOF_ROWS=""
+if [ "$LSOF_STATUS" = ok ]; then
+  if listener_errors="$(mktemp)"; then
+    listener_snapshot="$(lsof -nP -iTCP -sTCP:LISTEN 2>"$listener_errors")"; listener_rc=$?
+    if [ -s "$listener_errors" ] || [ "$listener_rc" -gt 1 ] \
+      || { [ "$listener_rc" -eq 0 ] && [ -z "$listener_snapshot" ]; }; then
+      LSOF_STATUS=unavailable; LSOF_REASON="lsof could not complete the listener scan"
+    elif [ -n "$listener_snapshot" ] && ! printf '%s\n' "$listener_snapshot" | awk 'NR==1 {if ($1!="COMMAND" || $2!="PID") bad=1;next} NF<9 || $2!~/^[0-9]+$/ {bad=1} END {exit bad}'; then
+      LSOF_STATUS=unavailable; LSOF_REASON="lsof returned malformed listener data"
+    else
+      LSOF_ROWS="$(printf '%s\n' "$listener_snapshot" | awk 'NR > 1 && /127\.0\.0\.1|localhost|\[::1\]|\*:/' | match_i "$LOCALHOST_RE" | match_iv "$PROTECT_RE" || true)"
+    fi
+    rm -f "$listener_errors"
+  else
+    LSOF_STATUS=unavailable; LSOF_REASON="cannot capture listener scan diagnostics"
+  fi
+fi
+# Reject the entire category request before any group can be signalled.
+validate_ifs="$IFS"; IFS=','
+for requested_category in $KILL_CATS; do
+  case "$requested_category" in tests|dev|browser) : ;; *) echo "unknown category: $requested_category" >&2; exit 2 ;; esac
+done
+IFS="$validate_ifs"
+
 if [ "$JSON" -eq 1 ]; then
   json_capability processes "$PS_STATUS" "$PS_REASON"
   json_capability listeners "$LSOF_STATUS" "$LSOF_REASON"
   json_report_localhost
-  json_report tests "$TESTS_RE"
-  json_report dev "$DEV_RE"
-  json_report browser "$BROWSER_RE"
+  json_report tests tests
+  json_report dev dev
+  json_report browser browser
+  if [ "$STRICT" -eq 1 ] && { [ "$PS_STATUS" != ok ] || [ "$LSOF_STATUS" != ok ]; }; then exit 1; fi
   exit 0
 fi
 
@@ -439,7 +466,7 @@ print_procs_card() {
     [ "$N_BROWSER" -gt 0 ] && s_card_line "   $(s_n "$N_BROWSER" 'automation browser nobody closed' 'automation browsers nobody closed')"
     [ "$N_LISTEN" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_LISTEN" 'localhost listener up — likely yours' 'localhost listeners up — likely yours'))${C_RESET}"
     s_card_line
-    s_card_line "   closing time: ${C_CYAN}afterparty audit --kill $cats${C_RESET}"
+    s_card_line "   closing time: ${C_CYAN}afterparty audit --kill $cats --pgid <reviewed-pgids>${C_RESET}"
   elif [ "$N_UNAVAILABLE" -gt 0 ]; then
     s_card_line "${C_BOLD}${C_YEL}⚠ audit incomplete — some scanners were unavailable${C_RESET}"
     s_card_line "   $N_UNAVAILABLE unavailable scanner(s); no clean bill of health issued"
@@ -468,8 +495,10 @@ print_procs_receipt() {
     s_card_line "   $(s_n "$N_KILLED" 'process group shown the door' 'process groups shown the door')"
   elif [ "$N_FAILED" -gt 0 ]; then
     s_card_line "   nothing stopped — $N_FAILED group(s) could not be safely handled"
+  elif [ "$N_PROT" -gt 0 ]; then
+    s_card_line "   no group stopped — protected groups remain running"
   else
-    s_card_line "   nothing to kick out — floor was already clear ✨"
+    s_card_line "   no matching group remained to stop"
   fi
   s_card_line
   s_card_line "   thanks for partying responsibly 🎉"
@@ -479,10 +508,11 @@ print_procs_receipt() {
 if [ -z "$KILL_CATS" ]; then
   s_mode "$C_YEL" "DRY RUN" " — headcount only, nobody gets kicked out yet (use --kill <tests|dev|browser> to act)" \
     "DRY RUN — reporting stray processes (use --kill <tests|dev|browser> to act)"
+  s_dim "Scope: all visible workspaces; detected processes are not necessarily idle"
   report_localhost;                                                N_LISTEN=$LAST_N
-  report "Test / watch runners (usually safe to kill)" "$TESTS_RE";  N_TESTS=$LAST_N
-  report "Dev servers (keep the one you are actively using)" "$DEV_RE"; N_DEV=$LAST_N
-  report "Automation browsers (close via the browser tool first)" "$BROWSER_RE"; N_BROWSER=$LAST_N
+  report "Test / watch runners (usually safe to kill)" tests;  N_TESTS=$LAST_N
+  report "Dev servers (keep the one you are actively using)" dev; N_DEV=$LAST_N
+  report "Automation browsers (close via the browser tool first)" browser; N_BROWSER=$LAST_N
   N_UNAVAILABLE=0
   [ "$PS_STATUS" = "ok" ] || N_UNAVAILABLE=$((N_UNAVAILABLE + 1))
   [ "$LSOF_STATUS" = "ok" ] || N_UNAVAILABLE=$((N_UNAVAILABLE + 1))
@@ -558,6 +588,7 @@ for cat in $KILL_CATS; do
     else
       kill_rc=$?
       case "$kill_rc" in
+        7) N_KILLED=$((N_KILLED + 1)); N_FAILED=$((N_FAILED + 1)) ;;
         3) N_PROT=$((N_PROT + 1)) ;;
         # Already gone before we signalled: a no-op, not a failure.
         6) N_GONE=$((N_GONE + 1)) ;;
@@ -581,6 +612,7 @@ for cat in $KILL_CATS; do
   fi
 done
 unset IFS
+printf '%s stopped · %s protected · %s already gone · %s failed\n' "$N_KILLED" "$N_PROT" "$N_GONE" "$N_FAILED"
 s_ok "done"
 tally_add procs.killed "$N_KILLED"
 tally_add procs.protected "$N_PROT"

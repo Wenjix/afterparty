@@ -2,9 +2,9 @@
 
 **What this is:** My cleanup tool for the mess coding agents leave behind,
 developed independently in this repo (single-root history), shipped three ways:
-Claude Code plugin (.claude-plugin/ manifests + asynchronous SessionEnd and
+Claude Code plugin (.claude-plugin/ manifests + bounded synchronous SessionEnd and
 lightweight SessionStart hooks), self-contained Agent Skill
-(skills/afterparty/ bundles SKILL.md + VERSION + LICENSE + bin + lib, commands anchored with $CLAUDE_SKILL_DIR), and standalone CLI (root
+(skills/afterparty/ bundles SKILL.md + VERSION + LICENSE + bin + lib, commands anchored with ${CLAUDE_SKILL_DIR}), and standalone CLI (root
 bin/afterparty wrapper). The LICENSE deliberately retains an earlier author's
 copyright line — the code began as an MIT derivative — so never remove it. I'm
 iterating on this partly to learn Claude plugin development — explain plugin
@@ -56,15 +56,14 @@ mechanics when you touch them.
   IFS-whitespace, so consecutive tabs collapse and every later column shifts
   left. Emit a sentinel ("-"). test-review-fixes C6 pins this for the ledger;
   plan.sh reintroduced it once already.
-- devclean --disk age-gates Codex session transcripts (CODEX_SESSION_AGE_DAYS,
+- devclean --history age-gates Codex session transcripts (CODEX_SESSION_AGE_DAYS,
   env-overridable, default 30 like Claude Code's retention): transcripts are
-  resume history and the audit trail of agent work — only stale YYYY/MM/DD
-  date-folders go. pnpm store maintenance also lives in devclean --disk, as
+  resume history and the audit trail of agent work — date-folder selection is followed by a complete last-modification scan.
+  Recent or uninspectable history is withheld. pnpm store maintenance also lives in devclean --disk, as
   `pnpm store prune` ONLY — the store is shared across projects, never rm -rf
   it; artifacts deliberately has no --deep flag anymore.
-- Discovery may be heuristic; DESTRUCTION requires fresh, positive proof. Two
-  surfaces used to discover-and-destroy in one step and are now REPORT-ONLY:
-  `git --clean` (exit 2, still reports) and devclean's roaming `clean_find`
+- Discovery may be heuristic; DESTRUCTION requires fresh, positive proof. Three surfaces are now REPORT-ONLY: `git --clean`, `artifacts --clean`
+  (both exit 2), and devclean's roaming `clean_find`
   project scan (reports, withholds). The cut is roaming-vs-named, not
   apply-vs-report: `clean_dir` targets an exact allowlisted cache path and
   still deletes; `clean_find` walks $DOCUMENTS_ROOT hunting a NAME with no
@@ -72,9 +71,9 @@ mechanics when you touch them.
   typed targets (process-group, worktree, artifact), each with its own
   fingerprint and apply-time policy. Approval does NOT replace safety checks:
   tracked target, symlink or scope escape, repo root, nested repo, and
-  incomplete scans stay hard vetoes even when a human ticks the box, and
-  filesystem items default to unchecked because deleting a worktree and
-  restarting a dev server are not the same consequence.
+  incomplete scans stay hard vetoes even when a human ticks the box, and every plan item starts unchecked. Plan defaults to the current repo;
+  --all explicitly widens process/worktree discovery. Devclean requires
+  individual preview target IDs; --disk never implies process stopping.
 - `stop --kill` stops ledger-recorded groups; `audit --kill
   tests|dev|browser` kills by pattern category. Worktree removal requires a
   checked plan item and `apply`; `git --clean` remains report-only. Worktree
@@ -100,10 +99,11 @@ mechanics when you touch them.
   `audit --report` writes report.md at the repo root ONLY when the repo
   gitignores it and no unrelated file owns that path (litter/clobber guard),
   else a workspace-keyed cache report;
-  the plugin's SessionEnd hook relies on this.
+  the plugin's SessionEnd hook writes a separate bounded session marker,
+  with no audit. Explicit reports retain session archives and completion status.
 - Terminal styling lives ONLY in skills/afterparty/lib/style.sh, gated on
   TTY / NO_COLOR / AFTERPARTY_STYLE=always|never|auto. Plain (piped) and
-  --json output are CONTRACT surfaces — byte-stable; banners and finale
+  --json output are CONTRACT surfaces — stable data contracts; intentional safety/status changes need regression coverage. Banners and finale
   cards are additive, styled-mode only. Composite `audit` collects child
   counters via the AFTERPARTY_TALLY file; AFTERPARTY_CARD=0 suppresses
   cards (doctor, nested calls).
@@ -135,8 +135,8 @@ mechanics when you touch them.
   new guard by mutating the production code in a scratch copy and confirming the
   test goes red.
 - Test isolation is by PATH shim, not by HOME: two devclean surfaces address
-  the real machine whatever HOME says. run_safe_orphans runs on EVERY
-  devclean invocation and signals what it matches under --apply (and
+  the real machine whatever HOME says. run_safe_orphans runs in default/explicit --orphans mode and may signal
+  reviewed targets under --apply --target (and
   ORPHAN_PATTERNS includes claude and codex), and the background-agent step
   drives launchctl gui/<uid>/<label>. Any test that reaches --apply MUST
   shim pgrep, launchctl AND pnpm, or it will kill the developer's own agents,

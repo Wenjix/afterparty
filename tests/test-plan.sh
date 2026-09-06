@@ -18,6 +18,7 @@ SHIM="$T/shim"; mkdir -p "$SHIM"
 cat > "$SHIM/ps" <<'PS'
 #!/usr/bin/env bash
 case "$*" in
+  *pgid=,command=*) printf '9001 npm run dev\n9002 vitest --watch\n9003 next dev\n' ;;
   *pgid=,lstart=,command=*)
     printf '9001 Tue Aug 18 09:00:00 2026 npm run dev\n'
     printf '9002 Tue Aug 18 09:00:00 2026 vitest --watch\n'
@@ -78,13 +79,13 @@ for f in "$R/-w-gone/a.jsonl" "$R/-w-busy/c.jsonl"; do
 done
 
 OUT="$(PATH="$SHIM:$PATH" AFTERPARTY_TRANSCRIPT_ROOT="$R" AFTERPARTY_STYLE=never \
-  bash "$LIB/plan.sh" 2>/dev/null)"
+  bash "$LIB/plan.sh" --all 2>/dev/null)"
 
-# ---------- P1: idle and quiet is proposed, checked ----------
-if printf '%s\n' "$OUT" | grep -qE '^- \[x\].*9001'; then
-  pass "P1: idle+quiet workspace is proposed checked"
+# ---------- P1: idle and quiet is proposed, unchecked ----------
+if printf '%s\n' "$OUT" | grep -qE '^- \[ \].*9001'; then
+  pass "P1: idle+quiet workspace is proposed unchecked"
 else
-  fail "P1: pgid 9001 should be checked: $(printf '%s\n' "$OUT" | grep 9001)"
+  fail "P1: pgid 9001 should be unchecked: $(printf '%s\n' "$OUT" | grep 9001)"
 fi
 
 # ---------- P2: the three not-offered verdicts are never checked ----------
@@ -104,11 +105,11 @@ CASES
 
 # ---------- P3: every actionable line carries a fingerprint ----------
 _b=$FAILS
-N_CHECKED="$(printf '%s\n' "$OUT" | grep -cE '^- \[x\]')"
+N_OFFERED="$(printf '%s\n' "$OUT" | grep -cE '^- \[ \]')"
 N_FP="$(printf '%s\n' "$OUT" | grep -cE 'fingerprint: [0-9a-f]{12}')"
-[ "$N_CHECKED" -ge 1 ] || fail "P3: nothing was checked at all"
-[ "$N_FP" -ge "$N_CHECKED" ] || fail "P3: $N_CHECKED checked but only $N_FP fingerprints"
-[ "$FAILS" -eq "$_b" ] && pass "P3: every checked item carries a fingerprint"
+[ "$N_OFFERED" -ge 1 ] || fail "P3: nothing was offered at all"
+[ "$N_FP" -ge "$N_OFFERED" ] || fail "P3: $N_OFFERED offered but only $N_FP fingerprints"
+[ "$FAILS" -eq "$_b" ] && pass "P3: every offered item carries a fingerprint"
 
 # ---------- P4: the reason a thing was withheld is stated, not implied ----------
 _b=$FAILS
@@ -153,7 +154,7 @@ printf '%s\n' "$OUT" | grep -A1 '9010' | grep -q 'no kill discipline' \
 # category would be approved and then silently not killed. 9001 is "npm run
 # dev" (dev); 9004 is "node server.js", which matches nothing.
 _b=$FAILS
-printf '%s\n' "$OUT" | grep -A1 -E '^- \[x\].*9001' | grep -q 'category: dev' \
+printf '%s\n' "$OUT" | grep -A1 -E '^- \[ \].*9001' | grep -q 'category: dev' \
   || fail "P7: checked item did not record its kill category"
 printf '%s\n' "$OUT" | grep -qE '^- \[x\].*9004' \
   && fail "P7: offered a group with no kill discipline"
@@ -170,9 +171,10 @@ printf '%s\n' "$OUT" | grep -q 'mixed' || fail "P8: mixed ownership not reported
 
 # ---------- P9: help advertises only what the parser accepts ----------
 _b=$FAILS
-for flag in $(sed -n 's/^#   plan.sh \(.*\)/\1/p' "$LIB/plan.sh" | tr -d '[]' | tr ' ' '\n' | grep '^--'); do
-  bash "$LIB/plan.sh" "$flag" >/dev/null 2>&1 || fail "P9: help advertises $flag but the parser rejects it"
+for flag in --all --artifacts-only --caches-only; do
+  PATH="$SHIM:$PATH" bash "$LIB/plan.sh" "$flag" >/dev/null 2>&1 || fail "P9: parser rejects $flag"
 done
+PATH="$SHIM:$PATH" bash "$LIB/plan.sh" --root "$T" >/dev/null 2>&1 || fail 'P9: parser rejects --root DIR'
 [ "$FAILS" -eq "$_b" ] && pass "P9: every advertised flag is accepted"
 
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2

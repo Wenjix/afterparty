@@ -153,7 +153,7 @@ printf '%s\n' "$OUT"  | grep -q '87.3' || fail "G6: plain lost the cpu value"
 _b=$FAILS
 ONE="$(run --oneline 2>/dev/null)"
 [ "$(printf '%s\n' "$ONE" | grep -c .)" -eq 1 ] || fail "G7: --oneline emitted more than one line"
-printf '%s\n' "$ONE" | grep -q 'idle' || fail "G7: --oneline hid the idle workspace"
+printf '%s\n' "$ONE" | grep -q 'Claude transcript activity' || fail "G7: --oneline hid the transcript activity source"
 printf '%s\n' "$ONE" | grep -q "$ESC" && fail "G7: ANSI in piped --oneline"
 [ "$FAILS" -eq "$_b" ] && pass "G7: --oneline is one line and names the idle count"
 
@@ -281,6 +281,59 @@ J1="$(printf '%s\n' "$OUT" | grep 'プロジェクト' | sed -n 1p | cut -c1-36)
 J2="$(printf '%s\n' "$OUT" | grep 'プロジェクト' | sed -n 2p | cut -c1-36)"
 [ "$J1" != "$J2" ] || fail "G13: the two multibyte workspaces render identically: [$J1]"
 [ "$FAILS" -eq "$_b" ] && pass "G13: multibyte workspaces render whole, valid and distinct"
+
+# ---------- G14: processes outside the transcript index remain visible ----------
+_b=$FAILS
+mkdir -p "$T/no-transcripts"
+UOUT="$(PATH="$SHIM:$PATH" AFTERPARTY_TRANSCRIPT_ROOT="$T/no-transcripts" AFTERPARTY_STYLE=never bash "$LIB/glance.sh" --json)"
+if [ -n "$PY_BIN" ]; then
+  printf '%s\n' "$UOUT" | "$PY_BIN" -c '
+import json,sys
+rows=[json.loads(s) for s in sys.stdin]
+scopes=[r for r in rows if r["section"]=="workspace"]
+assert sum(r["procs"] for r in scopes)==7, scopes
+assert all(r["last_touched"] is None and r["idle_seconds"] is None for r in scopes)
+assert all(r["attribution"]=="cwd-only" for r in scopes)
+' || fail "G14: unindexed processes disappeared or acquired invented activity"
+fi
+[ "$FAILS" -eq "$_b" ] && pass "G14: unindexed processes remain visible with unknown activity"
+
+# ---------- G15: failed cwd attribution keeps the observed processes ----------
+_b=$FAILS
+if [ -n "$PY_BIN" ]; then
+  printf '%s\n' "$J9" | "$PY_BIN" -c '
+import json,sys
+rows=[json.loads(s) for s in sys.stdin]
+scopes=[r for r in rows if r["section"]=="workspace"]
+assert sum(r["procs"] for r in scopes)==7,scopes
+assert any(r["attribution"]=="unattributed" and r["path"] is None for r in scopes)
+' || fail "G15: failed attribution hid observed processes"
+fi
+[ "$FAILS" -eq "$_b" ] && pass "G15: unavailable cwd attribution retains an explicit unattributed bucket"
+
+# ---------- G16: capabilities describe the actual scan, one call each ----------
+_b=$FAILS
+ONCE="$T/once"; mkdir -p "$ONCE"
+cp "$SHIM/ps" "$ONCE/ps.real"; cp "$SHIM/lsof" "$ONCE/lsof.real"
+cat > "$ONCE/ps" <<'ONCEPS'
+#!/usr/bin/env bash
+printf 'ps\n' >> "$AFTERPARTY_GLANCE_CALLS"
+exec "$(dirname "$0")/ps.real" "$@"
+ONCEPS
+cat > "$ONCE/lsof" <<'ONCELS'
+#!/usr/bin/env bash
+case "$*" in
+  *-d\ cwd*) printf 'cwd\n' >> "$AFTERPARTY_GLANCE_CALLS"; exec "$(dirname "$0")/lsof.real" "$@" ;;
+  *) echo 'lsof: fixture permission failure' >&2; exit 1 ;;
+esac
+ONCELS
+chmod +x "$ONCE/ps" "$ONCE/lsof"
+O16="$(PATH="$ONCE:$PATH" AFTERPARTY_GLANCE_CALLS="$T/calls" AFTERPARTY_TRANSCRIPT_ROOT="$R" bash "$LIB/glance.sh" --json)"
+[ "$(grep -c '^ps$' "$T/calls")" = 1 ] || fail "G16: ps scanned more than once"
+[ "$(grep -c '^cwd$' "$T/calls")" = 1 ] || fail "G16: cwd scanned more than once"
+printf '%s\n' "$O16" | grep -q '"name":"listeners".*"status":"unavailable"' || fail "G16: failed actual listener scan marked healthy"
+printf '%s\n' "$O16" | grep -q '"name":"attribution".*"status":"ok"' || fail "G16: successful attribution capability lost"
+[ "$FAILS" -eq "$_b" ] && pass "G16: one actual scan per capability and listener failures are separate"
 
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))

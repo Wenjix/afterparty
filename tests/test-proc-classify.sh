@@ -180,6 +180,11 @@ while IFS='|' read -r want desc cmd; do
 done <<'CASES'
 tests|a real vitest runner by path|node /repo/node_modules/.bin/vitest --watch
 tests|pytest invoked directly|pytest tests/unit
+tests|pytest invoked as a module|python -m pytest tests/unit
+none|a clone URL is not a dev-server executable|git clone https://github.com/encode/uvicorn.git
+none|an absolute executable with a browser-cache argument is not a browser|/usr/bin/git clone /Users/u/ms-playwright/chrome
+none|prompt prose is not an npm command|agentd please run npm run dev for me
+none|combined shell command flags remain ambiguous|bash -lc next dev
 tests|jest via npx|npx jest --runInBand
 tests|the npm test script|npm test
 tests|ava by path|/repo/node_modules/.bin/ava
@@ -200,7 +205,7 @@ while IFS='|' read -r want desc cmd; do
 done <<'CASES'
 browser|chrome under remote debugging|/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222
 browser|a playwright-managed browser|/Users/x/Library/Caches/ms-playwright/chromium-1140/chrome-mac/Chromium --headless
-browser|the chrome devtools mcp bridge|node /x/node_modules/mcp-chrome/dist/index.js
+none|an MCP bridge is not an automation browser|node /x/node_modules/mcp-chrome/dist/index.js
 none|prose naming playwright and chromium|claude [city] use playwright to test chromium rendering later
 none|prose naming puppeteer|claude [city] the Google Chrome profile needs puppeteer removed
 CASES

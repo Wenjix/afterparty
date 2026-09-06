@@ -6,14 +6,14 @@ allowed-tools: Bash(bash:*)
 ## Context
 
 - Dry-run audit of this machine and repo:
-!`bash "${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty" audit 2>&1`
+!`bash "${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty" audit 2>&1; rc=$?; if [ "$rc" -ne 0 ]; then printf "\nAFTERPARTY AUDIT INCOMPLETE (exit %s)\n" "$rc"; fi`
 
 ## Your task
 
 Summarize the leftovers above for the user in a sentence or two — stray
 processes, localhost listeners, ledger entries, git leftovers (worktrees,
-agent branches, index.lock, conflict litter, stashes). If everything is
-clean, say so and stop.
+agent branches, index.lock, conflict litter, stashes). If any section is unavailable or the audit is incomplete, explain the gap.
+Only claim a clean result when the relevant scans completed.
 
 If `$ARGUMENTS` asks to clean, kill, or apply (e.g. "clean", "kill tests"),
 run the matching gated command(s) with the Bash tool and report what

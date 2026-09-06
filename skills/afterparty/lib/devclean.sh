@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # devclean.sh - devclean-style cleanup for agent/dev-machine leaks.
 #
-# Dry-run is the default. Pass --apply to terminate processes, patch settings, or
-# delete rebuildable caches.
+# Preview is the default. Copy a target ID from the preview, then select it
+# with --apply --target ID. No mode grants blanket mutation approval.
 #
 # Usage:
-#   devclean.sh                         # audit safe orphaned dev processes
-#   devclean.sh --apply                 # kill safe orphaned dev processes
-#   devclean.sh --deep                  # include heavy daemon audit
-#   devclean.sh --optimize              # audit IDE crash reporters / Crashpad / agents
-#   devclean.sh --disk                  # audit global dev caches + project artifacts
-#   devclean.sh --deep --disk --apply   # act on selected modes
-#   devclean.sh --dry-run               # force dry-run (the default)
+#   devclean.sh [--orphans]              # preview orphan process candidates
+#   devclean.sh --deep                   # preview daemon and simulator targets
+#   devclean.sh --optimize               # preview settings, dumps and launch agents
+#   devclean.sh --disk                   # preview rebuildable caches; never signals
+#   devclean.sh --history                # preview stale transcripts/logs/recordings
+#   devclean.sh --disk --apply --target ID # apply one reviewed target
+#   devclean.sh --target ID --target ID  # select multiple targets
+#   devclean.sh --dry-run                # force preview
 #   devclean.sh --documents-root DIR    # where --disk scans for project artifacts
 #   devclean.sh --project-maxdepth N    # --disk project scan depth (default 6)
 #   devclean.sh --no-repo-artifacts     # --disk: skip the current-repo artifact pass
@@ -41,19 +42,28 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/style.sh"
 # Private local record of confirmed mutation outcomes.
 . "$DIR/journal.sh"
+. "$DIR/fingerprint.sh"
+. "$DIR/workspace.sh"
+. "$DIR/eligible.sh"
+. "$DIR/protect.sh"
 OS="$(uname -s)"
 
 DRY_RUN=1
 DEEP=0
 OPTIMIZE=0
 DISK=0
+HISTORY=0
+ORPHANS=0
+REQUESTED_TARGETS=()
+SEEN_TARGETS=""
+N_UNSELECTED=0 N_WITHHELD=0 N_CACHE_DONE=0 N_HISTORY_DONE=0
 DOCUMENTS_ROOT="$HOME/Documents"
 PROJECT_MAXDEPTH=6
 RUN_REPO_ARTIFACTS=1
 ALLOW_BROAD_DOCUMENTS_ROOT=0
 
 usage() {
-  sed -n '2,17p' "$0"
+  sed -n '2,19p' "$0"
 }
 
 while [ $# -gt 0 ]; do
@@ -61,8 +71,11 @@ while [ $# -gt 0 ]; do
     --apply|--kill|--clean) DRY_RUN=0; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --deep) DEEP=1; shift ;;
+    --orphans) ORPHANS=1; shift ;;
     --optimize) OPTIMIZE=1; shift ;;
     --disk) DISK=1; shift ;;
+    --history) HISTORY=1; shift ;;
+    --target) REQUESTED_TARGETS+=("${2:?}"); shift 2 ;;
     --documents-root) DOCUMENTS_ROOT="${2:?}"; shift 2 ;;
     --project-maxdepth) PROJECT_MAXDEPTH="${2:?}"; shift 2 ;;
     --no-repo-artifacts) RUN_REPO_ARTIFACTS=0; shift ;;
@@ -71,6 +84,13 @@ while [ $# -gt 0 ]; do
     *) echo "unknown arg: $1" >&2; usage; exit 2 ;;
   esac
 done
+if [ "$DEEP" -eq 0 ] && [ "$OPTIMIZE" -eq 0 ] && [ "$DISK" -eq 0 ] && [ "$HISTORY" -eq 0 ]; then
+  ORPHANS=1
+fi
+if [ "$DRY_RUN" -eq 0 ] && [ "${#REQUESTED_TARGETS[@]}" -eq 0 ]; then
+  echo 'devclean: --apply requires --target ID from a preview of the same modes and scope' >&2
+  exit 2
+fi
 
 case "$PROJECT_MAXDEPTH" in
   ''|*[!0-9]*) echo "--project-maxdepth wants a whole number" >&2; exit 2 ;;
@@ -111,8 +131,63 @@ N_FAILED=0
 # default transcript retention. Override via the environment.
 CODEX_SESSION_AGE_DAYS="${CODEX_SESSION_AGE_DAYS:-30}"
 case "$CODEX_SESSION_AGE_DAYS" in
-  ''|*[!0-9]*) echo "CODEX_SESSION_AGE_DAYS wants a whole number of days" >&2; exit 2 ;;
+  ''|0|*[!0-9]*) echo "CODEX_SESSION_AGE_DAYS wants a positive whole number of days" >&2; exit 2 ;;
 esac
+
+# IDs bind an explicit action to the reviewed object. Hashes keep whitespace
+# and shell metacharacters out of the copyable selection argument.
+target_id() { printf '%s:%s' "$1" "$(printf '%s' "$2" | fp_hash)"; }
+target_gate() {
+  local id="$1" effect="$2" chosen
+  s_dim "  target: $id — $effect"
+  case " $SEEN_TARGETS " in *" $id "*) return 1 ;; esac
+  SEEN_TARGETS="$SEEN_TARGETS $id"
+  [ "$DRY_RUN" -eq 0 ] || return 0
+  for chosen in "${REQUESTED_TARGETS[@]}"; do
+    [ "$chosen" = "$id" ] && return 0
+  done
+  N_UNSELECTED=$((N_UNSELECTED + 1))
+  s_dim '    not selected'
+  return 1
+}
+withhold() {
+  s_skip "  withheld $1: $2"
+  N_WITHHELD=$((N_WITHHELD + 1))
+}
+
+PROCESS_CONTEXT="$(mktemp -d)" || exit 1
+trap 'rm -rf "$PROCESS_CONTEXT"' EXIT
+refresh_process_context() {
+  ws_index > "$PROCESS_CONTEXT/ws" 2>/dev/null || rm -f "$PROCESS_CONTEXT/ws"
+  ws_pid_cwd --strict > "$PROCESS_CONTEXT/cwd" 2>/dev/null || rm -f "$PROCESS_CONTEXT/cwd"
+}
+# PPID 1 is only discovery evidence. A reviewed PID must also belong to this
+# user, have no terminal, be at least an hour old, and occupy a known stale
+# workspace at low CPU. Running agents and shared MCP helpers stay protected.
+process_policy() {
+  local pid="$1" identity="$2" facts uid etime tty cpu seconds cwd owner touched verdict
+  if printf '%s\n' "${identity#* }" | match_i "$PROTECT_RE" >/dev/null 2>&1; then
+    printf 'protected process'; return 0
+  fi
+  facts="$(ps -o uid=,etime=,tty=,%cpu= -p "$pid" 2>/dev/null)" || facts=""
+  read -r uid etime tty cpu <<< "$facts"
+  if [ -z "$facts" ] || [ "${uid:-}" != "$(id -u)" ]; then printf 'owner or activity unavailable'; return 0; fi
+  if ! printf '%s\n' "${cpu:-}" | grep -Eq '^[0-9]+([.][0-9]+)?$'; then printf 'CPU evidence unavailable'; return 0; fi
+  case "${tty:-}" in '?'|'??'|'-') : ;; *) printf 'attached to a terminal'; return 0 ;; esac
+  seconds="$(printf '%s' "$etime" | awk '
+    /^[0-9]+(-[0-9]+)?:[0-9]+(:[0-9]+)?$/ {
+      days=0; s=$0; if (index(s,"-")) {split(s,d,"-"); days=d[1]; s=d[2]}
+      n=split(s,p,":"); if(n==2) print days*86400+p[1]*60+p[2]; else print days*86400+p[1]*3600+p[2]*60+p[3]
+    }')"
+  if [ -z "$seconds" ] || [ "$seconds" -lt 3600 ]; then printf 'recent process or unknown runtime'; return 0; fi
+  if [ ! -f "$PROCESS_CONTEXT/cwd" ] || [ ! -f "$PROCESS_CONTEXT/ws" ]; then printf 'workspace scan unavailable'; return 0; fi
+  cwd="$(awk -F '\t' -v p="$pid" '$1==p {print $2; exit}' "$PROCESS_CONTEXT/cwd")"
+  owner="$(ws_owner_of "$cwd" < "$PROCESS_CONTEXT/ws")" || owner=""
+  if [ -z "$cwd" ] || [ -z "$owner" ]; then printf 'no known workspace activity'; return 0; fi
+  touched="$(awk -F '\t' -v w="$owner" '$2==w {print $1; exit}' "$PROCESS_CONTEXT/ws")"
+  verdict="$(elig_verdict "$touched" "${cpu:-999}" "$(date +%s)")"
+  [ "$verdict" = eligible ] || printf 'workspace %s' "$verdict"
+}
 
 human_mb() {
   awk -v kb="${1:-0}" 'BEGIN { printf "%.1f MB", kb / 1024 }'
@@ -154,9 +229,14 @@ match_i() {
 # still match the same broad category regex; comparing this full fingerprint
 # prevents that different process from inheriting the old cleanup decision.
 process_identity() {
-  local identity
-  identity="$(ps -o ppid=,lstart=,command= -p "$1" 2>/dev/null)" || return
+  local identity parent weekday month day clock year command
+  identity="$(LC_ALL=C ps -o ppid=,lstart=,command= -p "$1" 2>/dev/null)" || return
   [ -n "$identity" ] || return 1
+  read -r parent weekday month day clock year command <<< "$identity"
+  case "$parent:$year:$clock" in
+    *[!0-9:]*|::*|*::* ) return 1 ;;
+  esac
+  [ -n "$command" ] && [ -n "$weekday" ] && [ -n "$month" ] && [ -n "$day" ] || return 1
   printf '%s\n' "$identity" \
     | tr '\t\r\n' '   ' \
     | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]][[:space:]]*/ /g' -e 's/[[:space:]]*$//'
@@ -177,9 +257,11 @@ identity_from_rows() {
 # Return 0 when PID still has its discovery fingerprint and scope, 1 when it
 # changed, and 2 when it cannot be inspected.
 pid_identity_matches() {
-  local pid="$1" expected="$2" pattern="$3" scope="$4" current ppid rc
+  local pid="$1" expected="$2" pattern="$3" scope="$4" current ppid rc policy
   if ! current="$(process_identity "$pid")"; then return 2; fi
   [ "$current" = "$expected" ] || return 1
+  policy="$(process_policy "$pid" "$current")"
+  [ -z "$policy" ] || return 2
   ppid="${current%% *}"
   if [ "$scope" = "orphans" ] && [ "$ppid" != "1" ]; then return 1; fi
   printf '%s\n' "$current" | match_i "$pattern" >/dev/null 2>&1
@@ -203,13 +285,14 @@ filter_pids() {
 }
 
 pids_by_pattern() {
-  local pattern="$1" scope="${2:-all}"
+  local pattern="$1" scope="${2:-all}" rc
   if command -v pgrep >/dev/null 2>&1; then
     if [ "$scope" = "orphans" ]; then
-      pgrep -P 1 -f "$pattern" 2>/dev/null || true
+      pgrep -P 1 -f "$pattern" 2>/dev/null; rc=$?
     else
-      pgrep -f "$pattern" 2>/dev/null || true
+      pgrep -f "$pattern" 2>/dev/null; rc=$?
     fi
+    [ "$rc" -le 1 ] || : > "$PROCESS_CONTEXT/discovery-incomplete"
     return
   fi
 
@@ -260,6 +343,8 @@ terminate_pids() {
     s_would "  would SIGTERM PIDs: $pids"
     return 0
   fi
+
+  refresh_process_context
 
   for pid in $pids; do
     expected="$(identity_from_rows "$pid" "$identities")" || expected=""
@@ -316,6 +401,7 @@ terminate_pids() {
     waited=$((waited + 1))
   done
 
+  refresh_process_context
   for pid in $remaining; do
     expected="$(identity_from_rows "$pid" "$identities")" || expected=""
     if [ -n "$expected" ] && pid_identity_matches "$pid" "$expected" "$pattern" "$scope"; then
@@ -359,9 +445,12 @@ terminate_pids() {
 }
 
 cleanup_pattern() {
-  local label="$1" pattern="$2" scope="${3:-all}" pids identities="" pid identity
+  local label="$1" pattern="$2" scope="${3:-all}" pids identities="" pid identity policy approved="" tid
   pids="$(filter_pids $(pids_by_pattern "$pattern" "$scope"))"
   s_hdr "$label ($scope)"
+  if [ -e "$PROCESS_CONTEXT/discovery-incomplete" ]; then
+    withhold "$label" 'process discovery unavailable'; return 1
+  fi
   if [ -z "$pids" ]; then
     s_dim "  (none)"
     return 0
@@ -369,14 +458,17 @@ cleanup_pattern() {
   # shellcheck disable=SC2086
   set -- $pids
   N_PROC=$((N_PROC + $#))
-  if [ "$DRY_RUN" -eq 0 ]; then
-    for pid in $pids; do
-      identity="$(process_identity "$pid")" || identity=""
-      identities="${identities}${pid}"$'\t'"${identity}"$'\n'
-    done
-  fi
   print_process_table "$pids"
-  terminate_pids "$pids" "$pattern" "$scope" "$identities"
+  for pid in $pids; do
+    identity="$(process_identity "$pid")" || identity=""
+    [ -n "$identity" ] && policy="$(process_policy "$pid" "$identity")" || policy='identity unavailable'
+    if [ -n "$policy" ]; then withhold "pid $pid" "$policy"; continue; fi
+    tid="pid:$pid:$(printf '%s' "$identity" | fp_hash)"
+    target_gate "$tid" "stop reviewed idle PID $pid; restarting its command may be necessary" || continue
+    identities="${identities}${pid}"$'\t'"${identity}"$'\n'
+    approved="$approved $pid"
+  done
+  terminate_pids "$approved" "$pattern" "$scope" "$identities"
 }
 
 ORPHAN_PATTERNS=(
@@ -397,8 +489,8 @@ ORPHAN_PATTERNS=(
 run_safe_orphans() {
   local re
   re="$(join_re "${ORPHAN_PATTERNS[@]}")"
-  s_lead "$MODE_C" "devclean safe orphan audit ($(mode_label))" "devclean safe orphan audit ($(mode_label))"
-  cleanup_pattern "Safe orphaned dev processes" "$re" "orphans"
+  s_lead "$MODE_C" "devclean orphan candidates ($(mode_label))" "devclean orphan candidates ($(mode_label))"
+  cleanup_pattern "Orphan process candidates" "$re" "orphans"
 }
 
 run_deep() {
@@ -414,93 +506,93 @@ run_deep() {
   cleanup_pattern "Ruby/Fastlane/CocoaPods" 'ruby.*fastlane|pod install' orphans
   cleanup_pattern "LogiRightSight" 'LogiRightSight' all
 
-  if [ "$OS" = "Darwin" ] && command -v xcrun >/dev/null 2>&1; then
-    s_hdr "iOS Simulators"
-    sim_pids="$(filter_pids $(pids_by_pattern 'CoreSimulator|Simulator\.app' all))"
-    if [ -n "$sim_pids" ]; then
-      # shellcheck disable=SC2086
-      set -- $sim_pids
-      N_PROC=$((N_PROC + $#))
-      print_process_table "$sim_pids"
-      if [ "$DRY_RUN" -eq 1 ]; then
-        s_would "  would run: xcrun simctl shutdown all"
-      else
-        if xcrun simctl shutdown all 2>/dev/null; then
-          s_ok "  shutdown all simulators"
-          journal_action simulator.shutdown all succeeded "simctl accepted shutdown"
-        else
-          s_skip "  failed to shut down all simulators"
-          journal_action simulator.shutdown all failed "simctl shutdown failed"
-          N_FAILED=$((N_FAILED + 1))
-        fi
-      fi
-    else
-      s_dim "  (none)"
-    fi
+  preview_simulators
+}
+
+preview_simulators() {
+  local udid name tid state
+  [ "$OS" = Darwin ] && command -v xcrun >/dev/null 2>&1 || return 0
+  s_hdr "iOS Simulators — select individual devices"
+  if ! command -v python3 >/dev/null 2>&1; then withhold simulators 'Python 3 is required for device-state inspection'; return 1; fi
+  if ! xcrun simctl list devices -j > "$PROCESS_CONTEXT/simulators" 2>/dev/null; then
+    withhold simulators 'device-state inspection unavailable'; return 1
   fi
+  if ! python3 - "$PROCESS_CONTEXT/simulators" > "$PROCESS_CONTEXT/booted" <<'SIMS'
+import json, re, sys
+with open(sys.argv[1]) as source:
+    obj = json.load(source)
+for devices in obj["devices"].values():
+    for device in devices:
+        if device["state"] == "Booted":
+            udid = device["udid"]
+            if not re.fullmatch(r"[0-9A-Fa-f-]+", udid):
+                raise ValueError("invalid simulator identity")
+            print(udid + "\t" + re.sub(r"[\x00-\x1f]", " ", device["name"]))
+SIMS
+  then withhold simulators 'malformed device-state output'; return 1; fi
+  while IFS=$'\t' read -r udid name; do
+    [ -n "$udid" ] || continue
+    N_OPT=$((N_OPT + 1))
+    tid="$(target_id simulator "$(id -u):$udid")"
+    target_gate "$tid" "shut down simulator $name ($udid); interrupts apps running on this device" || continue
+    if [ "$DRY_RUN" -eq 1 ]; then
+      s_would "  would run: xcrun simctl shutdown $udid"
+    else
+      if xcrun simctl shutdown "$udid" 2>/dev/null \
+        && xcrun simctl list devices -j > "$PROCESS_CONTEXT/simulators-after" 2>/dev/null \
+        && python3 - "$PROCESS_CONTEXT/simulators-after" "$udid" <<'SIMS'
+import json, sys
+with open(sys.argv[1]) as source:
+    obj = json.load(source)
+states = [d["state"] for group in obj["devices"].values() for d in group if d["udid"] == sys.argv[2]]
+sys.exit(0 if states == ["Shutdown"] else 1)
+SIMS
+      then
+        N_OPT_DONE=$((N_OPT_DONE + 1)); s_ok "  confirmed simulator shutdown: $name"
+        journal_action simulator.shutdown "$udid" succeeded 'device state is Shutdown'
+      else
+        N_FAILED=$((N_FAILED + 1)); s_skip "  could not confirm simulator shutdown: $name"
+        journal_action simulator.shutdown "$udid" failed 'Shutdown state could not be confirmed'
+      fi
+    fi
+  done < "$PROCESS_CONTEXT/booted"
+
 }
 
 patch_crash_reporters() {
-  local dirs argv canonical label grep_rc found=0
-  dirs=(
-    "$HOME/.vscode"
-    "$HOME/.cursor"
-    "$HOME/.windsurf"
-    "$HOME/.antigravity"
-    "$HOME/.kiro"
-    "$HOME/.vscode-oss"
-  )
-
-  s_hdr "IDE crash reporters"
+  local dirs argv canonical label found=0 result setting digest tid backup
+  dirs=( "$HOME/.vscode" "$HOME/.cursor" "$HOME/.windsurf" "$HOME/.antigravity" "$HOME/.kiro" "$HOME/.vscode-oss" )
+  s_hdr "IDE crash reporters — persistent settings"
   for dir in "${dirs[@]}"; do
     argv="$dir/argv.json"
     [ -f "$argv" ] || continue
     if ! canonical="$(home_file_canonical "$argv")"; then
-      found=1
-      N_OPT=$((N_OPT + 1))
-      s_skip "  refusing IDE settings outside HOME: $argv"
-      if [ "$DRY_RUN" -eq 0 ]; then
-        N_FAILED=$((N_FAILED + 1))
-        journal_action config.update "$argv" failed "target resolves outside HOME or is a symlink"
-      fi
-      continue
+      found=1; withhold "$argv" 'settings path escapes HOME or is a symlink'; continue
     fi
     argv="$canonical"
-    grep -q '"enable-crash-reporter"[[:space:]]*:[[:space:]]*true' "$argv"
-    grep_rc=$?
-    case "$grep_rc" in
-      0) ;;
-      1) continue ;;
-      *)
-        found=1
-        N_OPT=$((N_OPT + 1))
-        s_skip "  could not inspect IDE settings: $argv"
-        if [ "$DRY_RUN" -eq 0 ]; then
-          N_FAILED=$((N_FAILED + 1))
-          journal_action config.update "$argv" failed "settings inspection failed"
-        fi
-        continue
-        ;;
-    esac
-    found=1
-    N_OPT=$((N_OPT + 1))
+    if ! command -v python3 >/dev/null 2>&1; then
+      found=1; withhold "$argv" 'Python 3 is required to inspect JSONC safely'; continue
+    fi
+    if ! result="$(python3 "$DIR/devclean-settings.py" inspect "$argv" 2>/dev/null)"; then
+      found=1; withhold "$argv" 'active JSONC setting cannot be inspected'; continue
+    fi
+    setting="${result%%$'\t'*}"; digest="${result#*$'\t'}"
+    [ "$setting" = enabled ] || continue
+    found=1; N_OPT=$((N_OPT + 1))
     label="$(basename "$dir" | sed 's/^\.//')"
+    tid="$(target_id setting "$argv:$digest")"
+    target_gate "$tid" "persistently disable crash reporting in $label; restart the application afterward" || continue
     if [ "$DRY_RUN" -eq 1 ]; then
       s_would "  would disable crash reporter in $label ($argv)"
+    elif backup="$(python3 "$DIR/devclean-settings.py" disable "$argv" "$digest")"; then
+      N_OPT_DONE=$((N_OPT_DONE + 1))
+      s_ok "  disabled crash reporter in $label"
+      printf '    Restore after closing the app: cp -- %q %q\n' "$backup" "$argv"
+      journal_action config.update "$argv" succeeded "disabled crash reporter; restore=$backup"
     else
-      if sed -i.bak 's/"enable-crash-reporter"[[:space:]]*:[[:space:]]*true/"enable-crash-reporter": false/' "$argv" \
-          && grep -q '"enable-crash-reporter"[[:space:]]*:[[:space:]]*false' "$argv" \
-          && ! grep -q '"enable-crash-reporter"[[:space:]]*:[[:space:]]*true' "$argv"; then
-        rm -f -- "$argv.bak" 2>/dev/null || true
-        N_OPT_DONE=$((N_OPT_DONE + 1))
-        s_ok "  disabled crash reporter in $label"
-        journal_action config.update "$argv" succeeded "disabled crash reporter"
-      else
-        [ ! -f "$argv.bak" ] || mv -f -- "$argv.bak" "$argv" 2>/dev/null || true
-        N_FAILED=$((N_FAILED + 1))
-        s_skip "  failed to disable crash reporter in $label"
-        journal_action config.update "$argv" failed "crash reporter setting unchanged"
-      fi
+      N_FAILED=$((N_FAILED + 1))
+      s_skip "  failed to disable crash reporter in $label"
+      journal_action config.update "$argv" failed 'active JSONC setting was not changed'
     fi
   done
   [ "$found" -eq 1 ] || s_dim "  (none enabled)"
@@ -516,7 +608,7 @@ count_files() {
 }
 
 clean_crashpad_dumps() {
-  local count=0 unsafe=0 unavailable=0 dir diag canonical n remaining removed
+  local count=0 unsafe=0 unavailable=0 dir diag canonical n remaining removed tid
   s_hdr "Crashpad dumps"
 
   if [ "$OS" = "Darwin" ]; then
@@ -543,6 +635,8 @@ clean_crashpad_dumps() {
       fi
       [ "${n:-0}" -gt 0 ] || continue
       count=$((count + n))
+      tid="$(target_id dumps "$dir:$(fp_for_artifact "$dir")")"
+      target_gate "$tid" "permanently delete $n diagnostic files under $dir" || continue
       if [ "$DRY_RUN" -eq 1 ]; then
         s_would "  would delete $n files under $dir"
       else
@@ -587,8 +681,10 @@ clean_crashpad_dumps() {
           fi
           n=0
         fi
-        if [ "${n:-0}" -gt 0 ]; then
+      if [ "${n:-0}" -gt 0 ]; then
           count=$((count + n))
+          tid="$(target_id dumps "$diag:$(fp_for_artifact "$diag")")"
+          if ! target_gate "$tid" "permanently delete $n crashpad diagnostic reports under $diag"; then return 0; fi
           if [ "$DRY_RUN" -eq 1 ]; then
             s_would "  would delete $n chrome_crashpad_handler reports"
           else
@@ -638,6 +734,8 @@ clean_crashpad_dumps() {
       fi
       [ "${n:-0}" -gt 0 ] || continue
       count=$((count + n))
+      tid="$(target_id dumps "$dir:$(fp_for_artifact "$dir")")"
+      target_gate "$tid" "permanently delete $n diagnostic files under $dir" || continue
       if [ "$DRY_RUN" -eq 1 ]; then
         s_would "  would delete $n files under $dir"
       else
@@ -674,7 +772,7 @@ disable_background_agents() {
     return 0
   fi
 
-  local entries entry label name found=0
+  local entries entry label name found=0 tid
   entries=(
     "com.openai.chat-helper:ChatGPTHelper"
     "com.figma.agent:FigmaAgent"
@@ -685,6 +783,8 @@ disable_background_agents() {
     launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 || continue
     found=1
     N_OPT=$((N_OPT + 1))
+    tid="$(target_id launch-agent "$(id -u):$label")"
+    target_gate "$tid" "persistently disable $name ($label), including future logins" || continue
     if [ "$DRY_RUN" -eq 1 ]; then
       s_would "  would disable $name ($label)"
     else
@@ -693,6 +793,7 @@ disable_background_agents() {
         if ! launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
           N_OPT_DONE=$((N_OPT_DONE + 1))
           s_ok "  disabled $name ($label)"
+          s_dim "    Restore: launchctl enable gui/$(id -u)/$label ; then reopen $name's application"
           journal_action background_agent.disable "$label" succeeded "$name"
         else
           N_FAILED=$((N_FAILED + 1))
@@ -719,7 +820,6 @@ run_optimize() {
 
 DISK_TOTAL_KB=0
 DISK_FOUND_KB=0
-N_WITHHELD=0
 
 size_kb() {
   du -sk "$1" 2>/dev/null | awk '{print int($1)}'
@@ -799,7 +899,7 @@ disk_flush() {
 }
 
 clean_dir() {
-  local label="$1" target="$2" kb canonical
+  local label="$1" target="$2" kind="${3:-cache}" kb canonical tid fp operation=cache.clean
   [ -d "$target" ] || return 0
   [ -L "$target" ] && return 0
   if ! canonical="$(home_dir_canonical "$target")"; then
@@ -811,10 +911,19 @@ clean_dir() {
     return 1
   fi
   target="$canonical"
+  [ "$kind" != history ] || operation=history.clean
   s_heartbeat "sizing up $target"
   kb="$(size_kb "$target")"
   [ "${kb:-0}" -ge 1024 ] || return 0
   DISK_FOUND_KB=$((DISK_FOUND_KB + kb))
+  fp="$(fp_for_artifact "$target")" || fp=""
+  if [ -z "$fp" ]; then withhold "$label" 'filesystem identity unavailable'; return 1; fi
+  tid="$kind:$fp"
+  if [ "$kind" = history ]; then
+    target_gate "$tid" "permanently delete history under $target; cannot be rebuilt" || return 0
+  else
+    target_gate "$tid" "delete rebuildable $label at $target; future runs may rebuild or download it" || return 0
+  fi
 
   if [ "$DRY_RUN" -eq 1 ]; then
     DISK_TOTAL_KB=$((DISK_TOTAL_KB + kb))
@@ -824,13 +933,18 @@ clean_dir() {
       s_would "  would clean $label: $target ($(human_mb "$kb"))"
     fi
   else
+    if [ "$kind" = history ] && ! history_is_stale "$target"; then
+      withhold "$label" 'recent or unavailable history activity at removal'; return 1
+    fi
+    if [ "$(fp_for_artifact "$target")" != "$fp" ]; then withhold "$label" 'identity changed before removal'; return 1; fi
     if rm -rf -- "$target" 2>/dev/null && [ ! -e "$target" ]; then
       DISK_TOTAL_KB=$((DISK_TOTAL_KB + kb))
+      if [ "$kind" = history ]; then N_HISTORY_DONE=$((N_HISTORY_DONE + 1)); else N_CACHE_DONE=$((N_CACHE_DONE + 1)); fi
       s_ok "  cleaned $label: $target ($(human_mb "$kb"))"
-      journal_action cache.clean "$target" succeeded "kilobytes=$kb; label=$label"
+      journal_action "$operation" "$target" succeeded "kilobytes=$kb; label=$label"
     else
       s_skip "  failed to clean $label: $target"
-      journal_action cache.clean "$target" failed "target still exists; label=$label"
+      journal_action "$operation" "$target" failed "target still exists; label=$label"
       N_FAILED=$((N_FAILED + 1))
       return 1
     fi
@@ -883,39 +997,11 @@ clean_find() {
     [ "${kb:-0}" -ge 1024 ] || continue
     found=$((found + 1))
     total=$((total + kb))
-    if [ "$DRY_RUN" -eq 0 ] && clean_find_withheld; then
-      # Report the target, refuse to remove it. See the note above clean_find.
-      s_skip "  withheld $label: $d"
-      s_dim  "      roaming scans no longer delete; approve it via afterparty plan"
-      N_WITHHELD=$((N_WITHHELD + 1))
-    elif [ "$DRY_RUN" -eq 0 ]; then
-      if rm -rf -- "$d" 2>/dev/null && [ ! -e "$d" ]; then
-        deleted=$((deleted + 1))
-        freed=$((freed + kb))
-        journal_action cache.clean "$d" succeeded "kilobytes=$kb; label=$label"
-      else
-        s_skip "  failed to clean $label: $d"
-        journal_action cache.clean "$d" failed "target still exists; label=$label"
-        N_FAILED=$((N_FAILED + 1))
-      fi
-    fi
+    withhold "$label" "$d (roaming discovery is report-only; review this directory manually)"
   done < <(find "$scan_dir" -mindepth 1 -maxdepth "$PROJECT_MAXDEPTH" -type d -name "$dir_name" -prune -print0 2>/dev/null)
 
   [ "$found" -gt 0 ] || return 0
-  DISK_FOUND_KB=$((DISK_FOUND_KB + total))
-  if [ "$DRY_RUN" -eq 1 ]; then
-    DISK_TOTAL_KB=$((DISK_TOTAL_KB + total))
-    if disk_buffering; then
-      DISK_BUF+=("$(printf 'meter\t%s\t%s\t' "$total" "${found}× $label")")
-    else
-      s_would "  would clean $found $label dirs ($(human_mb "$total"))"
-    fi
-  else
-    DISK_TOTAL_KB=$((DISK_TOTAL_KB + freed))
-    if [ "$deleted" -gt 0 ]; then
-      s_ok "  cleaned $deleted $label dirs ($(human_mb "$freed"))"
-    fi
-  fi
+  s_dim "  report-only: $found $label dirs ($(human_mb "$total")); excluded from reclaimable total"
 }
 
 # Codex CLI keeps every session transcript forever (no built-in retention),
@@ -923,6 +1009,33 @@ clean_find() {
 # audit trail of what agents did. Delete only date folders older than
 # CODEX_SESSION_AGE_DAYS, mirroring Claude Code's default retention. The
 # YYYY/MM/DD layout makes this a zero-padded string comparison, no mtimes.
+# A successful scan of every regular file must prove retention age. The date
+# bucket is only discovery: a resumed old session can have fresh file mtimes.
+history_is_stale() {
+  local path="$1" file stamp seen=0 cutoff
+  cutoff=$(( $(date +%s) - CODEX_SESSION_AGE_DAYS * 86400 ))
+  find "$path" -type f -print0 > "$PROCESS_CONTEXT/history-files" 2>/dev/null || return 2
+  while IFS= read -r -d '' file; do
+    stamp="$(ws_mtime "$file")" || return 2
+    case "$stamp" in ''|*[!0-9]*) return 2 ;; esac
+    [ "$stamp" -lt "$cutoff" ] || return 1
+    seen=1
+  done < "$PROCESS_CONTEXT/history-files"
+  [ "$seen" -eq 1 ] || return 2
+}
+
+clean_history() {
+  local label="$1" path="$2" rc
+  [ -d "$path" ] || return 0
+  if history_is_stale "$path"; then
+    clean_dir "$label" "$path" history
+  else
+    rc=$?
+    if [ "$rc" -eq 1 ]; then withhold "$label" "recent activity under $path; retained"
+    else withhold "$label" "complete activity evidence unavailable for $path; retained"; fi
+  fi
+}
+
 clean_codex_sessions() {
   local base="$HOME/.codex/sessions" cutoff d rel
   [ -d "$base" ] || return 0
@@ -933,7 +1046,7 @@ clean_codex_sessions() {
     [ -d "$d" ] || continue
     rel="${d#"$base"/}"
     if [ "$rel" \< "$cutoff" ]; then
-      clean_dir "Codex sessions (>${CODEX_SESSION_AGE_DAYS}d)" "$d"
+      clean_history "Codex sessions (>${CODEX_SESSION_AGE_DAYS}d since activity)" "$d"
     fi
   done
 }
@@ -951,6 +1064,7 @@ clean_pnpm_store() {
   s_heartbeat "sizing up pnpm store"
   kb_before="$(size_kb "$store")"
   case "$kb_before" in ''|*[!0-9]*) size_known=0 ;; esac
+  target_gate "$(target_id package-store "$store")" "run pnpm store prune for shared store $store" || return 0
   if [ "$DRY_RUN" -eq 1 ]; then
     # Store size is context, not reclaimable space — buffer a bar-less note
     # row so it never inflates the section's meter shares.
@@ -975,6 +1089,7 @@ clean_pnpm_store() {
     N_FAILED=$((N_FAILED + 1))
     return 1
   fi
+  N_CACHE_DONE=$((N_CACHE_DONE + 1))
   kb_after="$(size_kb "$store")"
   case "$kb_after" in ''|*[!0-9]*) size_known=0 ;; esac
   if [ "$size_known" -eq 0 ]; then
@@ -1013,15 +1128,8 @@ run_repo_artifacts() {
   fi
 
   s_hdr "Current repo artifacts"
-  if [ "$DRY_RUN" -eq 1 ]; then
-    AFTERPARTY_CARD=0 "$DIR/clean-artifacts.sh"
-  else
-    if ! AFTERPARTY_CARD=0 "$DIR/clean-artifacts.sh" --clean; then
-      s_skip "  current-repo artifact cleanup was incomplete"
-      N_FAILED=$((N_FAILED + 1))
-      return 1
-    fi
-  fi
+  AFTERPARTY_CARD=0 "$DIR/clean-artifacts.sh"
+  printf '  Repository artifacts are report-only here. Review: afterparty plan --root %q\n' "$PWD"
 }
 
 run_disk() {
@@ -1049,10 +1157,7 @@ run_disk() {
   clean_pnpm_store
 
   disk_flush
-  s_hdr "AI tool caches"
-  clean_dir "Gemini browser recordings" "$HOME/.gemini/antigravity/browser_recordings"
-  clean_codex_sessions
-  clean_dir "Codex logs" "$HOME/.codex/log"
+  s_hdr "Incomplete SDK downloads"
   clean_fvm_incomplete
 
   disk_flush
@@ -1090,19 +1195,59 @@ run_disk() {
   fi
 }
 
+run_history() {
+  s_hdr "History retention — permanent deletion, ${CODEX_SESSION_AGE_DAYS} days since last activity"
+  clean_codex_sessions
+  clean_history "Codex logs" "$HOME/.codex/log"
+  clean_history "Gemini browser recordings" "$HOME/.gemini/antigravity/browser_recordings"
+  disk_flush
+}
+
+followup_command() {
+  local selected
+  [ "$HISTORY" -eq 0 ] || printf 'CODEX_SESSION_AGE_DAYS=%s ' "$CODEX_SESSION_AGE_DAYS"
+  printf 'afterparty devclean'
+  [ "$ORPHANS" -eq 0 ] || printf ' --orphans'
+  [ "$DEEP" -eq 0 ] || printf ' --deep'
+  [ "$OPTIMIZE" -eq 0 ] || printf ' --optimize'
+  [ "$DISK" -eq 0 ] || printf ' --disk'
+  [ "$HISTORY" -eq 0 ] || printf ' --history'
+  if [ "$DISK" -eq 1 ]; then
+    printf ' --documents-root %q --project-maxdepth %q' "$DOCUMENTS_ROOT" "$PROJECT_MAXDEPTH"
+    [ "$RUN_REPO_ARTIFACTS" -eq 1 ] || printf ' --no-repo-artifacts'
+    [ "$ALLOW_BROAD_DOCUMENTS_ROOT" -eq 0 ] || printf ' --allow-broad-documents-root'
+  fi
+  printf ' --apply --target <reviewed-id>'
+}
+
 if [ "$DRY_RUN" -eq 1 ]; then
   s_lead "$MODE_C" "Mode: $(mode_label) — look, don't touch" "Mode: $(mode_label)"
 else
   s_lead "$MODE_C" "Mode: $(mode_label) — closing time" "Mode: $(mode_label)"
 fi
-run_safe_orphans
+if [ "$ORPHANS" -eq 1 ] || [ "$DEEP" -eq 1 ]; then refresh_process_context; fi
+[ "$ORPHANS" -eq 1 ] && run_safe_orphans
 [ "$DEEP" -eq 1 ] && run_deep
 [ "$OPTIMIZE" -eq 1 ] && run_optimize
 [ "$DISK" -eq 1 ] && run_disk
+[ "$HISTORY" -eq 1 ] && run_history
 
-if [ "$DEEP" -eq 0 ] && [ "$OPTIMIZE" -eq 0 ] && [ "$DISK" -eq 0 ]; then
+if [ "$DRY_RUN" -eq 0 ]; then
+  for requested in "${REQUESTED_TARGETS[@]}"; do
+    case " $SEEN_TARGETS " in
+      *" $requested "*) : ;;
+      *) withhold "$requested" 'not found with the reviewed identity in the selected modes; preview again' ;;
+    esac
+  done
+  printf 'Selected cleanup: %s process(es) stopped, %s cache action(s), %s history action(s), %s settings/dump/agent actions, %s withheld, %s unselected, %s failed\n' \
+    "$N_PROC_STOPPED" "$N_CACHE_DONE" "$N_HISTORY_DONE" "$N_OPT_DONE" "$N_WITHHELD" "$N_UNSELECTED" "$N_FAILED"
+elif [ -n "$SEEN_TARGETS" ]; then
+  printf 'To apply selected targets: '; followup_command; printf '\n'
+fi
+
+if [ "$DEEP" -eq 0 ] && [ "$OPTIMIZE" -eq 0 ] && [ "$DISK" -eq 0 ] && [ "$HISTORY" -eq 0 ]; then
   echo
-  s_dim "Tip: add --deep, --optimize, or --disk. Add --apply only after reviewing the dry run."
+  s_dim "Other previews: --deep, --optimize, --disk, or --history. Apply requires selected target IDs."
 fi
 
 # Finale card (styled runs only; doctor suppresses via AFTERPARTY_CARD=0).
@@ -1115,15 +1260,19 @@ if cards_on; then
       "$([ "$N_PROC_STOPPED" -gt 0 ] && echo "$G_OK $(s_n "$N_PROC_STOPPED" 'proc' 'procs')")" \
       "$([ "$N_OPT_DONE" -gt 0 ] && echo "$G_OK $N_OPT_DONE tidied")" \
       "$([ "$DISK_TOTAL_KB" -gt 0 ] && echo "$(human_mb "$DISK_TOTAL_KB") freed")" \
+      "$([ "$N_WITHHELD" -gt 0 ] && echo "$G_SKIP $N_WITHHELD withheld")" \
       "$([ "$N_FAILED" -gt 0 ] && echo "$G_SKIP $N_FAILED failed")")"
     if [ -n "$segs" ]; then s_card_line "   $segs"; fi
     if [ "$N_PROC_STOPPED" -eq 0 ] && [ "$DISK_TOTAL_KB" -eq 0 ] && [ "$N_OPT_DONE" -eq 0 ] && [ "$N_FAILED" -eq 0 ]; then
-      s_card_line "   nothing needed doing — already spotless ✨"
+      if [ "$N_WITHHELD" -gt 0 ] || [ "$N_UNSELECTED" -gt 0 ]; then
+        s_card_line "   no work confirmed — $N_WITHHELD withheld, $N_UNSELECTED unselected"
+      else s_card_line "   nothing needed doing — already spotless ✨"; fi
     else
       [ "$N_PROC_STOPPED" -gt 0 ] && s_card_line "   $(s_n "$N_PROC_STOPPED" 'process sent home' 'processes sent home')"
       [ "$N_OPT_DONE" -gt 0 ] && s_card_line "   tidied $(s_n "$N_OPT_DONE" 'optimize target' 'optimize targets')"
       [ "$DISK_TOTAL_KB" -gt 0 ] && s_card_line "   $(human_mb "$DISK_TOTAL_KB") hauled to the curb"
       [ "$N_FAILED" -gt 0 ] && s_card_line "   $N_FAILED action(s) could not be confirmed"
+      [ "$N_WITHHELD" -gt 0 ] && s_card_line "   $N_WITHHELD target(s) withheld; see reasons above"
       s_card_line
       s_card_line "   thanks for partying responsibly 🎉"
     fi
@@ -1138,7 +1287,10 @@ if cards_on; then
     [ "$N_OPT" -gt 0 ] && s_card_line "   $(s_n "$N_OPT" 'optimize target to tidy' 'optimize targets to tidy')"
     [ "$DISK_TOTAL_KB" -gt 0 ] && s_card_line "   $(human_mb "$DISK_TOTAL_KB") of caches to haul out"
     s_card_line
-    s_card_line "   closing time: ${C_CYAN}afterparty devclean --apply${C_RESET}"
+    s_card_line "   select target IDs from the preview above"
+    s_card_line "   $(followup_command)"
+  elif [ "$N_WITHHELD" -gt 0 ]; then
+    s_card_line "${C_BOLD}${C_YEL}$N_WITHHELD target(s) withheld — manual review required${C_RESET}"
   else
     s_card_line "${C_BOLD}${C_GRN}✨ spotless — the house is quiet${C_RESET}"
     s_card_line "   see you next session 🎉"
@@ -1146,4 +1298,4 @@ if cards_on; then
   s_card_close
 fi
 
-if [ "$N_FAILED" -gt 0 ]; then exit 1; fi
+if [ "$N_FAILED" -gt 0 ] || { [ "$DRY_RUN" -eq 0 ] && [ "$N_WITHHELD" -gt 0 ]; }; then exit 1; fi

@@ -12,15 +12,12 @@
 #   process-ledger.sh prune             # drop dead entries for current repo
 set -uo pipefail
 
-LEDGER_CUSTOM=0
-if [ -n "${AGENT_PROCESS_LEDGER:-}" ]; then
-  LEDGER="$AGENT_PROCESS_LEDGER"
-  LEDGER_CUSTOM=1
-else
-  LEDGER="${XDG_CACHE_HOME:-$HOME/.cache}/agent-processes/ledger.tsv"
-fi
-LEDGER_LOCK="${LEDGER}.lock"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/state.sh"
+LEDGER_CUSTOM=0
+[ -n "${AGENT_PROCESS_LEDGER:-}" ] && LEDGER_CUSTOM=1
+LEDGER="$(state_ledger_path)" || exit 1
+LEDGER_LOCK="${LEDGER}.lock"
 # PROTECT_RE (never signal these) is shared with audit-processes.sh.
 . "$DIR/protect.sh"
 # JSON Lines helpers for list --json.
@@ -29,6 +26,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/style.sh"
 # Private local record of confirmed mutation outcomes.
 . "$DIR/journal.sh"
+. "$DIR/fingerprint.sh"
+. "$DIR/privacy.sh"
 SELF_PGID="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')"
 
 usage() {
@@ -96,22 +95,12 @@ is_protected_pid() {
   fi
 }
 
-pgid_exists() {
-  local pgid="$1" members
-  if ! members=$(ps -Ao pgid= 2>/dev/null); then
-    return 2
-  fi
-  if command -v rg >/dev/null 2>&1; then
-    printf '%s\n' "$members" | tr -d ' ' | rg --no-config -q "^${pgid}$"
-  else
-    printf '%s\n' "$members" | tr -d ' ' | grep -q "^${pgid}$"
-  fi
-}
+pgid_exists() { fp_group_state "$1"; }
 
 print_header() {
   local hc="" hr=""
   if [ "$STYLE_ON" -eq 1 ]; then hc="$C_DIM"; hr="$C_RESET"; fi
-  printf '%s%-5s %-7s %-7s %-8s %-6s %-6s %-24s %s%s\n' "$hc" STATUS PID PGID KIND PORT CPU PURPOSE COMMAND "$hr"
+  printf '%s%-10s %-7s %-7s %-8s %-6s %-6s %-24s %s%s\n' "$hc" STATUS PID PGID KIND PORT CPU PURPOSE 'COMMAND / WORKSPACE' "$hr"
 }
 
 row_matches() {
@@ -136,7 +125,7 @@ row_matches() {
 }
 
 add_entry() {
-  local pid="" kind="other" port="" purpose="" command_label="" pgid ts root cwd
+  local pid="" kind="other" port="" purpose="" command_label="" pgid ts root cwd member_ids
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -149,6 +138,12 @@ add_entry() {
       *) echo "unknown add arg: $1" >&2; exit 2 ;;
     esac
   done
+
+  if [ -n "$port" ]; then
+    case "$port" in *[!0-9]*|??????*) echo "--port requires an integer from 1 to 65535" >&2; return 2 ;; esac
+    port="$((10#$port))"
+    [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || { echo "--port requires an integer from 1 to 65535" >&2; return 2; }
+  fi
 
   if [ -z "$pid" ]; then
     echo "add requires --pid" >&2
@@ -173,17 +168,21 @@ add_entry() {
       exit 2
       ;;
   esac
+  member_ids="$(fp_members_for_pgid "$pgid")" || { echo "cannot verify process-group identity for pid $pid" >&2; return 1; }
+  case ",$member_ids," in *",$pid:"*) : ;; *) echo "pid $pid left its group before recording" >&2; return 1 ;; esac
   ts="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
   root="$(workspace_root "$PWD")"
   cwd="$PWD"
   [ -n "$command_label" ] || command_label="$(command_for "$pid")"
+  command_label="$(printf '%s' "$command_label" | privacy_redact)"
+  purpose="$(printf '%s' "$purpose" | privacy_redact)"
 
   ensure_ledger || { echo "could not initialize ledger: $LEDGER" >&2; return 1; }
   if ! state_lock_acquire "$LEDGER_LOCK"; then
     echo "ledger is busy: $LEDGER" >&2
     return 1
   fi
-  if ! printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  if ! printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$(clean_field "$ts")" \
       "$(clean_field "$root")" \
       "$(clean_field "$cwd")" \
@@ -192,7 +191,7 @@ add_entry() {
       "$(clean_field "$kind")" \
       "$(clean_field "$port")" \
       "$(clean_field "$purpose")" \
-      "$(clean_field "$command_label")" >> "$LEDGER"; then
+      "$(clean_field "$command_label")" "$member_ids" >> "$LEDGER"; then
     state_lock_release "$LEDGER_LOCK"
     echo "could not append to ledger: $LEDGER" >&2
     return 1
@@ -218,23 +217,25 @@ list_entries() {
     esac
   done
 
-  ensure_ledger
+  ensure_ledger || { echo "ledger unavailable: $LEDGER" >&2; return 1; }
   if [ "$json" -eq 0 ]; then
     s_dim "Ledger: $LEDGER"
+    s_dim "Scope: $([ "$all_roots" -eq 1 ] && printf 'all workspaces' || printf '%s' "$want_root")"
     print_header
   fi
   N_LIVE=0
   while IFS= read -r __row; do
-    IFS=$'\t' read -r ts root cwd pid pgid kind port purpose command_label <<< "$(pad_row "$__row")"
+    IFS=$'\t' read -r ts root cwd pid pgid kind port purpose command_label member_ids <<< "$(pad_row "$__row")"
     pgid="$(unpad "$pgid")" port="$(unpad "$port")" purpose="$(unpad "$purpose")" command_label="$(unpad "$command_label")"
     [ -n "${pid:-}" ] || continue
     row_matches "$want_root" "$all_roots" "$want_kind" "$root" "$kind" || continue
-    status="dead"
     cpu="-"
-    if is_live "$pid"; then
+    if fp_group_matches "$pgid" "${member_ids:-}"; then
       status="live"
       cpu="$(ps -o %cpu= -p "$pid" 2>/dev/null | tr -d ' ')"
       N_LIVE=$((N_LIVE + 1))
+    else
+      case "$?" in 1) status=dead ;; 2) status=unknown ;; *) status=unverified ;; esac
     fi
     if [ "$json" -eq 1 ]; then
       jcpu="$cpu"
@@ -246,8 +247,8 @@ list_entries() {
     else
       rc=""; rr=""
       if [ "$STYLE_ON" -eq 1 ] && [ "$status" = "dead" ]; then rc="$C_DIM"; rr="$C_RESET"; fi
-      printf '%s%-5s %-7s %-7s %-8s %-6s %-6s %-24s %.80s%s\n' \
-        "$rc" "$status" "$pid" "${pgid:-?}" "$kind" "${port:-?}" "${cpu:-?}" "${purpose:-}" "${command_label:-}" "$rr"
+      printf '%s%-10s %-7s %-7s %-8s %-6s %-6s %-24s %.80s  %s%s\n' \
+        "$rc" "$status" "$pid" "${pgid:-?}" "$kind" "${port:-?}" "${cpu:-?}" "${purpose:-}" "${command_label:-}" "$root" "$rr"
     fi
   done < "$LEDGER"
   if [ "$json" -eq 0 ]; then
@@ -256,7 +257,7 @@ list_entries() {
 }
 
 stop_entries() {
-  local do_kill=0 all_roots=0 want_root want_kind="" keep_pgid="" __row ts root cwd pid pgid kind port purpose command_label groups="" signaled_groups="" group current_pgid current_cmd protection_rc n_skip=0 n_keep=0 n_prot=0 n_failed=0 segs
+  local do_kill=0 all_roots=0 want_root want_kind="" keep_pgid="" __row ts root cwd pid pgid kind port purpose command_label groups="" signaled_groups="" group current_pgid current_cmd protection_rc n_skip=0 n_keep=0 n_prot=0 n_failed=0 segs member_ids group_proofs="" proof pair
   want_root="$(workspace_root "$PWD")"
 
   while [ $# -gt 0 ]; do
@@ -271,7 +272,7 @@ stop_entries() {
     esac
   done
 
-  ensure_ledger
+  ensure_ledger || { echo "ledger unavailable: $LEDGER" >&2; return 1; }
   if [ "$do_kill" -eq 1 ]; then
     s_mode "$C_RED" "STOP" " - settling the tab, stopping recorded groups" \
       "STOP - recorded live process groups"
@@ -279,8 +280,9 @@ stop_entries() {
     s_mode "$C_YEL" "DRY RUN" " - the tab is open; nothing stopped yet (--kill to settle up)" \
       "DRY RUN - recorded live process groups"
   fi
+  s_dim "Scope: $([ "$all_roots" -eq 1 ] && printf 'all workspaces' || printf '%s' "$want_root")"
   while IFS= read -r __row; do
-    IFS=$'\t' read -r ts root cwd pid pgid kind port purpose command_label <<< "$(pad_row "$__row")"
+    IFS=$'\t' read -r ts root cwd pid pgid kind port purpose command_label member_ids <<< "$(pad_row "$__row")"
     pgid="$(unpad "$pgid")" port="$(unpad "$port")" purpose="$(unpad "$purpose")" command_label="$(unpad "$command_label")"
     [ -n "${pid:-}" ] || continue
     row_matches "$want_root" "$all_roots" "$want_kind" "$root" "$kind" || continue
@@ -298,40 +300,22 @@ stop_entries() {
         continue
         ;;
     esac
-    is_live "$pid" || continue
+    if proof="$(fp_members_for_pgid "$pgid")"; then :; else
+      protection_rc=$?
+      if [ "$protection_rc" -eq 1 ]; then s_dim "  pgid $pgid had already exited"; continue; fi
+      n_failed=$((n_failed + 1)); s_skip "  pid $pid pgid ${pgid:-unknown}: group identity unavailable"; continue
+    fi
+    if fp_group_matches "$pgid" "${member_ids:-}"; then :; else
+      n_failed=$((n_failed + 1)); s_skip "  pgid $pgid: refused, identity changed or unverified"; continue
+    fi
     if [ -z "$pgid" ] || [ "$pgid" = "$SELF_PGID" ]; then
       s_skip "  skip pid $pid: pgid is shared with this shell (${pgid:-unknown})"
       n_skip=$((n_skip + 1))
       continue
     fi
-    # Recycled-pid defense: never trust a recorded row blindly. A recycled
-    # pid virtually never keeps its recorded pgid, and a changed command
-    # line is the other tell. (On Git Bash pgid_for is empty — no-op.)
-    current_pgid="$(pgid_for "$pid")"
-    if [ -n "$current_pgid" ] && [ "$current_pgid" != "$pgid" ]; then
-      s_skip "  skip pid $pid: group changed since it was recorded (pid recycled?)"
-      n_skip=$((n_skip + 1))
-      continue
-    fi
-    if [ -n "${command_label:-}" ]; then
-      current_cmd="$(command_for "$pid")"
-      case "$current_cmd" in
-        ''|*"$command_label"*) ;;
-        *)
-          s_skip "  skip pid $pid: command changed since it was recorded (pid recycled?)"
-          n_skip=$((n_skip + 1))
-          continue
-          ;;
-      esac
-    fi
     if [ -n "$keep_pgid" ] && [ "$pgid" = "$keep_pgid" ]; then
       s_skip "  keep pgid $pgid: ${purpose:-$command_label}"
       n_keep=$((n_keep + 1))
-      continue
-    fi
-    if is_protected_pid "$pid"; then
-      s_skip "  protect pid $pid pgid $pgid: $(command_for "$pid")"
-      n_prot=$((n_prot + 1))
       continue
     fi
     # The recorded pid may be fine while a protected sibling shares its
@@ -355,6 +339,7 @@ stop_entries() {
     fi
     case " $groups " in *" $pgid "*) continue ;; esac
     groups="$groups $pgid"
+    group_proofs="$group_proofs $pgid=$proof"
     if [ "$do_kill" -eq 1 ]; then
       s_kill "  kill pgid $pgid: ${purpose:-$command_label}"
     else
@@ -367,7 +352,13 @@ stop_entries() {
     if cards_on; then
       echo
       s_card_open
-      s_card_line "${C_BOLD}${C_GRN}✨ ledger clear — nobody left on the tab${C_RESET}"
+      if [ "$n_failed" -gt 0 ]; then
+        s_card_line "${C_BOLD}${C_YEL}ledger incomplete — no group selected${C_RESET}"
+      elif [ "$((n_prot + n_keep + n_skip))" -gt 0 ]; then
+        s_card_line "${C_BOLD}${C_YEL}ledger checked — no group selected${C_RESET}"
+      else
+        s_card_line "${C_BOLD}${C_GRN}ledger checked — no group selected${C_RESET}"
+      fi
       segs="$(s_segments \
         "$([ "$n_prot" -gt 0 ] && echo "$G_SKIP $n_prot protected")" \
         "$([ "$n_keep" -gt 0 ] && echo "$n_keep kept")" \
@@ -375,7 +366,7 @@ stop_entries() {
         "$([ "$n_failed" -gt 0 ] && echo "$n_failed failed")")"
       if [ -n "$segs" ]; then s_card_line "   $segs"; fi
       if [ "$n_failed" -gt 0 ]; then
-        s_card_line "   no action taken — protection could not be verified"
+        s_card_line "   no action taken — identity or protection could not be verified"
       else
         s_card_line "   see you next session 🎉"
       fi
@@ -407,8 +398,12 @@ stop_entries() {
     return 0
   fi
 
+  ledger_journal() {
+    journal_action "$@" || { n_failed=$((n_failed + 1)); s_skip "  process outcome occurred but its receipt could not be recorded"; }
+  }
   N_STOPPED=0
   for group in $groups; do
+    proof=""; for pair in $group_proofs; do case "$pair" in "$group"=*) proof="${pair#*=}"; break ;; esac; done
     # The earlier discovery check can be stale by the time every ledger row
     # has been considered. Recheck immediately before SIGTERM.
     if pgid_has_protected "$group"; then
@@ -427,10 +422,16 @@ stop_entries() {
 
       if [ "$protection_rc" -eq 2 ]; then
         s_skip "  could not recheck pgid $group before SIGTERM — skipped"
-        journal_action ledger_group.stop "pgid:$group" failed "protection unavailable before SIGTERM"
+        ledger_journal ledger_group.stop "pgid:$group" failed "protection unavailable before SIGTERM"
         n_failed=$((n_failed + 1))
         continue
       fi
+    fi
+    if fp_group_matches "$group" "$proof"; then :; else
+      protection_rc=$?
+      if [ "$protection_rc" -eq 1 ]; then s_dim "  pgid $group had already exited"; continue; fi
+      s_skip "  pgid $group: identity changed or unavailable before SIGTERM"
+      n_failed=$((n_failed + 1)); continue
     fi
     signaled_groups="$signaled_groups $group"
     if kill -TERM -"$group" 2>/dev/null; then
@@ -443,10 +444,11 @@ stop_entries() {
     sleep 2
   fi
   for group in $groups; do
+    proof=""; for pair in $group_proofs; do case "$pair" in "$group"=*) proof="${pair#*=}"; break ;; esac; done
     if pgid_exists "$group"; then
       if pgid_has_protected "$group"; then
         s_skip "  pgid $group became protected before SIGKILL — skipped"
-        journal_action ledger_group.stop "pgid:$group" failed "protected member detected before SIGKILL"
+        ledger_journal ledger_group.stop "pgid:$group" failed "protected member detected before SIGKILL"
         n_prot=$((n_prot + 1))
         n_failed=$((n_failed + 1))
         continue
@@ -457,22 +459,32 @@ stop_entries() {
           # that verdict belongs only to a PRE-signal check.
           s_ok "  pgid $group exited after SIGTERM"
           N_STOPPED=$((N_STOPPED + 1))
-          journal_action ledger_group.stop "pgid:$group" succeeded "exited after SIGTERM"
+          ledger_journal ledger_group.stop "pgid:$group" succeeded "exited after SIGTERM"
           continue
         fi
 
         if [ "$protection_rc" -eq 2 ]; then
           s_skip "  could not recheck pgid $group before SIGKILL — skipped"
-          journal_action ledger_group.stop "pgid:$group" failed "protection unavailable before SIGKILL"
+          ledger_journal ledger_group.stop "pgid:$group" failed "protection unavailable before SIGKILL"
           n_failed=$((n_failed + 1))
           continue
         fi
+      fi
+      if fp_group_matches "$group" "$proof"; then :; else
+        protection_rc=$?
+        if [ "$protection_rc" -eq 1 ]; then
+          N_STOPPED=$((N_STOPPED + 1))
+          ledger_journal ledger_group.stop "pgid:$group" succeeded "group confirmed absent"
+          continue
+        fi
+        s_skip "  pgid $group: identity changed or unavailable before SIGKILL"
+        n_failed=$((n_failed + 1)); continue
       fi
       kill -KILL -"$group" 2>/dev/null && s_kill "  SIGKILL -> pgid $group (straggler)"
       sleep 0.1
       if pgid_exists "$group"; then
         s_skip "  failed to stop pgid $group"
-        journal_action ledger_group.stop "pgid:$group" failed "group still has members"
+        ledger_journal ledger_group.stop "pgid:$group" failed "group still has members"
         n_failed=$((n_failed + 1))
       else
         protection_rc=$?
@@ -480,17 +492,17 @@ stop_entries() {
           # The confirmation scan found no members: the group is gone, which is
           # exactly what this loop exists to confirm.
           N_STOPPED=$((N_STOPPED + 1))
-          journal_action ledger_group.stop "pgid:$group" succeeded "group confirmed absent"
+          ledger_journal ledger_group.stop "pgid:$group" succeeded "group confirmed absent"
           continue
         fi
 
         if [ "$protection_rc" -eq 2 ]; then
           s_skip "  could not confirm pgid $group exited"
-          journal_action ledger_group.stop "pgid:$group" failed "exit could not be confirmed"
+          ledger_journal ledger_group.stop "pgid:$group" failed "exit could not be confirmed"
           n_failed=$((n_failed + 1))
         else
           N_STOPPED=$((N_STOPPED + 1))
-          journal_action ledger_group.stop "pgid:$group" succeeded "group confirmed absent"
+          ledger_journal ledger_group.stop "pgid:$group" succeeded "group confirmed absent"
         fi
       fi
     else
@@ -502,11 +514,11 @@ stop_entries() {
 
       if [ "$protection_rc" -eq 2 ]; then
         s_skip "  could not confirm pgid $group exited"
-        journal_action ledger_group.stop "pgid:$group" failed "exit could not be confirmed"
+        ledger_journal ledger_group.stop "pgid:$group" failed "exit could not be confirmed"
         n_failed=$((n_failed + 1))
       else
         N_STOPPED=$((N_STOPPED + 1))
-        journal_action ledger_group.stop "pgid:$group" succeeded "group confirmed absent"
+        ledger_journal ledger_group.stop "pgid:$group" succeeded "group confirmed absent"
       fi
     fi
   done
@@ -528,11 +540,12 @@ stop_entries() {
     s_card_line "   thanks for partying responsibly 🎉"
     s_card_close
   fi
+  printf '%s stopped · %s protected · %s failed\n' "$N_STOPPED" "$n_prot" "$n_failed"
   if [ "$n_failed" -gt 0 ]; then return 1; fi
 }
 
 prune_entries() {
-  local all_roots=0 want_root tmp ledger_dir __row ts root cwd pid pgid kind port purpose command_label kept=0 dropped=0
+  local all_roots=0 want_root tmp ledger_dir __row ts root cwd pid pgid kind port purpose command_label kept=0 dropped=0 failed=0 member_ids inspection_rc
   want_root="$(workspace_root "$PWD")"
 
   while [ $# -gt 0 ]; do
@@ -575,14 +588,18 @@ prune_entries() {
   LEDGER_TMP="$tmp"
   chmod 600 "$tmp" 2>/dev/null || true
   while IFS= read -r __row; do
-    IFS=$'\t' read -r ts root cwd pid pgid kind port purpose command_label <<< "$(pad_row "$__row")"
+    IFS=$'\t' read -r ts root cwd pid pgid kind port purpose command_label member_ids <<< "$(pad_row "$__row")"
     pgid="$(unpad "$pgid")" port="$(unpad "$port")" purpose="$(unpad "$purpose")" command_label="$(unpad "$command_label")"
     [ -n "${pid:-}" ] || continue
-    if row_matches "$want_root" "$all_roots" "" "$root" "$kind" && ! is_live "$pid"; then
-      dropped=$((dropped + 1))
-      continue
+    if row_matches "$want_root" "$all_roots" "" "$root" "$kind"; then
+      if fp_group_state "$pgid"; then :; else
+        inspection_rc=$?
+        if [ "$inspection_rc" -eq 1 ]; then dropped=$((dropped + 1)); continue; fi
+        failed=$((failed + 1))
+        s_skip "  kept pid $pid pgid ${pgid:-unknown}: inspection unavailable"
+      fi
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$ts" "$root" "$cwd" "$pid" "$pgid" "$kind" "$port" "$purpose" "$command_label" >> "$tmp"
+    printf '%s\n' "$__row" >> "$tmp"
     kept=$((kept + 1))
   done < "$LEDGER"
   if ! mv -f -- "$tmp" "$LEDGER"; then
@@ -598,6 +615,7 @@ prune_entries() {
   chmod 600 "$LEDGER" 2>/dev/null || true
   state_lock_release "$LEDGER_LOCK"
   s_ok "pruned $dropped dead entr$([ "$dropped" -eq 1 ] && echo y || echo ies); kept $kept"
+  [ "$failed" -eq 0 ]
 }
 
 cmd="${1:-}"

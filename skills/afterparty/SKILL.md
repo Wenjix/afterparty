@@ -5,54 +5,56 @@ license: ./LICENSE
 compatibility: Requires Bash 3.2+, Git, and standard Unix process tools. macOS/Linux terminals and WSL are supported; Git Bash provides Git/filesystem commands with degraded process audits.
 metadata:
   author: Wenjix
-  version: "0.10.0"
+  version: "0.11.0"
 ---
 
 # Afterparty
 
-`$CLAUDE_SKILL_DIR` is this self-contained skill's directory. Use its bundled CLI.
+Claude substitutes `${CLAUDE_SKILL_DIR}`. Other agents: use this SKILL.md’s
+absolute directory.
 
-On return, report what workspaces still hold:
+On return:
 
 ```bash
-"$CLAUDE_SKILL_DIR/bin/afterparty" glance
+"${CLAUDE_SKILL_DIR}/bin/afterparty" glance
 ```
 
-Save a checklist, have the user review its boxes, then apply:
+Save a checklist; have the user approve targets, then apply:
 
 ```bash
-"$CLAUDE_SKILL_DIR/bin/afterparty" plan > cleanup-plan.md
-"$CLAUDE_SKILL_DIR/bin/afterparty" apply cleanup-plan.md
+"${CLAUDE_SKILL_DIR}/bin/afterparty" plan > cleanup-plan.md
+"${CLAUDE_SKILL_DIR}/bin/afterparty" apply cleanup-plan.md
 ```
 
-Worktrees start unchecked;
-unavailable scans, nested repositories, and changed identity block removal.
+All boxes start unchecked. Unknown scans, nested repositories, and changed
+identity block removal.
 
-Audit before starting services and ending sessions:
+Before services and session end:
 
 ```bash
-"$CLAUDE_SKILL_DIR/bin/afterparty" audit
+AFTERPARTY_SESSION_ID="${CLAUDE_SESSION_ID}" "${CLAUDE_SKILL_DIR}/bin/afterparty" audit --report
 ```
 
-Record long-running commands immediately:
+Record services:
 
 ```bash
-"$CLAUDE_SKILL_DIR/bin/afterparty" add --pid <PID> --kind dev --port <PORT> --purpose "<why>" -- <command>
+"${CLAUDE_SKILL_DIR}/bin/afterparty" add --pid <PID> --kind dev --port <PORT> --purpose "<why>" -- <command>
 ```
 
 Only act after reviewing the dry run:
 
 ```bash
-"$CLAUDE_SKILL_DIR/bin/afterparty" stop --kill
-"$CLAUDE_SKILL_DIR/bin/afterparty" audit --kill dev --pgid <reviewed-pgid>
-"$CLAUDE_SKILL_DIR/bin/afterparty" artifacts --clean
-"$CLAUDE_SKILL_DIR/bin/afterparty" devclean --apply
+"${CLAUDE_SKILL_DIR}/bin/afterparty" stop --kill
+"${CLAUDE_SKILL_DIR}/bin/afterparty" audit --kill dev --pgid <reviewed-pgid>
+"${CLAUDE_SKILL_DIR}/bin/afterparty" artifacts
+"${CLAUDE_SKILL_DIR}/bin/afterparty" devclean
 ```
 
-`git` reports leftovers; approve worktree removal through `plan`/`apply`.
+`git`/`artifacts` report; approve removal through `plan`/`apply`.
+Devclean requires reviewed `--target` IDs.
 
-`--json` emits JSON Lines. `audit --report` persists a report; `report-path`
-locates it. `actions` shows mutation history.
+`--json` emits JSON Lines. `audit --report` saves a snapshot; `report-path`
+locates it. Hooks only record session endings. `actions` shows workspace history.
 
 Never kill the editor, Codex, the user's shell, or shared MCP servers unless the
 script proves they are safe orphaned targets.

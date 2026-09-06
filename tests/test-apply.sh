@@ -109,7 +109,14 @@ printf '%s\n' "$OUT" | grep -q 'pgid 7001 .*fingerprint moved' \
 # ---------- A3: a vanished group is refused, never re-targeted ----------
 _b=$FAILS
 : > "$T/delegated"; mkplan "$FP7001"
-printf '#!/usr/bin/env bash\nexit 1\n' > "$SHIM/ps"; chmod +x "$SHIM/ps"
+cat > "$SHIM/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  *pid=,pgid=,lstart=,command=*) printf '9999 9999 Tue Aug 18 09:00:00 2026 bash\n' ;;
+  *pgid=,lstart=,command=*) printf '9999 Tue Aug 18 09:00:00 2026 bash\n' ;;
+esac
+PS
+chmod +x "$SHIM/ps"
 OUT="$(run_apply)"
 [ -s "$T/delegated" ] && fail "A3: acted on a group that no longer exists"
 printf '%s\n' "$OUT" | grep -q 'pgid 7001 .*gone' \
@@ -349,12 +356,11 @@ cat > "$T/plan.md" <<PL
 - [x] eligible  pgid 7001  loupe · idle 6h · cpu 0.0
       category: disk  fingerprint: $FPCLEAN
 PL
-OUT="$(run_apply)"
+OUT="$(run_apply)"; RC=$?
 [ -s "$T/delegated" ] && fail "A14: delegated an unexecutable category"
-printf '%s\n' "$OUT" | grep -q "not a category apply can execute" \
+printf '%s\n' "$OUT" | grep -q "malformed or unsupported metadata" \
   || fail "A14: no refusal naming the bad category: $OUT"
-printf '%s\n' "$OUT" | grep -qE '^0 applied' \
-  || fail "A14: counted an unexecutable item as applied: $OUT"
+[ "$RC" -eq 2 ] || fail "A14: invalid category must fail validation before mutation: $OUT"
 [ "$FAILS" -eq "$_b" ] && pass "A14: an unexecutable category is refused and not counted as applied"
 
 # ---------- A15: the receipt is written after the work, describing it ----------
