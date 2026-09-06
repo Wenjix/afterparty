@@ -88,11 +88,15 @@ for replacement_owner in same other; do
     || fail "WI2: replacement changed HEAD, so physical identity is not isolated"
   [ "$(git -C "$TARGET" rev-parse --abbrev-ref HEAD)" = HEAD ] \
     || fail "WI2: replacement is not at the same detached branch state"
+  # Git Bash's shell path (/c/...) and Git's worktree path (C:/...) differ.
+  # Capture Git's canonical spelling before apply so the registration check
+  # compares the same representation and still catches a removed target.
+  REGISTERED_TARGET="$(git -C "$TARGET" rev-parse --show-toplevel)"
   OUT="$(run_apply "$T/replacement-plan")"
   [ -d "$TARGET" ] || fail "WI2: $replacement_owner-repo replacement was deleted by an old approval"
   printf '%s\n' "$OUT" | grep -q 'fingerprint moved' \
     || fail "WI2: $replacement_owner-repo replacement did not reach the identity refusal: $OUT"
-  git -C "$OWNER" worktree list --porcelain | grep -Fq "$TARGET" \
+  git -C "$OWNER" worktree list --porcelain | grep -Fxq -- "worktree $REGISTERED_TARGET" \
     || fail "WI2: replacement's owning repo lost the worktree registration"
   [ "$FAILS" -eq "$_b" ] && pass "WI2: old approval refuses a replacement from the $replacement_owner repo"
 done
