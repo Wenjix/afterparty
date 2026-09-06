@@ -113,37 +113,75 @@ NUMBER="$(bash -c '. "$1/json.sh"; json_kvn port 03000' _ "$JLIB")"
 _b=$FAILS
 cat > "$T/shim/ps" <<'PS'
 #!/usr/bin/env bash
+printf 'fixture-ps\n' >> "$AFTERPARTY_TEST_SCANS"
 printf 'PID PGID %%CPU COMMAND\n4001 4001 0.0 node fixture.js\n'
 PS
 cat > "$T/shim/lsof" <<'LS'
 #!/usr/bin/env bash
+printf 'fixture-lsof\n' >> "$AFTERPARTY_TEST_SCANS"
 case "$*" in *-d\ cwd*) printf 'p4001\nfcwd\nn%s\n' "$AFTERPARTY_FIXTURE_CWD" ;; *) exit 1 ;; esac
 LS
 chmod +x "$T/shim/ps" "$T/shim/lsof"
 PY="$(command -v python3 || command -v python)"
-PATH="$T/shim:$PATH" AFTERPARTY_FIXTURE_CWD="$T/w" "$PY" - "$REPO" "$T/install space/afterparty" "$T" <<'PY'
+# Native Windows Python may otherwise resolve bash to the WSL launcher. Carry
+# the interpreter already running this test across that native boundary.
+TEST_BASH="$BASH"
+if command -v cygpath >/dev/null 2>&1; then TEST_BASH="$(cygpath -m "$BASH")"; fi
+"$PY" - "$REPO" "$T/install space/afterparty" "$T" "$TEST_BASH" <<'PY'
 import json, os, pathlib, re, shutil, subprocess, sys
-repo, bundle, temp = map(pathlib.Path, sys.argv[1:])
-skill=(bundle/'SKILL.md').read_text()
+repo, bundle, temp = map(pathlib.Path, sys.argv[1:4])
+bash = sys.argv[4]
+if os.name == "nt" and pathlib.Path(bash + ".exe").is_file():
+    bash += ".exe"
+
+def shell_path(path):
+    if os.name != "nt":
+        return str(path)
+    result = subprocess.run([bash, "--noprofile", "--norc", "-c", 'cygpath -u "$1"', "_", str(path)],
+                            capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0 and result.stdout.strip().startswith("/"), (result.returncode, result.stdout, result.stderr)
+    return result.stdout.strip()
+
+# Establish fixture paths inside Git Bash, after native Python has handled its
+# Windows PATH. The fixture log proves the intended scanners were executed.
+fixture_paths = [shell_path(temp/name) for name in ("shim", "home", "cache", "scans", "w")]
+bootstrap = 'export PATH="$1:${BASH%/*}:$PATH" HOME="$2" XDG_CACHE_HOME="$3" AFTERPARTY_TEST_SCANS="$4" AFTERPARTY_FIXTURE_CWD="$5"; shift 5; exec "$BASH" "$@"'
+def run_bash(args, *, env=None, input=None):
+    result = subprocess.run([bash, "--noprofile", "--norc", "-c", bootstrap, "_", *fixture_paths, *args],
+                            env=env, input=input, capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0, {"bash": bash, "args": args, "rc": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+    return result
+
+skill=(bundle/'SKILL.md').read_text(encoding="utf-8")
 assert len(skill.split()) < 250
 assert '$CLAUDE_SKILL_DIR' not in skill
-command=skill.split('```bash')[1].strip().splitlines()[0].replace('${CLAUDE_SKILL_DIR}', str(bundle))
-r=subprocess.run(['bash','-c',command],capture_output=True,text=True)
-assert r.returncode == 0, r.stderr
-assert 'process' in r.stdout, r.stdout
-source=(repo/'commands/afterparty.md').read_text()
+command=skill.split('```bash')[1].strip().splitlines()[0].replace('${CLAUDE_SKILL_DIR}', shell_path(bundle))
+before=(temp/'scans').read_text(encoding="utf-8")
+# A conflicting native PATH entry must not replace the selected Git Bash,
+# including nested /usr/bin/env bash shebangs in the installed bundle.
+wrong_bash=temp/'wrong-bash'; wrong_bash.mkdir()
+(wrong_bash/'bash').write_bytes(b'#!/bin/sh\nexit 91\n')
+(wrong_bash/'bash').chmod(0o755)
+if os.name == "nt":
+    (wrong_bash/'bash.exe').write_bytes(b'not an executable')
+conflicting_env=os.environ.copy()
+conflicting_env['PATH']=str(wrong_bash)+os.pathsep+conflicting_env['PATH']
+r=run_bash(['-c',command],env=conflicting_env)
+assert '1 process scope holding 1 process' in r.stdout, r.stdout
+after=(temp/'scans').read_text(encoding="utf-8")[len(before):]
+assert 'fixture-ps' in after and 'fixture-lsof' in after, after
+source=(repo/'commands/afterparty.md').read_text(encoding="utf-8")
 command=re.search(r'!`(.*?)`',source,re.S).group(1)
 plugin=temp/'plugin'; (plugin/'skills').mkdir(parents=True)
 shutil.copytree(bundle, plugin/'skills/afterparty')
-command=command.replace('${CLAUDE_PLUGIN_ROOT}',str(plugin))
+command=command.replace('${CLAUDE_PLUGIN_ROOT}',shell_path(plugin))
 env=os.environ.copy();env['AFTERPARTY_TEST_FAIL']='git'
-r=subprocess.run(['bash','-c',command],env=env,capture_output=True,text=True)
-assert r.returncode == 0 and 'AFTERPARTY AUDIT INCOMPLETE' in r.stdout, (r.returncode,r.stdout,r.stderr)
-hook=json.loads((repo/'hooks/hooks.json').read_text())['hooks']['SessionEnd'][0]['hooks'][0]
-assert not hook.get('async') and hook['timeout'] <= 1
-args=[a.replace('${CLAUDE_PLUGIN_ROOT}', str(plugin)) for a in hook['args']]
-r=subprocess.run([hook['command'],*args],input='{"session_id":"installed-hook"}',capture_output=True,text=True)
-assert r.returncode == 0,r.stderr
+r=run_bash(['-c',command],env=env)
+assert 'AFTERPARTY AUDIT INCOMPLETE' in r.stdout, (r.stdout,r.stderr)
+hook=json.loads((repo/'hooks/hooks.json').read_text(encoding="utf-8"))['hooks']['SessionEnd'][0]['hooks'][0]
+assert hook['command'] == 'bash' and not hook.get('async') and hook['timeout'] <= 1
+args=[a.replace('${CLAUDE_PLUGIN_ROOT}', shell_path(plugin)) for a in hook['args']]
+run_bash(args,input='{"session_id":"installed-hook"}')
 PY
 [ "$?" -eq 0 ] || fail 'L5: installed skill/command/hook invocation failed'
 [ "$FAILS" -eq "$_b" ] && pass 'L5: installed bundle, failure-preserving slash command and hook execute'

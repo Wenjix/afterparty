@@ -4,14 +4,37 @@
 set -euo pipefail
 command -v python3 >/dev/null 2>&1 || { echo 'SKIP: devclean approval fixtures require Python 3'; exit 0; }
 export AFTERPARTY_TEST_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Native Windows Python otherwise finds System32/bash.exe (WSL), and cannot
+# interpret Git Bash's /c/... paths. Keep the interpreter that launched us.
+export AFTERPARTY_TEST_BASH="$BASH" AFTERPARTY_TEST_UID="$(id -u)"
+if command -v cygpath >/dev/null 2>&1; then
+  AFTERPARTY_TEST_REPO="$(cygpath -am "$AFTERPARTY_TEST_REPO")"
+  AFTERPARTY_TEST_BASH="$(cygpath -am "$BASH")"
+fi
+export PYTHONUTF8=1 PYTHONIOENCODING=utf-8
 python3 - <<'PY'
 import hashlib, json, os, pathlib, re, shutil, subprocess, sys, tempfile, time
 
 repo = pathlib.Path(os.environ['AFTERPARTY_TEST_REPO'])
 lib = repo / 'skills/afterparty/lib'
-fixture_uid = int(subprocess.check_output(['id', '-u'], text=True).strip())
-root = pathlib.Path(tempfile.mkdtemp(prefix='afterparty-devclean-approval-'))
+bash = os.environ['AFTERPARTY_TEST_BASH']
+if os.name == 'nt' and not bash.endswith('.exe') and pathlib.Path(bash+'.exe').is_file():
+    bash += '.exe'
+fixture_uid = int(os.environ['AFTERPARTY_TEST_UID'])
+root = pathlib.Path(tempfile.mkdtemp(prefix='afterparty devclean approval-'))
 failures = []
+
+def to_shell(path):
+    if os.name != 'nt': return str(path)
+    return subprocess.check_output([bash, '--noprofile', '--norc', '-c', 'cygpath -u "$1"',
+                                    'fixture-path', str(path)], encoding='utf-8').strip()
+
+shell_roots = [(root, to_shell(root)), (repo, to_shell(repo))]
+def shell_path(path):
+    for native, posix in shell_roots:
+        try: return posix + '/' + path.relative_to(native).as_posix()
+        except ValueError: pass
+    raise ValueError('fixture path outside disposable roots: ' + str(path))
 
 def check(ok, message):
     if not ok:
@@ -20,7 +43,8 @@ def check(ok, message):
 
 def put(path, text, executable=False):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text)
+    # Native Windows text defaults would give /usr/bin/env a "bash\r" shebang.
+    with path.open('w', encoding='utf-8', newline='\n') as stream: stream.write(text)
     if executable: path.chmod(0o755)
 
 def fixture(name):
@@ -28,14 +52,14 @@ def fixture(name):
     home = t / 'home'; home.mkdir()
     shims = t / 'shims'; shims.mkdir()
     env = os.environ.copy()
-    env.update(HOME=str(home), XDG_CACHE_HOME=str(t/'cache'), XDG_STATE_HOME=str(t/'state'),
-               PATH=str(shims)+os.pathsep+env['PATH'], AFTERPARTY_STYLE='never',
-               REVIEW_CALLS=str(t/'calls'), REVIEW_SIGNALS=str(t/'signals'),
-               REVIEW_STOPPED=str(t/'stopped'), REVIEW_PROC='0', REVIEW_CPU='0.0',
+    env.update(HOME=shell_path(home), XDG_CACHE_HOME=shell_path(t/'cache'), XDG_STATE_HOME=shell_path(t/'state'),
+               REVIEW_SHIMS=shell_path(shims), AFTERPARTY_STYLE='never',
+               REVIEW_CALLS=shell_path(t/'calls'), REVIEW_SIGNALS=shell_path(t/'signals'),
+               REVIEW_STOPPED=shell_path(t/'stopped'), REVIEW_PROC='0', REVIEW_CPU='0.0',
                REVIEW_COMMAND='next-server', REVIEW_UID=str(fixture_uid),
-               REVIEW_WORKSPACE=str(t/'workspace'), REVIEW_AGENTS='0', REVIEW_AGENT_STATE=str(t/'agents'),
-               REVIEW_SIM_FILE=str(t/'simulators.json'), REVIEW_SIM_NOOP='0',
-               AFTERPARTY_TRANSCRIPT_ROOT=str(t/'transcripts'), BASH_ENV=str(t/'bash-env'))
+               REVIEW_WORKSPACE=shell_path(t/'workspace'), REVIEW_AGENTS='0', REVIEW_AGENT_STATE=shell_path(t/'agents'),
+               REVIEW_NATIVE_CALLS=str(t/'calls'), REVIEW_NATIVE_SIM_FILE=str(t/'simulators.json'), REVIEW_SIM_NOOP='0',
+               AFTERPARTY_TRANSCRIPT_ROOT=shell_path(t/'transcripts'), BASH_ENV=shell_path(t/'bash-env'))
     (t/'workspace').mkdir(); (t/'agents').mkdir()
     put(t/'bash-env', '''kill() {
   printf '%s\\n' "$*" >> "$REVIEW_SIGNALS"
@@ -83,8 +107,8 @@ printf 'p999991\\nfcwd\\nn%s\\n' "$REVIEW_WORKSPACE"
     put(shims/'uname', '#!/usr/bin/env bash\nprintf "Darwin\\n"\n', True)
     put(shims/'xcrun', '''#!/usr/bin/env python3
 import json, os, sys
-with open(os.environ['REVIEW_CALLS'], 'a') as log: log.write('xcrun ' + ' '.join(sys.argv[1:]) + '\\n')
-path = os.environ['REVIEW_SIM_FILE']
+with open(os.environ['REVIEW_NATIVE_CALLS'], 'a') as log: log.write('xcrun ' + ' '.join(sys.argv[1:]) + '\\n')
+path = os.environ['REVIEW_NATIVE_SIM_FILE']
 if not os.path.exists(path): sys.exit(1)
 with open(path) as source: data = json.load(source)
 if sys.argv[1:4] == ['simctl', 'list', 'devices']:
@@ -97,9 +121,22 @@ elif sys.argv[1:3] == ['simctl', 'shutdown'] and os.environ['REVIEW_SIM_NOOP'] !
 ''', True)
     return t, home, env
 
+bootstrap = '''set -euo pipefail
+export PATH="$REVIEW_SHIMS:${BASH%/*}:$PATH"
+for tool in pgrep launchctl pnpm; do
+  actual="$(command -v "$tool")" || actual=''
+  [ "$actual" = "$REVIEW_SHIMS/$tool" ] || { echo "fixture interceptor unavailable: $tool ($actual)" >&2; exit 97; }
+done
+[ "$(type -t kill)" = function ] || { echo 'fixture kill interceptor unavailable' >&2; exit 97; }
+exec "$BASH" "$@"
+'''
 def run(t, env, *args):
-    return subprocess.run(['bash', str(lib/'devclean.sh'), *args], cwd=t, env=env,
-                          text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    result = subprocess.run([bash, '--noprofile', '--norc', '-c', bootstrap, 'devclean-fixture',
+                             shell_path(lib/'devclean.sh'), *args], cwd=t, env=env,
+                            encoding='utf-8', stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if result.returncode == 97:
+        raise RuntimeError('devclean fixture isolation failed: ' + result.stdout)
+    return result
 
 def targets(output, effect=''):
     return [m.group(1) for line in output.splitlines() if effect in line
@@ -110,14 +147,30 @@ def blob(path, stale=False):
     if stale: os.utime(path, (time.time()-90*86400,)*2)
 
 try:
+    t,home,env=fixture('bootstrap')
+    put(t/'foreign-path/bash', '#!/bin/sh\necho WRONG_BASH_SELECTED\nexit 96\n', True)
+    env['PATH']=str(t/'foreign-path')+os.pathsep+env['PATH']
+    result=run(t,env,'--disk','--no-repo-artifacts','--apply')
+    check(result.returncode==2 and '--target' in result.stdout,
+          'D0: native subprocess must use the launching Bash despite competing PATH entries: '+result.stdout)
+    check(all(b'\r' not in shim.read_bytes() for shim in (t/'shims').iterdir()),
+          'D0: generated executable shims must use LF on every platform')
+    env['BASH_ENV']=shell_path(t/'missing-bash-env')
+    try:
+        run(t,env,'--disk','--no-repo-artifacts','--apply')
+    except RuntimeError as error:
+        check('kill interceptor unavailable' in str(error), 'D0: missing interceptor must be diagnosed before cleanup')
+    else:
+        check(False, 'D0: missing kill interceptor must abort before cleanup')
+
     t, home, env = fixture('disk')
     gradle=home/'.gradle/caches/blob'; npm=home/'.npm/blob'
     blob(gradle); blob(npm)
     result=run(t,env,'--disk','--no-repo-artifacts','--apply')
-    check(result.returncode==2 and '--target' in result.stdout and gradle.exists(), 'D1: blanket apply must refuse visibly')
+    check(result.returncode==2 and '--target' in result.stdout and gradle.exists(), 'D1: blanket apply must refuse visibly: '+result.stdout)
     preview=run(t,env,'--disk','--no-repo-artifacts')
     chosen=targets(preview.stdout, 'Gradle caches')
-    check(len(chosen)==1, 'D2: preview must identify the exact Gradle cache action')
+    check(len(chosen)==1, 'D2: preview must identify the exact Gradle cache action: '+preview.stdout)
     check('pgrep ' not in (t/'calls').read_text(), 'D2: disk preview must not scan orphan processes')
     if chosen:
         result=run(t,env,'--disk','--no-repo-artifacts','--apply','--target',chosen[0])
@@ -143,7 +196,7 @@ try:
         result=run(t,env,'--history','--apply','--target',chosen[0])
         check(old.exists() and result.returncode!=0 and 'recent activity' in result.stdout, 'D5: resumed history after preview must invalidate deletion')
     os.utime(old,(time.time()-90*86400,)*2); chosen=targets(run(t,env,'--history').stdout,'2000/01/02')
-    env['REVIEW_HISTORY_FILE']=str(old)
+    env['REVIEW_HISTORY_FILE']=shell_path(old)
     put(t/'shims/find','#!/usr/bin/env bash\nprintf "%s\\0" "$REVIEW_HISTORY_FILE"\nexit 1\n',True)
     if chosen:
         result=run(t,env,'--history','--apply','--target',chosen[0])
@@ -175,7 +228,7 @@ try:
     without_fchmod='import os, runpy, sys\nif hasattr(os, "fchmod"): del os.fchmod\nsys.argv=sys.argv[1:]\nrunpy.run_path(sys.argv[0], run_name="__main__")'
     result=subprocess.run([sys.executable,'-c',without_fchmod,str(lib/'devclean-settings.py'),
                            'disable',str(portable),hashlib.sha256(portable.read_bytes()).hexdigest()],
-                          env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+                          env=env,encoding='utf-8',stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
     backups=list(t.glob('portable-argv.json.afterparty-*.bak'))
     check(result.returncode==0 and '"enable-crash-reporter": false' in portable.read_text()
           and len(backups)==1 and backups[0].read_text()==original,
@@ -183,7 +236,7 @@ try:
 
     t,home,env=fixture('process')
     env['REVIEW_PROC']='1'; env['REVIEW_CPU']='80.0'
-    transcript=t/'transcripts/project/session.jsonl'; put(transcript,json.dumps({'cwd':str(t/'workspace')},separators=(',',':')))
+    transcript=t/'transcripts/project/session.jsonl'; put(transcript,json.dumps({'cwd':shell_path(t/'workspace')},separators=(',',':')))
     os.utime(transcript,(time.time()-90*86400,)*2)
     preview=run(t,env,'--orphans')
     check('workspace working' in preview.stdout and not targets(preview.stdout), 'D9: PPID 1 must not authorize stopping an active process')

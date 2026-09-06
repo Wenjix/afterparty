@@ -122,3 +122,9 @@ real disposable group, changes only its member-identity proof, and checks both
 refusal and a successful stop with the original proof. An intercepted run
 passes; removing the identity guard fails five assertions. No production
 behavior changed in this CI follow-up.
+
+Windows then exposed native-Python fixture assumptions: selecting Bash by name,
+Unix/native path differences, text encoding and line endings. The fixtures now
+invoke the parent Git Bash explicitly and prove scanner/signal interception.
+The JSON test separately supplies successful absent-process evidence and a
+failed scan, asserting `dead` and `unknown` respectively on every platform.
