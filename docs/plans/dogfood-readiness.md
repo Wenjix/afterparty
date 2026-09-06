@@ -115,3 +115,10 @@ exit-time audit. Regenerate plans and re-record legacy ledger entries before
 using their mutation paths.
 
 Native Linux/Windows CI is checked after pushing and reported separately.
+
+The first Linux run caught a stale live-kill fixture that invented an absent
+PGID and expected the old PID-recycling message. The fixture now records the
+real disposable group, changes only its member-identity proof, and checks both
+refusal and a successful stop with the original proof. An intercepted run
+passes; removing the identity guard fails five assertions. No production
+behavior changed in this CI follow-up.
