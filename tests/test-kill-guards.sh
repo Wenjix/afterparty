@@ -146,7 +146,6 @@ chmod +x "$SHIM/ps"
 OUT="$(run_kill --kill dev)"; rc=$?
 grep -q -- '-77800' "$KILLLOG" && fail "KG2b: signalled a group that had already exited"
 printf '%s
-printf '%s\n' "$LOUT" | grep -q 'kill pgid 77800' || fail "KG5: the row never reached the signalling loop — the pre-SIGTERM guard was not the one tested"
 ' "$OUT" | grep -qi 'already exited'   || fail "KG2b: an exited group was not reported as already gone: $OUT"
 printf '%s
 ' "$OUT" | grep -qi 'could not inspect'   && fail "KG2b: an exited group was still reported as an inspection failure"
@@ -215,6 +214,8 @@ printf '2026-01-01T00:00:00Z	/r	/r	77800	77800	dev			npm run dev
 ' > "$T/ledger.tsv"
 : > "$KILLLOG"
 LOUT="$(PATH="$LSHIM:$PATH" AGENT_PROCESS_LEDGER="$T/ledger.tsv" AFTERPARTY_STYLE=never   bash "$LIB/process-ledger.sh" stop --kill --all 2>&1)"
+printf '%s\n' "$LOUT" | grep -q 'kill pgid 77800' \
+  || fail "KG5: the row never reached the signalling loop — the pre-SIGTERM guard was not the one tested"
 grep -q -- '-77800' "$KILLLOG"   && fail "KG5: ledger signalled a group ps reported absent"
 printf '%s
 ' "$LOUT" | grep -qi 'already exited'   || fail "KG5: ledger did not report the group as already gone: $LOUT"
