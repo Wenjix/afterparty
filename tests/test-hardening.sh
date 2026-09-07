@@ -4,12 +4,15 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$REPO/tests/devclean-fixtures.sh"
 PY="$(command -v python3 || command -v python)"
 FAILS=0
 fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 pass() { echo "ok: $*"; }
 
 T="$(mktemp -d)"
+# Isolate automatic Codex discovery even when CODEX_HOME is inherited.
+export AFTERPARTY_CODEX_ROOT="$T/codex-index"
 trap 'cd /; rm -rf "$T"' EXIT
 
 # Mutation tests use synthetic process identifiers. Override Bash's kill
@@ -27,7 +30,7 @@ kill() {
 }
 SH
 
-# ---------- H1: SessionEnd audit is asynchronous and shell-tokenization-free ----------
+# ---------- H1: SessionEnd marker is bounded and shell-tokenization-free ----------
 if "$PY" - "$REPO/hooks/hooks.json" <<'PY'
 import json
 import sys
@@ -40,16 +43,16 @@ assert hook["type"] == "command"
 assert hook["command"] == "bash"
 assert hook["args"] == [
     "${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty",
-    "audit",
-    "--report",
+    "report",
+    "--session-end",
 ]
-assert hook["async"] is True
-assert hook["timeout"] == 60
+assert not hook.get("async", False)
+assert hook["timeout"] == 1
 PY
 then
-  pass "H1: SessionEnd report uses an asynchronous exec-form hook"
+  pass "H1: SessionEnd report uses an bounded synchronous exec-form hook"
 else
-  fail "H1: SessionEnd hook is not asynchronous exec form"
+  fail "H1: SessionEnd hook is not bounded synchronous exec form"
 fi
 
 # ---------- H2: fallback reports are namespaced by workspace ----------
@@ -75,7 +78,7 @@ fi
 (cd "$T/repo-one" && HOME="$T/home" XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never \
   bash "$REPO/bin/afterparty" audit --report >"$T/report.out" 2>"$T/report.err")
 REPORT_RC=$?
-if [ "$REPORT_RC" -ne 0 ]; then
+if [ "$REPORT_RC" -ne 0 ] && { [ "$REPORT_RC" -ne 1 ] || ! grep -q 'Status: incomplete' "$R1"; }; then
   fail "H3: audit --report exit=$REPORT_RC"
 elif [ ! -f "$R1" ]; then
   fail "H3: report was not written to report-path output ($R1)"
@@ -237,6 +240,8 @@ mkdir -p "$T/pgid-shim"
 cat > "$T/pgid-shim/ps" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
+  "-Ao pid=,pgid=,lstart=,command="*) echo "41234 77777 Tue Aug 18 09:00:00 2026 next dev --port 3000" ;;
+  "-Ao pgid=,lstart=,command="*) echo "77777 Tue Aug 18 09:00:00 2026 next dev --port 3000" ;;
   "-o pgid= -p "*) echo "99999" ;;
   "-Ao pid="*) echo "41234" ;;
   "-Ao pid,ppid,pgid,%cpu,etime,command"*)
@@ -270,6 +275,8 @@ mkdir -p "$T/protect-shim"
 cat > "$T/protect-shim/ps" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
+  "-Ao pid=,pgid=,lstart=,command="*) echo "41234 77777 Tue Aug 18 09:00:00 2026 next dev --port 3000" ;;
+  "-Ao pgid=,lstart=,command="*) echo "77777 Tue Aug 18 09:00:00 2026 next dev --port 3000" ;;
   "-o pgid= -p "*) echo "99999" ;;
   "-Ao pid="*) echo "41234" ;;
   "-Ao pid,ppid,pgid,%cpu,etime,command"*)
@@ -281,7 +288,7 @@ case "$*" in
 esac
 SH
 chmod +x "$T/protect-shim/ps"
-PATH="$T/protect-shim:$PATH" AFTERPARTY_STYLE=never \
+BASH_ENV="$T/noop-signals.sh" KILL_CALLS="$T/h10-kill.calls" PATH="$T/protect-shim:$PATH" AFTERPARTY_STYLE=never \
   bash "$REPO/skills/afterparty/lib/audit-processes.sh" --kill dev --pgid 77777 \
   >"$T/protect.out" 2>"$T/protect.err"
 PROTECT_RC=$?
@@ -298,6 +305,8 @@ mkdir -p "$T/ledger-shim"
 cat > "$T/ledger-shim/ps" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
+  "-Ao pid=,pgid=,lstart=,command="*) echo "12345 77777 Tue Aug 18 09:00:00 2026 next dev --port 3000" ;;
+  "-Ao pgid=,lstart=,command="*) echo "77777 Tue Aug 18 09:00:00 2026 next dev --port 3000" ;;
   "-o pgid= -p 12345") echo "77777" ;;
   "-o pgid= -p "*) echo "99999" ;;
   "-o command= -p 12345") echo "next dev --port 3000" ;;
@@ -309,9 +318,10 @@ esac
 SH
 chmod +x "$T/ledger-shim/ps"
 LEDGER_ROOT="$(git -C "$T/repo-one" rev-parse --show-toplevel)"
-printf '2026-07-31T00:00:00Z\t%s\t%s\t12345\t77777\tdev\t3000\ttest server\tnext dev\n' \
-  "$LEDGER_ROOT" "$LEDGER_ROOT" > "$T/fail-closed-ledger.tsv"
-(cd "$T/repo-one" && PATH="$T/ledger-shim:$PATH" HOME="$T/home" \
+. "$REPO/skills/afterparty/lib/fingerprint.sh"
+printf '2026-07-31T00:00:00Z\t%s\t%s\t12345\t77777\tdev\t3000\ttest server\tnext dev\t%s\n' \
+  "$LEDGER_ROOT" "$LEDGER_ROOT" "$(PATH="$T/ledger-shim:$PATH" fp_members_for_pgid 77777)" > "$T/fail-closed-ledger.tsv"
+(cd "$T/repo-one" && BASH_ENV="$T/noop-signals.sh" KILL_CALLS="$T/h11-kill.calls" PATH="$T/ledger-shim:$PATH" HOME="$T/home" \
   AGENT_PROCESS_LEDGER="$T/fail-closed-ledger.tsv" AFTERPARTY_STYLE=never \
   bash "$REPO/bin/afterparty" stop --kill >"$T/ledger-protect.out" 2>"$T/ledger-protect.err")
 LEDGER_PROTECT_RC=$?
@@ -364,6 +374,22 @@ else
   pass "H13: process mutation refuses to run without full process inspection"
 fi
 
+# Artifact mutation fixtures use the same typed approval flow as the CLI.
+mkdir -p "$T/artifact-proc-shim"
+cat > "$T/artifact-proc-shim/lsof" <<'SH'
+#!/usr/bin/env bash
+printf 'p9991\nfcwd\nn%s\n' "$TEST_ARTIFACT_SCOPE"
+SH
+chmod +x "$T/artifact-proc-shim/lsof"
+approved_artifact() {
+  local artifact_root="$1" artifact_fp
+  . "$REPO/skills/afterparty/lib/fingerprint.sh"
+  artifact_root="$(cd "$artifact_root" && pwd -P)"
+  artifact_fp="$(fp_for_artifact "$artifact_root/build")" || return 1
+  printf -- '- [x] artifact path %s/build\n      type: artifact  fingerprint: %s  root: %s\n' "$artifact_root" "$artifact_fp" "$artifact_root" > "$T/artifact-approved.md"
+  TEST_ARTIFACT_SCOPE="$artifact_root" PATH="$T/artifact-proc-shim:$PATH" bash "$REPO/bin/afterparty" apply "$T/artifact-approved.md"
+}
+
 # ---------- H14: artifact receipts and exit status reflect deletion failures ----------
 mkdir -p "$T/artifact-fail/build" "$T/rm-shim"
 git -C "$T/artifact-fail" init -q
@@ -374,7 +400,7 @@ exit 1
 SH
 chmod +x "$T/rm-shim/rm"
 PATH="$T/rm-shim:$PATH" HOME="$T/home" XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never \
-  bash "$REPO/bin/afterparty" artifacts --clean --root "$T/artifact-fail" \
+  approved_artifact "$T/artifact-fail" \
   >"$T/artifact-fail.out" 2>"$T/artifact-fail.err"
 ART_FAIL_RC=$?
 if [ "$ART_FAIL_RC" -ne 1 ]; then
@@ -408,6 +434,8 @@ mkdir -p "$T/ledger-outcome-shim"
 cat > "$T/ledger-outcome-shim/ps" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
+  "-Ao pid=,pgid=,lstart=,command="*) echo "12345 77777 Tue Aug 18 09:00:00 2026 next dev --port 3000" ;;
+  "-Ao pgid=,lstart=,command="*) echo "77777 Tue Aug 18 09:00:00 2026 next dev --port 3000" ;;
   "-o pgid= -p 12345") echo "77777" ;;
   "-o pgid= -p "*) echo "99999" ;;
   "-o command= -p 12345") echo "next dev --port 3000" ;;
@@ -419,8 +447,8 @@ case "$*" in
 esac
 SH
 chmod +x "$T/ledger-outcome-shim/ps"
-printf '2026-07-31T00:00:00Z\t%s\t%s\t12345\t77777\tdev\t3000\ttest server\tnext dev\n' \
-  "$LEDGER_ROOT" "$LEDGER_ROOT" > "$T/outcome-ledger.tsv"
+printf '2026-07-31T00:00:00Z\t%s\t%s\t12345\t77777\tdev\t3000\ttest server\tnext dev\t%s\n' \
+  "$LEDGER_ROOT" "$LEDGER_ROOT" "$(PATH="$T/ledger-outcome-shim:$PATH" fp_members_for_pgid 77777)" > "$T/outcome-ledger.tsv"
 (cd "$T/repo-one" && BASH_ENV="$T/noop-signals.sh" KILL_CALLS="$T/h16-kill.calls" \
   PATH="$T/ledger-outcome-shim:$PATH" HOME="$T/home" XDG_CACHE_HOME="$T/cache" \
   AGENT_PROCESS_LEDGER="$T/outcome-ledger.tsv" AFTERPARTY_STYLE=never \
@@ -453,7 +481,7 @@ SH
 printf '#!/usr/bin/env bash\nexit 1\n' > "$T/devclean-rm-shim/pnpm"
 chmod +x "$T/devclean-rm-shim/rm" "$T/devclean-rm-shim/pgrep" "$T/devclean-rm-shim/pnpm"
 PATH="$T/devclean-rm-shim:$PATH" HOME="$T/devclean-home" XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never \
-  bash "$REPO/bin/afterparty" devclean --disk --apply --no-repo-artifacts \
+  reviewed_devclean "$REPO/skills/afterparty/lib/devclean.sh" --disk --no-repo-artifacts \
   --documents-root "$T/devclean-home/Documents" >"$T/devclean-disk.out" 2>"$T/devclean-disk.err"
 DEVCLEAN_DISK_RC=$?
 if [ "$DEVCLEAN_DISK_RC" -ne 1 ]; then
@@ -491,9 +519,10 @@ case "$*" in
 esac
 SH
 chmod +x "$T/devclean-proc-shim/pgrep" "$T/devclean-proc-shim/ps"
+devclean_policy_fixture "$T/devclean-proc-shim" 12345
 BASH_ENV="$T/noop-signals.sh" KILL_CALLS="$T/h18-kill.calls" \
   PATH="$T/devclean-proc-shim:$PATH" HOME="$T/devclean-proc-home" XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never \
-  bash "$REPO/bin/afterparty" devclean --apply \
+  reviewed_devclean "$REPO/skills/afterparty/lib/devclean.sh" \
   >"$T/devclean-proc.out" 2>"$T/devclean-proc.err"
 DEVCLEAN_PROC_RC=$?
 if [ "$DEVCLEAN_PROC_RC" -ne 1 ]; then
@@ -509,12 +538,12 @@ mkdir -p "$T/artifact-ok/build"
 git -C "$T/artifact-ok" init -q
 printf 'delete me\n' > "$T/artifact-ok/build/file.txt"
 HOME="$T/home" XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never \
-  bash "$REPO/bin/afterparty" artifacts --clean --root "$T/artifact-ok" \
+  approved_artifact "$T/artifact-ok" \
   >"$T/artifact-ok.out" 2>"$T/artifact-ok.err"
 ART_OK_RC=$?
 ACTIONS_PATH="$(HOME="$T/home" XDG_CACHE_HOME="$T/cache" bash "$REPO/bin/afterparty" actions-path)"
 ACTIONS_RC=$?
-HOME="$T/home" XDG_CACHE_HOME="$T/cache" bash "$REPO/bin/afterparty" actions >"$T/actions.out"
+HOME="$T/home" XDG_CACHE_HOME="$T/cache" bash "$REPO/bin/afterparty" actions --all >"$T/actions.out"
 ACTIONS_SHOW_RC=$?
 if [ "$ART_OK_RC" -ne 0 ] || [ "$ACTIONS_RC" -ne 0 ] || [ "$ACTIONS_SHOW_RC" -ne 0 ]; then
   fail "H19: action journal commands failed ($ART_OK_RC/$ACTIONS_RC/$ACTIONS_SHOW_RC)"
@@ -564,6 +593,8 @@ SH
 cat > "$T/ledger-race-shim/ps" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
+  "-Ao pid=,pgid=,lstart=,command="*) echo "12345 77777 Tue Aug 18 09:00:00 2026 next dev --port 3000" ;;
+  "-Ao pgid=,lstart=,command="*) echo "77777 Tue Aug 18 09:00:00 2026 next dev --port 3000" ;;
   "-p 12345") exit 0 ;;
   "-p 54321") exit 1 ;;
   "-o pgid= -p 12345") echo "77777" ;;
@@ -614,7 +645,7 @@ fi
 
 # ---------- H21: global cleanup rejects a filesystem-root HOME ----------
 PATH="$T/cap-shim:$PATH" HOME=/ AFTERPARTY_STYLE=never \
-  bash "$REPO/bin/afterparty" devclean --apply \
+  reviewed_devclean "$REPO/skills/afterparty/lib/devclean.sh" \
   >"$T/devclean-root.out" 2>"$T/devclean-root.err"
 DEVCLEAN_ROOT_RC=$?
 if [ "$DEVCLEAN_ROOT_RC" -ne 2 ]; then
@@ -642,7 +673,7 @@ fi
 
 # ---------- H23: project-artifact scans reject broad roots by default ----------
 PATH="$T/cap-shim:$PATH" HOME="$T/home" AFTERPARTY_STYLE=never \
-  bash "$REPO/bin/afterparty" devclean --disk --apply --no-repo-artifacts \
+  reviewed_devclean "$REPO/skills/afterparty/lib/devclean.sh" --disk --no-repo-artifacts \
   --documents-root "$T/home" >"$T/devclean-doc-root.out" 2>"$T/devclean-doc-root.err"
 DEVCLEAN_DOC_ROOT_RC=$?
 if [ "$DEVCLEAN_DOC_ROOT_RC" -ne 2 ]; then
@@ -656,22 +687,27 @@ fi
 # ---------- H24: optimize mode verifies configuration mutations ----------
 mkdir -p "$T/opt-fail-home/.vscode" "$T/opt-fail-shim"
 printf '{"enable-crash-reporter": true}\n' > "$T/opt-fail-home/.vscode/argv.json"
-cat > "$T/opt-fail-shim/sed" <<'SH'
+REAL_PYTHON="$(command -v python3)"
+export REAL_PYTHON
+cat > "$T/opt-fail-shim/python3" <<'SH'
 #!/usr/bin/env bash
-exit 1
+case "$*" in *devclean-settings.py\ disable*) exit 1 ;; esac
+exec "$REAL_PYTHON" "$@"
 SH
 cat > "$T/opt-fail-shim/pgrep" <<'SH'
 #!/usr/bin/env bash
 exit 1
 SH
-# See the cap-shim launchctl note: keep --apply off the real launchd registry.
+# See the cap-shim launchctl note: keep off the real launchd registry.
 cat > "$T/opt-fail-shim/launchctl" <<'SH'
 #!/usr/bin/env bash
 exit 1
 SH
-chmod +x "$T/opt-fail-shim/sed" "$T/opt-fail-shim/pgrep" "$T/opt-fail-shim/launchctl"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/opt-fail-shim/pnpm"
+chmod +x "$T/opt-fail-shim/pnpm"
+chmod +x "$T/opt-fail-shim/python3" "$T/opt-fail-shim/pgrep" "$T/opt-fail-shim/launchctl"
 PATH="$T/opt-fail-shim:$PATH" HOME="$T/opt-fail-home" XDG_CACHE_HOME="$T/cache" \
-  AFTERPARTY_STYLE=never bash "$REPO/bin/afterparty" devclean --optimize --apply \
+  AFTERPARTY_STYLE=never reviewed_devclean "$REPO/skills/afterparty/lib/devclean.sh" --optimize \
   >"$T/opt-fail.out" 2>"$T/opt-fail.err"
 OPT_FAIL_RC=$?
 if [ "$OPT_FAIL_RC" -ne 1 ]; then
@@ -696,14 +732,14 @@ git -C "$T/git-fail" init -q
 printf 'conflict residue\n' > "$T/git-fail/merge.orig"
 JOURNAL_BEFORE=0
 [ -f "$T/cache/agent-processes/actions.jsonl" ] \
-  && JOURNAL_BEFORE="$(grep -c 'git\.' "$T/cache/agent-processes/actions.jsonl" 2>/dev/null || echo 0)"
+  && JOURNAL_BEFORE="$(awk '/git\./ {n++} END {print n+0}' "$T/cache/agent-processes/actions.jsonl")"
 HOME="$T/home" XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never \
   bash "$REPO/bin/afterparty" git --clean --root "$T/git-fail" \
   >"$T/git-fail.out" 2>"$T/git-fail.err"
 GIT_FAIL_RC=$?
 JOURNAL_AFTER=0
 [ -f "$T/cache/agent-processes/actions.jsonl" ] \
-  && JOURNAL_AFTER="$(grep -c 'git\.' "$T/cache/agent-processes/actions.jsonl" 2>/dev/null || echo 0)"
+  && JOURNAL_AFTER="$(awk '/git\./ {n++} END {print n+0}' "$T/cache/agent-processes/actions.jsonl")"
 if [ "$GIT_FAIL_RC" -ne 2 ]; then
   fail "H25: report-only git --clean exit=$GIT_FAIL_RC, want 2"
 elif ! grep -q 'report-only' "$T/git-fail.err"; then
@@ -824,10 +860,11 @@ case "$*" in
 esac
 SH
 chmod +x "$T/devclean-identity-shim/pgrep" "$T/devclean-identity-shim/ps"
+devclean_policy_fixture "$T/devclean-identity-shim" 12345
 BASH_ENV="$T/noop-signals.sh" KILL_CALLS="$T/h29-kill.calls" \
   PATH="$T/devclean-identity-shim:$PATH" HOME="$T/devclean-identity-home" \
   XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never \
-  bash "$REPO/bin/afterparty" devclean --apply \
+  reviewed_devclean "$REPO/skills/afterparty/lib/devclean.sh" \
   >"$T/devclean-identity.out" 2>"$T/devclean-identity.err"
 IDENTITY_RC=$?
 if [ "$IDENTITY_RC" -ne 1 ]; then
@@ -869,15 +906,16 @@ case "$*" in
 esac
 SH
 chmod +x "$T/devclean-recycle-shim/pgrep" "$T/devclean-recycle-shim/ps"
+devclean_policy_fixture "$T/devclean-recycle-shim" 12345
 IDENTITY_COUNT="$T/identity.count" BASH_ENV="$T/noop-signals.sh" \
   KILL_CALLS="$T/h30-kill.calls" PATH="$T/devclean-recycle-shim:$PATH" \
   HOME="$T/devclean-recycle-home" XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never \
-  bash "$REPO/bin/afterparty" devclean --apply \
+  reviewed_devclean "$REPO/skills/afterparty/lib/devclean.sh" \
   >"$T/devclean-recycle.out" 2>"$T/devclean-recycle.err"
 RECYCLE_RC=$?
 if [ "$RECYCLE_RC" -ne 1 ]; then
   fail "H30: recycled matching PID exit=$RECYCLE_RC, want 1"
-elif ! grep -q 'pid 12345 identity changed' "$T/devclean-recycle.out"; then
+elif ! grep -q 'not found with the reviewed identity' "$T/devclean-recycle.out"; then
   fail "H30: matching recycled PID was not rejected by stable identity"
 elif [ -s "$T/h30-kill.calls" ]; then
   fail "H30: recycled matching PID was signaled"
@@ -893,7 +931,7 @@ HOME="$T/home" XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never \
   bash "$REPO/bin/afterparty" artifacts --clean --root "$T/artifact-scope/build" \
   >"$T/artifact-scope.out" 2>"$T/artifact-scope.err"
 ARTIFACT_SCOPE_RC=$?
-if [ "$ARTIFACT_SCOPE_RC" -ne 0 ]; then
+if [ "$ARTIFACT_SCOPE_RC" -ne 2 ]; then
   fail "H31: artifact-named repository exit=$ARTIFACT_SCOPE_RC"
 elif [ ! -d "$T/artifact-scope/build/.git" ] || [ ! -f "$T/artifact-scope/build/important.txt" ]; then
   fail "H31: repository root named build was treated as an artifact"
@@ -906,6 +944,8 @@ mkdir -p "$T/audit-escalation-shim"
 cat > "$T/audit-escalation-shim/ps" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
+  "-Ao pid=,pgid=,lstart=,command="*) echo "41234 77777 Tue Aug 18 09:00:00 2026 next dev --port 3000" ;;
+  "-Ao pgid=,lstart=,command="*) echo "77777 Tue Aug 18 09:00:00 2026 next dev --port 3000" ;;
   "-o pgid= -p "*) echo "99999" ;;
   "-Ao pid="*) echo "41234" ;;
   "-Ao pid,ppid,pgid,%cpu,etime,command"*)
@@ -953,6 +993,8 @@ mkdir -p "$T/ledger-escalation-shim"
 cat > "$T/ledger-escalation-shim/ps" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
+  "-Ao pid=,pgid=,lstart=,command="*) echo "12345 77777 Tue Aug 18 09:00:00 2026 next dev --port 3000" ;;
+  "-Ao pgid=,lstart=,command="*) echo "77777 Tue Aug 18 09:00:00 2026 next dev --port 3000" ;;
   "-o pgid= -p 12345") echo "77777" ;;
   "-o pgid= -p "*) echo "99999" ;;
   "-o command= -p 12345") echo "next dev --port 3000" ;;
@@ -977,8 +1019,8 @@ cat > "$T/ledger-escalation-shim/sleep" <<'SH'
 exit 0
 SH
 chmod +x "$T/ledger-escalation-shim/ps" "$T/ledger-escalation-shim/sleep"
-printf '2026-07-31T00:00:00Z\t%s\t%s\t12345\t77777\tdev\t3000\ttest server\tnext dev\n' \
-  "$LEDGER_ROOT" "$LEDGER_ROOT" > "$T/escalation-ledger.tsv"
+printf '2026-07-31T00:00:00Z\t%s\t%s\t12345\t77777\tdev\t3000\ttest server\tnext dev\t%s\n' \
+  "$LEDGER_ROOT" "$LEDGER_ROOT" "$(PATH="$T/ledger-escalation-shim:$PATH" fp_members_for_pgid 77777)" > "$T/escalation-ledger.tsv"
 (cd "$T/repo-one" && PS_PROTECT_COUNT="$T/ledger-protect.count" \
   BASH_ENV="$T/noop-signals.sh" KILL_CALLS="$T/h33-kill.calls" \
   PATH="$T/ledger-escalation-shim:$PATH" HOME="$T/home" XDG_CACHE_HOME="$T/cache" \
@@ -1002,7 +1044,7 @@ dd if=/dev/zero of="$T/outside-gradle/caches/keep.bin" bs=1024 count=2048 2>/dev
 if ln -s "$T/outside-gradle" "$T/symlink-home/.gradle" 2>/dev/null \
     && [ -L "$T/symlink-home/.gradle" ]; then
   PATH="$T/cap-shim:$PATH" HOME="$T/symlink-home" XDG_CACHE_HOME="$T/cache" \
-    AFTERPARTY_STYLE=never bash "$REPO/bin/afterparty" devclean --disk --apply \
+    AFTERPARTY_STYLE=never reviewed_devclean "$REPO/skills/afterparty/lib/devclean.sh" --disk \
     --no-repo-artifacts --documents-root "$T/symlink-home/Documents" \
     >"$T/symlink-home.out" 2>"$T/symlink-home.err"
   SYMLINK_HOME_RC=$?
@@ -1045,10 +1087,11 @@ cat > "$T/devclean-confirm-shim/sleep" <<'SH'
 exit 0
 SH
 chmod +x "$T/devclean-confirm-shim/pgrep" "$T/devclean-confirm-shim/ps" "$T/devclean-confirm-shim/sleep"
+devclean_policy_fixture "$T/devclean-confirm-shim" 12346
 BASH_ENV="$T/noop-signals.sh" KILL_CALLS="$T/h35-kill.calls" \
   PATH="$T/devclean-confirm-shim:$PATH" HOME="$T/devclean-confirm-home" \
   XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never \
-  bash "$REPO/bin/afterparty" devclean --apply \
+  reviewed_devclean "$REPO/skills/afterparty/lib/devclean.sh" \
   >"$T/devclean-confirm.out" 2>"$T/devclean-confirm.err"
 CONFIRM_RC=$?
 if [ "$CONFIRM_RC" -ne 1 ]; then
@@ -1074,7 +1117,7 @@ REPORT_OWNER_PATH="$(cd "$T/report-owner-repo" && HOME="$T/home" XDG_CACHE_HOME=
   XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never \
   bash "$REPO/bin/afterparty" audit --report > "$T/report-owner.out" 2> "$T/report-owner.err")
 REPORT_OWNER_RC=$?
-if [ "$REPORT_OWNER_RC" -ne 0 ]; then
+if [ "$REPORT_OWNER_RC" -ne 1 ] || ! grep -q 'Status: incomplete' "$REPORT_OWNER_PATH"; then
   fail "H36: cache-fallback report exit=$REPORT_OWNER_RC"
 elif [ "$REPORT_OWNER_PATH" = "$T/report-owner-repo/report.md" ]; then
   fail "H36: unrelated ignored report.md was selected as Afterparty state"
@@ -1096,7 +1139,7 @@ HOME="$T/home" XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never \
   bash "$REPO/bin/afterparty" artifacts --clean --root "$T/nested-boundary" \
   >"$T/nested-boundary.out" 2>"$T/nested-boundary.err"
 NESTED_BOUNDARY_RC=$?
-if [ "$NESTED_BOUNDARY_RC" -ne 0 ]; then
+if [ "$NESTED_BOUNDARY_RC" -ne 2 ]; then
   fail "H37: nested-repository artifact scan exit=$NESTED_BOUNDARY_RC"
 elif [ ! -f "$T/nested-boundary/embedded/node_modules/.cache/keep.txt" ] \
     || [ ! -f "$T/nested-boundary/embedded/project.tsbuildinfo" ]; then
@@ -1130,7 +1173,7 @@ if ln -s "$T/outside-vscode" "$T/opt-symlink-home/.vscode" 2>/dev/null \
 fi
 if [ "$CRASH_LINK_OK" -eq 1 ]; then
   PATH="$T/cap-shim:$PATH" HOME="$T/opt-symlink-home" XDG_CACHE_HOME="$T/cache" \
-    AFTERPARTY_STYLE=never bash "$REPO/bin/afterparty" devclean --optimize --apply \
+    AFTERPARTY_STYLE=never reviewed_devclean "$REPO/skills/afterparty/lib/devclean.sh" --optimize \
     >"$T/opt-symlink.out" 2>"$T/opt-symlink.err"
   OPT_SYMLINK_RC=$?
   if [ "$OPT_SYMLINK_RC" -ne 1 ]; then
@@ -1138,7 +1181,7 @@ if [ "$CRASH_LINK_OK" -eq 1 ]; then
   elif ! grep -q '"enable-crash-reporter": true' "$T/outside-vscode/argv.json" \
       || [ ! -f "$T/outside-crash/App/Crashpad/pending/keep.dmp" ]; then
     fail "H38: optimize mutation escaped HOME through a symlink parent"
-  elif ! grep -q 'IDE settings outside HOME' "$T/opt-symlink.out" \
+  elif ! grep -q 'settings path escapes HOME' "$T/opt-symlink.out" \
       || ! grep -q 'Crashpad directory outside HOME' "$T/opt-symlink.out"; then
     fail "H38: optimize symlink refusals were not explained"
   else
@@ -1153,7 +1196,7 @@ mkdir -p "$T/broad-ancestor/home" "$T/broad-ancestor/sibling/project/build"
 printf 'sibling data\n' > "$T/broad-ancestor/sibling/project/Makefile"
 printf 'keep sibling build\n' > "$T/broad-ancestor/sibling/project/build/keep.txt"
 PATH="$T/cap-shim:$PATH" HOME="$T/broad-ancestor/home" XDG_CACHE_HOME="$T/cache" \
-  AFTERPARTY_STYLE=never bash "$REPO/bin/afterparty" devclean --disk --apply \
+  AFTERPARTY_STYLE=never reviewed_devclean "$REPO/skills/afterparty/lib/devclean.sh" --disk \
   --no-repo-artifacts --documents-root "$T/broad-ancestor" \
   >"$T/broad-ancestor.out" 2>"$T/broad-ancestor.err"
 BROAD_ANCESTOR_RC=$?
@@ -1185,10 +1228,9 @@ if [ -d "${1:-}" ]; then
 fi
 if [ "$FIND_TARGET" = "$CRASHPAD_TARGET" ]; then
   for arg in "$@"; do
-    if [ "$arg" = "-exec" ]; then exec "$REAL_FIND" "$@"; fi
+    if [ "$arg" = "-exec" ]; then printf 'deleted\n' > "$FIND_COUNT_STATE"; exec "$REAL_FIND" "$@"; fi
   done
   if [ ! -f "$FIND_COUNT_STATE" ]; then
-    printf 'initial\n' > "$FIND_COUNT_STATE"
     exec "$REAL_FIND" "$@"
   fi
   exit 1
@@ -1199,7 +1241,7 @@ chmod +x "$T/crash-find-shim/find"
 CRASHPAD_TARGET="$CRASH_CONFIRM_DIR" FIND_COUNT_STATE="$T/crash-find.count" \
   REAL_FIND="$REAL_FIND" PATH="$T/crash-find-shim:$T/cap-shim:$PATH" \
   HOME="$T/crash-confirm-home" XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never \
-  bash "$REPO/bin/afterparty" devclean --optimize --apply \
+  reviewed_devclean "$REPO/skills/afterparty/lib/devclean.sh" --optimize \
   >"$T/crash-confirm.out" 2>"$T/crash-confirm.err"
 CRASH_CONFIRM_RC=$?
 if [ "$CRASH_CONFIRM_RC" -ne 1 ]; then

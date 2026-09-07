@@ -36,7 +36,9 @@ json_kvz() {
 json_kvn() {
   case "${2-}" in
     ''|*[!0-9]*) printf '"%s":null' "$1" ;;
-    *) printf '"%s":%s' "$1" "$2" ;;
+    *) local number="$2"
+       while [ "${#number}" -gt 1 ] && [ "${number#0}" != "$number" ]; do number="${number#0}"; done
+       printf '"%s":%s' "$1" "$number" ;;
   esac
 }
 

@@ -24,11 +24,10 @@
             "command": "bash",
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/skills/afterparty/bin/afterparty",
-              "audit",
-              "--report"
+              "report",
+              "--session-end"
             ],
-            "async": true,
-            "timeout": 60
+            "timeout": 1
           }
         ]
       }

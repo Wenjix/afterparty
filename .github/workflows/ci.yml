@@ -40,5 +40,9 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+      - name: transcript compatibility (native Python and Git Bash)
+        run: |
+          bash tests/test-transcript-index.sh
+          bash tests/test-codex-integration.sh
       - name: tests (Git Bash, kill suite self-skips)
         run: bash tests/run.sh

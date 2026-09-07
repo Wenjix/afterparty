@@ -1,34 +1,77 @@
 # shellcheck shell=bash
-# categories.sh - the kill categories, sourced (not executed) by
-# audit-processes.sh and plan.sh so both use one definition, the same way
-# protect.sh is shared.
-#
-# Two rules, both learned the hard way, and both pinned by tests/test-proc-classify.sh.
-#
-# 1. No alternative may span a space with `.*`. An agent runtime carries its
-#    whole prompt in argv (>20 KB), so an unbounded gap lets ordinary prose
-#    ("bundle" ... "/dev") classify a live session as a dev server.
-#
-# 2. A bare tool name must be anchored to command position -- start of string or
-#    after a "/" -- never to a space. Prose says " the jest suite is flaky" with
-#    spaces on both sides exactly as a command would, so a space anchor cannot
-#    tell them apart. `ava ` unanchored matched the substring in `java `, which
-#    made `audit --kill tests` SIGKILL any JVM: a JetBrains IDE, a Gradle
-#    daemon, a Kafka broker. Nothing in PROTECT_RE covers those.
-#
-# Agent sessions survive misclassification because PROTECT_RE covers them, so
-# for those this is a reporting bug. For a JVM there is no such backstop.
-TESTS_RE='(^|/)(vitest|jest|mocha|jasmine|ava|pytest)([[:space:]]|$)|(npx|bunx|pnpm exec|pnpm dlx|yarn|node) (vitest|jest|mocha|jasmine|ava|pytest)|(npm|pnpm|yarn|bun) (run )?test'
-DEV_RE='next dev|next start|nodemon|astro dev|remix vite|vite($| )|webpack[^ ]* serve|webpack-dev-server|turbo( (run|watch|--?[a-z][a-z0-9-]*))* dev|pnpm dev|pnpm start|npm run dev|npm run start|yarn dev|bun( (run|--?[a-z][a-z0-9-]*))* dev|deno task [a-z0-9:._-]*dev|ng serve|rails server|flask run|fastapi dev|uvicorn|python -m http.server'
-BROWSER_RE='--remote-debugging-port|/ms-playwright/|mcp-chrome|/puppeteer/|(^|/)headless_shell([[:space:]]|$)'
-
-# Category a command belongs to, or empty. Order matters: tests before dev, so
-# "npm test" does not read as a dev server. Empty means afterparty has no
-# safe kill discipline for it, and callers must not offer it for cleanup.
+# Classify executable/subcommand positions, never arbitrary argv prose or URLs.
+# ps presents text rather than an argv array; ambiguous shell -c programs are
+# deliberately unclassified. Their actual server/test children are observable.
 cat_for_command() {
-  local cmd="$1"
-  if printf '%s\n' "$cmd" | grep -Eiq -- "$TESTS_RE"; then printf 'tests'; return 0; fi
-  if printf '%s\n' "$cmd" | grep -Eiq -- "$DEV_RE"; then printf 'dev'; return 0; fi
-  if printf '%s\n' "$cmd" | grep -Eiq -- "$BROWSER_RE"; then printf 'browser'; return 0; fi
+  local cmd="$1" depth="${2:-0}" exe script arg IFS=$' \t\n'
+  [ "$depth" -lt 5 ] || return 1
+  case "$cmd" in
+    /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome\ *|/Applications/Chromium.app/Contents/MacOS/Chromium\ *)
+      case "$cmd" in *\ --remote-debugging-port*) printf browser; return 0 ;; esac ;;
+  esac
+  # Disable globbing in the subshell; commands containing * remain literal.
+  # shellcheck disable=SC2086
+  set -f; set -- $cmd; set +f
+  [ "$#" -gt 0 ] || return 1
+  exe="${1##*/}"; exe="${exe%.exe}"; shift
+  case "${cmd%%[[:space:]]*}" in
+    /*/ms-playwright/*|/*/puppeteer/*)
+      case "$exe" in chrome|chromium|Chromium|headless_shell|firefox) printf browser; return 0 ;; esac ;;
+  esac
+  case "$exe" in
+    env)
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          *=*|-i|--ignore-environment|--unset=*) shift ;;
+          -u|--unset) [ "$#" -ge 2 ] || return 1; shift 2 ;;
+          --) shift; break ;;
+          -*) return 1 ;;
+          *) break ;;
+        esac
+      done
+      cat_for_command "$*" "$((depth + 1))"; return $? ;;
+    node|nodejs|python|python2|python3|python2.*|python3.*|bash|sh|zsh)
+      while [ "$#" -gt 0 ]; do
+        case "$exe:$1" in bash:-*c*|sh:-*c*|zsh:-*c*) return 1 ;; esac
+        case "$1" in
+          -c|-e|--eval|--print) return 1 ;;
+          -m) shift; break ;;
+          -r|--require|--import) [ "$#" -ge 2 ] || return 1; shift 2 ;;
+          -*) shift ;;
+          *) break ;;
+        esac
+      done
+      [ "$#" -gt 0 ] || return 1
+      script="${1##*/}"; script="${script%.js}"; script="${script%.mjs}"; script="${script%.cjs}"; shift
+      cat_for_command "$script $*" "$((depth + 1))"; return $? ;;
+    npx|bunx)
+      while [ "$#" -gt 0 ]; do case "$1" in --yes|-y|--no-install) shift ;; -*) return 1 ;; *) break ;; esac; done
+      cat_for_command "$*" "$((depth + 1))"; return $? ;;
+    npm|pnpm|yarn|bun)
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --filter|-F|--cwd|--prefix) [ "$#" -ge 2 ] || return 1; shift 2 ;;
+          --watch|--hot|--silent) shift ;;
+          *) break ;;
+        esac
+      done
+      case "${1:-}" in exec|dlx) shift; cat_for_command "$*" "$((depth + 1))"; return $? ;; run) shift ;; esac
+      case "${1:-}" in test|test:*|tests) printf tests; return 0 ;; dev|dev:*|start|start:*) printf dev; return 0 ;; esac
+      if [ "$exe" = yarn ]; then cat_for_command "$*" "$((depth + 1))"; return $?; fi ;;
+    vitest|jest|mocha|jasmine|ava|pytest) printf tests; return 0 ;;
+    vite|nodemon|webpack-dev-server|uvicorn|http.server) printf dev; return 0 ;;
+    next) case "${1:-}" in dev|start) printf dev; return 0 ;; esac ;;
+    astro|fastapi) [ "${1:-}" = dev ] && { printf dev; return 0; } ;;
+    webpack|ng) [ "${1:-}" = serve ] && { printf dev; return 0; } ;;
+    rails) [ "${1:-}" = server ] && { printf dev; return 0; } ;;
+    flask) [ "${1:-}" = run ] && { printf dev; return 0; } ;;
+    remix) [ "${1:-}" = vite ] && { printf dev; return 0; } ;;
+    deno) [ "${1:-}" = task ] && { case "${2:-}" in dev|dev:*|*:dev) printf dev; return 0 ;; esac; } ;;
+    turbo)
+      for arg in "$@"; do case "$arg" in run|watch|-*) : ;; dev) printf dev; return 0 ;; *) break ;; esac; done ;;
+    headless_shell) printf browser; return 0 ;;
+    chrome|chromium|Chromium|Google\ Chrome|firefox)
+      case " $* " in *\ --remote-debugging-port*|*\ --headless*) printf browser; return 0 ;; esac ;;
+  esac
   return 1
 }

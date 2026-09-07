@@ -13,6 +13,8 @@ fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 pass() { echo "ok: $*"; }
 
 T="$(mktemp -d)"
+# Isolate automatic Codex discovery even when CODEX_HOME is inherited.
+export AFTERPARTY_CODEX_ROOT="$T/codex-index"
 trap 'cd /; rm -rf "$T"' EXIT
 cd "$REPO" || exit 1
 
@@ -101,7 +103,7 @@ printf '%s\n' "$OUT" | grep -qF '█' || fail "P4: styled disk meters missing"
 printf '%s\n' "$OUT" | grep -qF 'Gradle caches' || fail "P4: meter row label missing"
 printf '%s\n' "$OUT" | grep -qF 'would clean Gradle caches:' && fail "P4: styled dry-run should buffer rows into meters, not stream them"
 printf '%s\n' "$OUT" | grep -q 'Global disk reclaimable:' || fail "P4: global total line lost in styled mode"
-printf '%s\n' "$OUT" | grep -qF '▸ 1 proc' || fail "P4: devclean damage card missing proc segment"
+printf '%s\n' "$OUT" | grep -qF '▸ 1 proc' && fail "P4: --disk unexpectedly included orphan process cleanup"
 printf '%s\n' "$OUT" | grep -qF '2.0 MB reclaimable' || fail "P4: devclean damage card missing reclaimable segment"
 pass "P4: devclean disk meters (styled dry-run) + plain streaming"
 
