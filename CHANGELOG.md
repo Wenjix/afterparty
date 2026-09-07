@@ -29,7 +29,8 @@ All notable changes to Afterparty are documented here. Versions follow semantic 
   activity-dependent cleanup. Other capabilities keep their own checks, and
   history deletion scope is unchanged.
 - File consistency checks account for Windows pathname/handle timestamp
-  differences while retaining identity and change detection. Windows CI checks
+  differences while retaining identity and change detection. Transcript TSV uses
+  UTF-8 and LF line endings on every platform. Windows CI checks
   transcript compatibility before running the full suite.
 
 ## [0.11.1] - 2026-09-06

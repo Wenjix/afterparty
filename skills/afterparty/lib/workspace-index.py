@@ -311,6 +311,10 @@ def collect(claude_root, codex_root):
 
 
 def main(argv=None):
+    # This TSV is consumed by Bash read as well as awk. Native Windows stdout
+    # otherwise adds CR to the final field, making a workspace path unmatchable.
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', newline='\n')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--claude-root', required=True)
     parser.add_argument('--codex-root', required=True)

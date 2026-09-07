@@ -353,6 +353,35 @@ class TranscriptIndex(unittest.TestCase):
             with self.subTest(cwd=cwd):
                 self.assertEqual(indexer.normalize_workspace(cwd), cwd)
 
+    def test_22_index_bytes_use_lf_and_round_trip_through_shell_owner(self):
+        named = self.workspace / 'プロジェクト'
+        named.mkdir()
+        self.claude_file(100, cwd=named)
+        cwd = expected_path(named)
+        expected = ('100\t' + cwd + '\n').encode('utf-8')
+        buffer = io.BytesIO()
+        # Model native Windows newline translation even on non-Windows hosts.
+        with io.TextIOWrapper(buffer, encoding='utf-8', newline='\r\n') as output:
+            with contextlib.redirect_stdout(output):
+                rc = indexer.main(['--claude-root', str(self.claude), '--codex-root', str(self.codex)])
+            output.flush()
+            self.assertEqual(rc, 0)
+            self.assertEqual(buffer.getvalue(), expected)
+            self.assertNotIn(b'\r', buffer.getvalue())
+        env = dict(os.environ, AFTERPARTY_TRANSCRIPT_ROOT=str(self.claude),
+                   AFTERPARTY_CODEX_ROOT=str(self.codex), PYTHONUTF8='1', PYTHONIOENCODING='utf-8')
+        for command, expected_bytes in (
+                ('. "$1"; ws_index', expected),
+                ('. "$1"; ws_index | ws_owner_of "$2"', cwd.encode('utf-8'))):
+            with self.subTest(command=command):
+                # Keep bytes: universal-newline decoding would hide a CRLF bug.
+                result = subprocess.run([BASH, '-c', command, '_',
+                                         (LIB / 'workspace.sh').as_posix(), cwd],
+                                        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, expected_bytes)
+                self.assertNotIn(b'\r', result.stdout)
+
 
 suite = unittest.defaultTestLoader.loadTestsFromTestCase(TranscriptIndex)
 result = unittest.TextTestRunner(verbosity=2).run(suite)
