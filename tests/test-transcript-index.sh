@@ -248,7 +248,9 @@ class TranscriptIndex(unittest.TestCase):
         env.pop('AFTERPARTY_CODEX_ROOT', None)
         def run(sources=False):
             command = '. "$1"; ws_index' + (' --sources' if sources else '')
-            result = subprocess.run([BASH, '-c', command, '_', str(LIB / 'workspace.sh')],
+            # Bash uses this argument in BASH_SOURCE/dirname; native Windows
+            # backslashes must not turn its library directory into '.'.
+            result = subprocess.run([BASH, '-c', command, '_', (LIB / 'workspace.sh').as_posix()],
                                     env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     universal_newlines=True, encoding='utf-8')
             self.assertEqual(result.returncode, 0, result.stderr)
