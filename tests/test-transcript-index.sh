@@ -13,6 +13,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -297,6 +298,60 @@ class TranscriptIndex(unittest.TestCase):
             self.claude_file(500)
         with patch.object(indexer, 'scan_codex', side_effect=created_scan):
             self.assertIn('before index completion', self.assert_atomic_failure())
+
+    def descriptor_stat(self, fd, **changes):
+        # Match the fields consumed by stat_identity and samestat without
+        # depending on the host's ability to construct Windows stat_result.
+        actual = self.real_fstat(fd)
+        values = {name: getattr(actual, name) for name in
+                  ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')}
+        values.update(changes)
+        return SimpleNamespace(**values)
+
+    def test_18_cross_api_windows_ctime_and_permissions_do_not_fake_drift(self):
+        target = self.claude_file(100)
+        before = target.stat()
+        self.real_fstat = os.fstat
+        calls = []
+        def windows_fstat(fd):
+            calls.append(fd)
+            return self.descriptor_stat(fd, st_ctime_ns=before.st_ctime_ns + 1_000_000,
+                                        st_mode=before.st_mode ^ indexer.stat.S_IXUSR)
+        with patch.object(indexer.os, 'fstat', side_effect=windows_fstat):
+            rows = self.collect()
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(rows[expected_path(self.workspace)].epoch, 100)
+
+    def test_19_descriptor_changes_remain_a_refusal_with_distinct_baseline(self):
+        target = self.claude_file(100)
+        before = target.stat()
+        self.real_fstat = os.fstat
+        calls = []
+        def changed_fstat(fd):
+            calls.append(fd)
+            return self.descriptor_stat(fd, st_ctime_ns=before.st_ctime_ns + 1_000_000 + len(calls))
+        with patch.object(indexer.os, 'fstat', side_effect=changed_fstat):
+            self.assertIn('while it was being read', self.assert_atomic_failure())
+        self.assertEqual(len(calls), 2)
+
+    def test_20_opened_handle_must_match_path_identity_and_content_metadata(self):
+        target = self.claude_file(100)
+        before = target.stat()
+        self.real_fstat = os.fstat
+        for field in ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns'):
+            with self.subTest(field=field):
+                calls = []
+                def replaced_fstat(fd):
+                    calls.append(fd)
+                    return self.descriptor_stat(fd, **{field: getattr(before, field) + 1})
+                with patch.object(indexer.os, 'fstat', side_effect=replaced_fstat):
+                    self.assertIn('before it could be read', self.assert_atomic_failure())
+                self.assertEqual(len(calls), 1)
+
+    def test_21_virtual_unix_workspaces_preserve_git_bash_identity(self):
+        for cwd in ('/w/loupe', '/w/プロジェクト/web'):
+            with self.subTest(cwd=cwd):
+                self.assertEqual(indexer.normalize_workspace(cwd), cwd)
 
 
 suite = unittest.defaultTestLoader.loadTestsFromTestCase(TranscriptIndex)

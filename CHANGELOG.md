@@ -28,6 +28,9 @@ All notable changes to Afterparty are documented here. Versions follow semantic 
   sources; records larger than 32 MiB and missing Python withhold
   activity-dependent cleanup. Other capabilities keep their own checks, and
   history deletion scope is unchanged.
+- File consistency checks account for Windows pathname/handle timestamp
+  differences while retaining identity and change detection. Windows CI checks
+  transcript compatibility before running the full suite.
 
 ## [0.11.1] - 2026-09-06
 

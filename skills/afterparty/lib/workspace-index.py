@@ -145,7 +145,18 @@ def inspect_transcript(path, provider, index, observations=None):
         records = 0
         reader = claude_workspaces if provider == 'claude-transcript' else codex_workspaces
         with open(path, 'rb') as source:
-            if stat_identity(os.fstat(source.fileno())) != stat_identity(before):
+            opened = os.fstat(source.fileno())
+            # CPython's Windows path stat exposes legacy creation-time ctime,
+            # while fstat can expose metadata ChangeTime. Permission bits can
+            # also depend on the pathname. Bind the handle to the same object
+            # using device/inode and compare shared content metadata; retain
+            # full same-API baselines for later change/replacement checks.
+            if (not before.st_ino or not opened.st_ino
+                    or not os.path.samestat(before, opened)
+                    or not stat.S_ISREG(opened.st_mode)
+                    or opened.st_size != before.st_size
+                    or opened.st_mtime_ns != before.st_mtime_ns
+                    or stat_identity(os.lstat(path)) != stat_identity(before)):
                 raise IndexUnavailable('transcript changed before it could be read')
             while True:
                 raw = source.readline(MAX_RECORD_BYTES + 1)
@@ -163,7 +174,7 @@ def inspect_transcript(path, provider, index, observations=None):
                 workspaces.update(reader(record))
                 records += 1
                 del record, raw
-            if stat_identity(os.fstat(source.fileno())) != stat_identity(before):
+            if stat_identity(os.fstat(source.fileno())) != stat_identity(opened):
                 raise IndexUnavailable('transcript changed while it was being read')
         if stat_identity(os.lstat(path)) != stat_identity(before):
             raise IndexUnavailable('transcript was replaced while it was being read')
