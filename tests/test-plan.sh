@@ -9,6 +9,8 @@ FAILS=0
 fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 pass() { echo "ok: $*"; }
 T="$(mktemp -d)"
+# Isolate automatic Codex discovery even when CODEX_HOME is inherited.
+export AFTERPARTY_CODEX_ROOT="$T/codex-index"
 trap 'cd /; rm -rf "$T"' EXIT
 
 # world: /w/gone is idle+quiet (offer it), /w/here is fresh (never offer),

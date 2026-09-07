@@ -4,6 +4,8 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB="$REPO/skills/afterparty/lib"
 T="$(mktemp -d)"; trap 'cd /; rm -rf "$T"' EXIT
+# Isolate automatic Codex discovery even when CODEX_HOME is inherited.
+export AFTERPARTY_CODEX_ROOT="$T/codex-index"
 export HOME="$T/home" XDG_CACHE_HOME="$T/cache" AFTERPARTY_STYLE=never
 export AP_CASE=normal AP_FIXTURE="$T" AP_COMMAND='npm run dev'
 mkdir -p "$HOME" "$T/shim"

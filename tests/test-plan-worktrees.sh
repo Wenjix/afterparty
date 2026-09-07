@@ -14,6 +14,8 @@ FAILS=0
 fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 pass() { echo "ok: $*"; }
 T="$(mktemp -d)"
+# Isolate automatic Codex discovery even when CODEX_HOME is inherited.
+export AFTERPARTY_CODEX_ROOT="$T/codex-index"
 trap 'cd /; rm -rf "$T"' EXIT
 
 age() { touch -d "$1" "$3" 2>/dev/null || touch -t "$(date -v "$2" +%Y%m%d%H%M)" "$3"; }

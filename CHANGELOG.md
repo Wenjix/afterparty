@@ -2,6 +2,33 @@
 
 All notable changes to Afterparty are documented here. Versions follow semantic versioning.
 
+## [0.12.0] - 2026-09-07
+
+### Added
+
+- Codex workspace activity from existing `sessions` and `archived_sessions`
+  transcripts, alongside all immediate-project Claude JSONL files. Glance
+  identifies the contributing providers, and process eligibility uses their
+  shared activity index.
+- `AFTERPARTY_CODEX_ROOT` selects the Codex history root for indexing, defaulting
+  to `${CODEX_HOME:-$HOME/.codex}`. Existing Claude root configuration is unchanged.
+  Discovery is read-only and requires no migration, registration, or new hook.
+
+### Changed
+
+- Activity indexing requires Python 3 and uses the latest transcript-file mtime
+  per normalized workspace across both providers. Codex session and turn records
+  contribute cwd paths; resumed file activity conservatively refreshes every
+  workspace recorded in that file. Activity remains an observation of files,
+  not human presence or a precise per-workspace visit time.
+- Indexed ancestor activity also contributes to descendant workspaces, so fresh
+  activity in a repository cannot be hidden by an older subdirectory transcript.
+- Corrupt, unreadable, or incompletely scanned history makes the entire activity
+  index unavailable. Missing optional history directories remain valid empty
+  sources; records larger than 32 MiB and missing Python withhold
+  activity-dependent cleanup. Other capabilities keep their own checks, and
+  history deletion scope is unchanged.
+
 ## [0.11.1] - 2026-09-06
 
 ### Fixed

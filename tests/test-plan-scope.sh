@@ -3,6 +3,8 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$(mktemp -d)"; trap 'cd /; rm -rf "$T"' EXIT
+# Isolate automatic Codex discovery even when CODEX_HOME is inherited.
+export AFTERPARTY_CODEX_ROOT="$T/codex-index"
 export HOME="$T/home" XDG_CACHE_HOME="$T/cache" AFTERPARTY_TRANSCRIPT_ROOT="$T/transcripts"
 mkdir -p "$HOME" "$T/shim" "$T/transcripts/one" "$T/transcripts/two"
 git init -qb main "$T/one"; git init -qb main "$T/two"

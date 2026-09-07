@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # glance.sh - "what did I leave running?", answered on returning to the machine.
 #
-# Visible processes grouped by workspace, ordered by observed Claude transcript
+# Visible processes grouped by workspace, ordered by observed agent transcript
 # activity with unknown attribution retained. Severity is magnitude:
 # this view exists to make you look up, and the plan is where consequence gets
 # weighed. Read-only by construction -- there is deliberately no flag that acts.
@@ -66,12 +66,16 @@ if [ "$PS_STATUS" != ok ] || [ ! -s "$T/ps" ]; then
   PS_REASON="ps cannot provide a complete detailed process table"
   GLANCE_INCOMPLETE=1
 fi
-ws_index > "$T/ws" 2> "$T/ws.err" || WS_STATUS=unavailable
+ws_index --sources > "$T/ws" 2> "$T/ws.err" || WS_STATUS=unavailable
 if [ ! -s "$T/ws" ] || [ -s "$T/ws.err" ]; then
   WS_STATUS=unavailable
 fi
 if [ "$WS_STATUS" != ok ]; then
-  WS_REASON="Claude transcript activity is unavailable; workspace activity is unknown"
+  : > "$T/ws"
+  WS_REASON="Agent transcript activity is unavailable; workspace activity is unknown"
+  if [ -s "$T/ws.err" ]; then
+    WS_REASON="$WS_REASON ($(head -n 1 "$T/ws.err"))"
+  fi
   GLANCE_INCOMPLETE=1
 fi
 : > "$T/listen"
@@ -118,7 +122,7 @@ fi
     # attributed to the WRONG workspace and two workspaces merge into one row —
     # on the surface a person approves kills from.
     function samepath(a, b) { return (length(a) == length(b) && index(a, b) == 1) }
-  $1 == "W" { wsts[$3] = $2; next }
+  $1 == "W" { wsts[$3] = $2; sources[$3] = $4; next }
   $1 == "C" { cwd[$2] = $3; next }
   $1 == "L" { port[$2] = ($2 in port ? port[$2] " " $3 : $3); next }
   $1 == "P" {
@@ -143,7 +147,7 @@ fi
   }
   END {
     for (w in procs)
-      printf "%s\t%s\t%d\t%.1f\t%s\t%s\n", wsts[w], w, procs[w], maxcpu[w], (w in ports ? ports[w] : "-"), attribution[w]
+      printf "%s\t%s\t%d\t%.1f\t%s\t%s\t%s\n", wsts[w], w, procs[w], maxcpu[w], (w in ports ? ports[w] : "-"), attribution[w], (w in sources ? sources[w] : "-")
   }
 ' | sort -rn > "$T/rows"
 
@@ -167,7 +171,7 @@ if [ "$AS_JSON" -eq 1 ]; then
       "$(json_kv status "$(printf '%s' "$cap" | cut -d: -f2)")" \
       "$(json_kv reason "$(printf '%s' "$cap" | cut -d: -f3-)")"
   done
-  while IFS=$'\t' read -r ts path procs cpu ports attribution; do
+  while IFS=$'\t' read -r ts path procs cpu ports attribution source; do
     [ -n "$path" ] || continue
     idle=""
     [ "$ts" = "-" ] || idle="$((NOW - ts))"
@@ -175,7 +179,7 @@ if [ "$AS_JSON" -eq 1 ]; then
       "$(json_kvz path "$([ "$attribution" = unattributed ] || printf '%s' "$path")")" \
       "$(json_kv attribution "$attribution")" \
       "$(json_kvn last_touched "$ts")" "$(json_kvn idle_seconds "$idle")" \
-      "$(json_kv activity_source claude-transcript)" \
+      "$(json_kvz activity_source "$([ "$source" = - ] || printf '%s' "$source")")" \
       "$(json_kvn procs "$procs")" "$(json_kv cpu_max "$cpu")" \
       "$(json_kvz ports "$([ "$ports" = - ] || printf '%s' "$ports")")"
   done < "$T/rows"
@@ -190,7 +194,7 @@ if [ "$ONELINE" -eq 1 ]; then
   if [ "$TOTAL_WS" -eq 0 ]; then
     printf 'afterparty  no processes observed\n'
   elif [ "$IDLE_WS" -gt 0 ]; then
-    printf 'afterparty  %s · %s without Claude transcript activity >%sh · %s procs\n' \
+    printf 'afterparty  %s · %s without agent transcript activity >%sh · %s procs\n' \
       "$(s_n "$TOTAL_WS" workspace workspaces)" "$IDLE_WS" "$WS_IDLE_HOURS" "$TOTAL_PROCS"
   else
     printf 'afterparty  %s · observed processes · %s procs\n' \
@@ -215,26 +219,32 @@ fi
 
 printf '%s\n' "afterparty glance — $(s_n "$TOTAL_WS" 'process scope holding' 'process scopes holding') $(s_n "$TOTAL_PROCS" process processes)"
 echo
-s_dim "  WORKSPACE / PROCESS CWD       CLAUDE ACTIVITY PROCS     CPU  PORTS"
+s_dim "  WORKSPACE / PROCESS CWD       SOURCE       AGENT ACTIVITY PROCS     CPU  PORTS"
 # Labels are computed across the rows being displayed, so each one is the
 # shortest suffix unique in THIS table rather than a guess made row by row.
 awk -F'\t' '{print $2}' "$T/rows" | ws_unique_labels > "$T/labels" 2>/dev/null || : > "$T/labels"
 HERE="$(pwd -P 2>/dev/null || pwd)"
-while IFS=$'\t' read -r ts path procs cpu ports attribution; do
+while IFS=$'\t' read -r ts path procs cpu ports attribution source; do
   [ -n "$path" ] || continue
   age="unknown"
   [ "$ts" = "-" ] || age="$(ws_human_age "$((NOW - ts))")"
   name="$(awk -F'\t' -v p="$path" 'function samepath(a,b){return (length(a)==length(b) && index(a,b)==1)} samepath($1,p) { print $2; exit }' "$T/labels")"
   [ -n "$name" ] || name="$(ws_label "$path")"
   case "$HERE" in "$path"|"$path"/*) name="$name ·here" ;; esac
-  printf '  %-28s %-14s %5s  %s  %s\n' \
-    "$name" "$age" "$procs" \
+  case "$source" in
+    claude-transcript) source=Claude ;;
+    codex-transcript) source=Codex ;;
+    claude-transcript,codex-transcript) source=Claude+Codex ;;
+    *) source=unknown ;;
+  esac
+  printf '  %-28s %-12s %-14s %5s  %s  %s\n' \
+    "$name" "$source" "$age" "$procs" \
     "$(s_sevcell "${cpu%%.*}" 50 80 "$(printf '%6s' "$cpu")")" "$ports"
 done < "$T/rows"
 
 echo
 if [ "$IDLE_WS" -gt 0 ]; then
-  s_dim "  $(s_n "$IDLE_WS" workspace workspaces) without Claude transcript activity for over ${WS_IDLE_HOURS}h holding $(s_n "$IDLE_PROCS" process processes)"
+  s_dim "  $(s_n "$IDLE_WS" workspace workspaces) without agent transcript activity for over ${WS_IDLE_HOURS}h holding $(s_n "$IDLE_PROCS" process processes)"
 fi
 s_dim "  Unknown activity is not idle; cwd-only rows are not confirmed workspace ownership."
 s_dim "  glance only reports — use 'afterparty audit' to review what can be cleaned"

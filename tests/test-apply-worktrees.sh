@@ -14,6 +14,11 @@ FAILS=0
 fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 pass() { echo "ok: $*"; }
 T="$(mktemp -d)"
+# Match the physical cwd spelling emitted by real lsof and the shared index.
+T="$(cd "$T" && pwd -P)"
+if command -v cygpath >/dev/null 2>&1; then T="$(cygpath -u "$(cygpath -am "$T")")"; fi
+# Isolate automatic Codex discovery even when CODEX_HOME is inherited.
+export AFTERPARTY_CODEX_ROOT="$T/codex-index"
 trap 'cd /; rm -rf "$T"' EXIT
 
 export XDG_STATE_HOME="$T/state" XDG_CACHE_HOME="$T/cache" HOME="$T/home"

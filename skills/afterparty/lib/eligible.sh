@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # eligible.sh - the two-signal rule, sourced (not executed).
 #
-# Process-plan eligibility combines old Claude transcript-file activity with
+# Process-plan eligibility combines old agent transcript-file activity with
 # low maximum observed CPU in the group. These are conservative policy inputs,
 # not proof that nobody is using the workspace or that its processes are idle:
 #

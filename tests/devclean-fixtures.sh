@@ -23,6 +23,7 @@ devclean_policy_fixture() {
   printf '{"cwd":"%s"}\n' "$workspace" > "$T/devclean-transcripts/fixture/old.jsonl"
   touch -t 202001010000 "$T/devclean-transcripts/fixture/old.jsonl"
   export AFTERPARTY_TRANSCRIPT_ROOT="$T/devclean-transcripts"
+  export AFTERPARTY_CODEX_ROOT="$T/codex-index"
   {
     printf '#!/usr/bin/env bash\n'
     printf 'case "$*" in "-o uid=,etime=,tty=,%%cpu= -p %s") printf "%%s 03:00:00 ? 0.0\\n" "$(id -u)"; exit 0 ;; esac\n' "$pid"

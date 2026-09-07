@@ -2,15 +2,17 @@
 # workspace.sh - workspace attribution and staleness, sourced (not executed) by
 # glance.sh, the same way protect.sh and json.sh are shared.
 #
-# Associates process cwd paths with workspaces found in Claude transcript files
-# and reports the newest selected transcript file's mtime. This is observed
+# Associates process cwd paths with workspaces found in Claude and Codex files
+# and reports the newest observed transcript file's mtime. This is observed
 # agent-file activity, not verified human use or exclusive process ownership.
 # Process-plan callers combine that activity time with observed CPU.
 #
-# A workspace with no readable Claude transcript has NO last-touched time. That is
+# A workspace with no readable transcript has NO last-touched time. That is
 # "cannot tell", never "forgotten" -- callers must not treat unknown as stale.
 
 WS_TRANSCRIPT_ROOT="${AFTERPARTY_TRANSCRIPT_ROOT:-$HOME/.claude/projects}"
+WS_CODEX_ROOT="$HOME/.codex"
+WS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS_IDLE_HOURS="${AFTERPARTY_IDLE_HOURS:-4}"
 WS_STALE_HOURS="${AFTERPARTY_STALE_HOURS:-24}"
 
@@ -33,34 +35,20 @@ ws_human_age() {
   fi
 }
 
-# Emit "<epoch>\t<cwd>" from the newest *.jsonl file in each immediate project
-# directory under AFTERPARTY_TRANSCRIPT_ROOT (default ~/.claude/projects).
-# Epoch is that file's mtime; cwd is its first compact JSON "cwd":"..." field.
-# This does not parse arbitrary transcript JSON or index other agents' formats.
-#
-# Identity comes from the cwd the transcript records, never from the directory
-# name: the slug is lossy (both "/" and "." collapse to "-") and undocumented,
-# so decoding it is ambiguous. grep -m1 stops at the first match, which keeps
-# this cheap even against multi-megabyte transcripts.
+# Emit one "<epoch>\t<cwd>" row per normalized workspace. --sources adds a third
+# column naming the contributing transcript providers. The Python reader merges
+# every session's mtime, including resumed Codex cwd changes and newer ancestor
+# activity. It emits no rows if any present provider cannot be fully inspected.
+# Missing optional roots are okay; directories and files are never modified.
 ws_index() {
   local root="${AFTERPARTY_TRANSCRIPT_ROOT:-$WS_TRANSCRIPT_ROOT}"
-  local dir f newest cwd ts
-  [ -d "$root" ] || return 0
-  for dir in "$root"/*/; do
-    [ -d "$dir" ] || continue
-    newest=""
-    for f in "$dir"*.jsonl; do
-      [ -f "$f" ] || continue
-      if [ -z "$newest" ] || [ "$f" -nt "$newest" ]; then newest="$f"; fi
-    done
-    [ -n "$newest" ] || continue
-    cwd="$(grep -m1 -o '"cwd":"[^"]*"' "$newest" 2>/dev/null)" || continue
-    cwd="${cwd#\"cwd\":\"}"
-    cwd="${cwd%\"}"
-    [ -n "$cwd" ] || continue
-    ts="$(ws_mtime "$newest")" || continue
-    printf '%s\t%s\n' "$ts" "$cwd"
-  done
+  local codex_root="${AFTERPARTY_CODEX_ROOT:-${CODEX_HOME:-$WS_CODEX_ROOT}}"
+  command -v python3 >/dev/null 2>&1 || {
+    echo 'workspace activity unavailable: Python 3 is required to inspect transcripts' >&2
+    return 1
+  }
+  PYTHONUTF8=1 PYTHONIOENCODING=utf-8 PYTHONDONTWRITEBYTECODE=1 python3 "$WS_LIB_DIR/workspace-index.py" \
+    --claude-root "$root" --codex-root "$codex_root" "$@"
 }
 
 # Working directory of a live pid. Requires lsof; without it the caller keeps

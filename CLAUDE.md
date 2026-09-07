@@ -36,13 +36,26 @@ mechanics when you touch them.
   no --apply, and tests/test-glance.sh pins the rejection so a later flag
   cannot make it mutate. Its severity axis is MAGNITUDE (cpu, count, idle
   time); reversibility belongs to the approval surface, not here. Workspace
-  identity and staleness live ONLY in skills/afterparty/lib/workspace.sh
-  (shared - don't duplicate): indexed identity comes from the cwd a Claude transcript
-  records, never from the directory slug, which collapses both "/" and "." to
-  "-" and cannot be decoded unambiguously. A workspace with no transcript has
-  NO last-touched time - treat unknown as "cannot tell", never "forgotten".
-  Activity uses transcript-file mtime, not a measure of human presence; visible
-  processes without an indexed transcript remain visible through cwd attribution.
+  identity and staleness are shared through skills/afterparty/lib/workspace.sh
+  and its Python 3 transcript reader (don't duplicate). Index every Claude
+  immediate-project JSONL file under AFTERPARTY_TRANSCRIPT_ROOT (default
+  $HOME/.claude/projects), plus Codex sessions and archived_sessions under
+  AFTERPARTY_CODEX_ROOT (default ${CODEX_HOME:-$HOME/.codex}). Indexed identity
+  comes from normalized recorded cwd paths, never directory slugs. Use the
+  latest contributing file mtime across providers and retain source provenance.
+  A newer or equally recent indexed ancestor contributes activity and provider
+  provenance to descendants; keep their workspace rows distinct.
+  A Codex session_meta or turn_context can introduce another cwd: subsequent
+  file activity conservatively refreshes every cwd recorded in that file.
+  This is neither human-presence evidence nor exact per-workspace visit time.
+  Indexing only reads existing files; it needs no registration or new hook.
+  An absent optional directory is an empty source. Failed, corrupt or incomplete
+  inspection, including missing Python 3, invalidates the entire activity index;
+  never keep partial timestamps as cleanup evidence. JSONL records over 32 MiB
+  including any trailing newline are unavailable; the exact limit is accepted.
+  A workspace with no
+  transcript has NO last-touched time - treat unknown as "cannot tell", never
+  "forgotten". Visible processes without indexed activity remain visible through cwd attribution.
   Attribution is one `lsof -d cwd` call for the whole machine; per-pid would
   be ~500 forks. Never key staleness on process liveness alone.
 - `plan` proposes and `apply` disposes, and apply NEVER signals: it delegates to
@@ -68,6 +81,8 @@ mechanics when you touch them.
   `pnpm store prune` ONLY — the store is shared across projects, never rm -rf
   it; its configured store may be outside HOME. History also covers whole
   Codex log and Gemini browser-recording directories, not Claude transcripts.
+  These cleanup paths remain under HOME and exclude archived_sessions;
+  activity-index overrides must not widen or redirect deletion scope.
   artifacts deliberately has no --deep flag anymore.
 - Discovery may be heuristic; DESTRUCTION requires fresh, positive proof. Three surfaces are now REPORT-ONLY: `git --clean`, `artifacts --clean`
   (both exit 2), and devclean's roaming `clean_find`

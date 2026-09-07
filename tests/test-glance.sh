@@ -11,6 +11,8 @@ FAILS=0
 fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 pass() { echo "ok: $*"; }
 T="$(mktemp -d)"
+# Isolate automatic Codex discovery even when CODEX_HOME is inherited.
+export AFTERPARTY_CODEX_ROOT="$T/codex-index"
 trap 'cd /; rm -rf "$T"' EXIT
 cd "$REPO" || exit 1
 
@@ -153,7 +155,7 @@ printf '%s\n' "$OUT"  | grep -q '87.3' || fail "G6: plain lost the cpu value"
 _b=$FAILS
 ONE="$(run --oneline 2>/dev/null)"
 [ "$(printf '%s\n' "$ONE" | grep -c .)" -eq 1 ] || fail "G7: --oneline emitted more than one line"
-printf '%s\n' "$ONE" | grep -q 'Claude transcript activity' || fail "G7: --oneline hid the transcript activity source"
+printf '%s\n' "$ONE" | grep -q 'agent transcript activity' || fail "G7: --oneline hid the transcript activity source"
 printf '%s\n' "$ONE" | grep -q "$ESC" && fail "G7: ANSI in piped --oneline"
 [ "$FAILS" -eq "$_b" ] && pass "G7: --oneline is one line and names the idle count"
 

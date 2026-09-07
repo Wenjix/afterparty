@@ -2,10 +2,10 @@
 name: afterparty
 description: Use before starting another localhost server, before ending a turn that spawned long-running processes, when CPU or memory is high, when disk is low, or when the user says "what is running", "what did I leave running", "welcome back", "approve cleanup", "devclean", "orphaned MCP", "cleanup terminals", "localhosts out of control", "free disk space", "stale worktrees", or "leftover branches".
 license: ./LICENSE
-compatibility: Requires Bash 3.2+, Git, and standard Unix process tools. macOS/Linux terminals and WSL are supported; Git Bash provides Git/filesystem commands with degraded process audits.
+compatibility: Bash 3.2+, Git and Unix tools; Python 3 for transcript indexing. macOS/Linux terminals and WSL; Git Bash provides Git/filesystem commands with degraded process audits.
 metadata:
   author: Wenjix
-  version: "0.11.1"
+  version: "0.12.0"
 ---
 
 # Afterparty

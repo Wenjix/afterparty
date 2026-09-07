@@ -251,20 +251,46 @@ transcript activity is an observation, not proof of recent human use.
 `--oneline` fits a tmux status line; `--json` emits JSON Lines.
 
 Severity in the glance combines observed CPU, process count and time since
-Claude transcript activity. It does not measure when a person last looked.
+Claude or Codex transcript activity. It does not measure when a person last looked.
 
 Glance never acts. There is no `--kill`, and a test pins that so a future flag
 cannot quietly turn it into a mutation surface.
 
-**Where activity evidence comes from.** The index reads Claude JSONL transcripts
-under `${AFTERPARTY_TRANSCRIPT_ROOT:-~/.claude/projects}`. Workspace identity
-comes from a transcript's cwd; activity time comes from the transcript file's
-mtime, not a user-presence signal. Other agents' histories are not indexed.
-A workspace with no transcript has no last-touched time
-at all — that reads as *cannot tell*, never as *forgotten*. Process liveness is
-deliberately not the signal: a finished agent leaves its dev server running
-long after you stopped caring, and a long tool call goes quiet while very much
-still working. Set `AFTERPARTY_IDLE_HOURS` to a positive whole number of hours
+**Where activity evidence comes from.** The shared index reads existing Claude
+and Codex JSONL transcripts automatically:
+
+| Provider | Files inspected |
+| --- | --- |
+| Claude | Every `*.jsonl` file in immediate project directories under `${AFTERPARTY_TRANSCRIPT_ROOT:-$HOME/.claude/projects}` |
+| Codex | JSONL files under `sessions` and `archived_sessions` in `${AFTERPARTY_CODEX_ROOT:-${CODEX_HOME:-$HOME/.codex}}` |
+
+Codex discovery includes nested session directories. Workspace identity comes
+from recorded cwd paths, normalized across both providers; activity time is the
+newest contributing transcript-file mtime. Glance identifies the providers
+contributing evidence. Codex `session_meta` and `turn_context` records can name
+multiple workspaces. When that file changes, every recorded workspace receives
+its new mtime conservatively, including when an old session resumes. This is
+file activity, not proof of human presence or a precise per-workspace visit time.
+Activity from an indexed ancestor also contributes to descendant workspaces.
+For example, recent Codex activity in `/repo` keeps an indexed `/repo/subdir`
+from appearing stale solely because its Claude transcript is old. The workspace
+rows stay distinct, with the contributing provider provenance preserved.
+
+Indexing is read-only and discovers existing files without registration,
+migration, or a lifecycle hook. Missing optional transcript directories are
+valid empty sources. A corrupt or unreadable file, incomplete directory scan,
+or missing Python 3 makes the entire activity index unavailable; partial
+timestamps cannot authorize process cleanup. A JSONL record larger than 32 MiB,
+including its trailing newline when present, also makes indexing unavailable;
+records exactly at that limit are accepted. Files and directories are rechecked
+before results are emitted. Concurrent transcript writes can temporarily make
+activity unavailable; retry when the files have stopped changing.
+
+A workspace with no recorded
+activity has no last-touched time — it reads as *cannot tell*, never as
+*forgotten*. Process liveness is deliberately not the signal: a finished agent
+can leave its dev server running, and a long tool call can go quiet while still
+working. Set `AFTERPARTY_IDLE_HOURS` to a positive whole number of hours
 (default 4). Process plan eligibility
 also uses `AFTERPARTY_BUSY_CPU` (default 20 percent per process).
 
@@ -283,8 +309,8 @@ consequences. In-use, busy, unknown, protected, mixed-workspace and unsupported
 process groups are withheld with their reasons. Unknown activity cannot
 establish process abandonment. Worktrees and artifacts use filesystem,
 occupancy and identity checks; they do not require stale transcript evidence.
-Worktree activity labels are informational, and discovery does not require a
-Claude transcript.
+Worktree activity labels are informational, and discovery in the selected
+repository does not require a transcript from either provider.
 
 Edit the boxes, then `afterparty apply cleanup-plan.md`. Every approved item is
 re-checked at its action boundary. A changed fingerprint may indicate replacement
@@ -387,6 +413,8 @@ Python 3; unavailable parsing withholds that target.
 
 `--history` considers Codex session day directories, `~/.codex/log`, and
 `~/.gemini/antigravity/browser_recordings`; it does not clean Claude transcripts.
+Its cleanup paths remain under `HOME`; the activity-index root overrides above
+do not redirect history deletion, and archived Codex sessions are not selected.
 It removes a selected directory only when its newest regular-file mtime is
 older than `CODEX_SESSION_AGE_DAYS` (default 30) and the scan completes. An old
 folder name does not override a recent write. Directory cleanup candidates
@@ -485,8 +513,10 @@ actual targets and consequences even when their checks pass.
   matching; the audit falls back to `grep -E` when it is missing.
 - `lsof` for listener reports and filesystem occupancy checks. Reports expose
   missing tools; worktree and artifact removal require a successful scan.
-- Python 3 for effective JSONC configuration edits and macOS simulator
-  inspection. Missing support withholds those targets.
+- Python 3 for Claude/Codex activity indexing, effective JSONC configuration
+  edits, and macOS simulator inspection. Missing support makes transcript
+  activity unavailable and withholds dependent process cleanup and those
+  optimize/simulator targets. Other CLI capabilities keep their own checks.
 - macOS-only devclean steps (`launchctl` agents, Xcode caches, iOS
   simulators) are skipped on other platforms.
 

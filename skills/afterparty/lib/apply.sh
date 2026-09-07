@@ -65,7 +65,8 @@ NOW="$(date +%s)"
 T="$(mktemp -d)" || exit 1
 trap 'rm -rf "$T"' EXIT
 plan_read_checked "$PLAN" > "$T/checked" || exit 2
-ws_index   > "$T/ws"  2>/dev/null || : > "$T/ws"
+WS_STATUS=ok
+ws_index > "$T/ws" 2> "$T/ws.err" || { : > "$T/ws"; WS_STATUS=unavailable; }
 ws_pid_cwd > "$T/cwd" 2>/dev/null || : > "$T/cwd"
 
 # Facts for one group, sampled NOW: "<last_touched|-> <max_cpu>". A plan
@@ -146,6 +147,11 @@ while IFS=$'\t' read -r type target want_fp category scope; do
         continue
       fi
       # Re-check eligibility against the live world, not the plan's snapshot.
+      if [ "$WS_STATUS" != ok ]; then
+        s_skip "  pgid $pg — refused, activity-unavailable"
+        [ ! -s "$T/ws.err" ] || s_dim "      $(head -n 1 "$T/ws.err")"
+        N_FAILED=$((N_FAILED + 1)); continue
+      fi
       if ! ws_pid_cwd --strict > "$T/cwd" 2>/dev/null || ! facts="$(group_facts "$pg")"; then
         s_skip "  pgid $pg — refused, scan-incomplete"
         N_FAILED=$((N_FAILED + 1)); continue

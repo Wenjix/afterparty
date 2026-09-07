@@ -3,7 +3,7 @@
 # target, for a person to edit.
 #
 # Every actionable item starts unchecked and carries a fingerprint. Process
-# groups require old Claude transcript activity and low observed CPU; in-use,
+# groups require old agent transcript activity and low observed CPU; in-use,
 # busy and unknown groups are withheld. Worktree transcript age is context,
 # not an eligibility gate. Worktree and artifact proposals instead require
 # their filesystem, identity and occupancy checks.
@@ -50,7 +50,8 @@ NOW="$(date +%s)"
 T="$(mktemp -d)" || exit 1
 trap 'rm -rf "$T"' EXIT
 
-ws_index > "$T/ws" 2>/dev/null || : > "$T/ws"
+WS_STATUS=ok
+ws_index > "$T/ws" 2> "$T/ws.err" || { : > "$T/ws"; WS_STATUS=unavailable; }
 ws_pid_cwd > "$T/cwd" 2>/dev/null || : > "$T/cwd"
 ps -Ao pid,pgid,%cpu,command 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {
   pid = $1; pg = $2; cpu = $3
@@ -118,6 +119,10 @@ printf '# Check a box to approve it. apply refuses any item whose fingerprint mo
 printf '# and repeats process eligibility or filesystem checks for each target.\n'
 echo
 printf 'Scope: %s; process/worktree discovery: %s. All actions start unchecked.\n' "$ROOT" "$([ "$ALL" -eq 1 ] && echo machine-wide || echo current-repository)"
+if [ "$WS_STATUS" != ok ]; then
+  printf 'Activity: unavailable; process proposals are withheld.\n'
+  [ ! -s "$T/ws.err" ] || head -n 1 "$T/ws.err"
+fi
 echo '## Process groups'
 echo
 
@@ -194,7 +199,7 @@ while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
   case "$verdict" in
     in-use)  printf -- '      not offered: that workspace was touched recently\n' ;;
     working) printf -- '      not offered: quiet transcript but cpu %s — a long task, not an abandoned one\n' "$cpu" ;;
-    unknown) printf -- '      not offered: no transcript, so there is no staleness signal to trust\n' ;;
+    unknown) printf -- '      not offered: no usable transcript activity, so there is no staleness signal to trust\n' ;;
     *)       printf -- '      not offered: the group vanished before it could be fingerprinted\n' ;;
   esac
 done < "$T/groups"
@@ -220,8 +225,8 @@ echo
 # best-effort attribution, but a failed strict scan must not look unoccupied.
 ws_pid_cwd --strict > "$T/wt-cwd" 2>/dev/null || rm -f "$T/wt-cwd"
 WT_ROWS="$T/wt-rows"; : > "$WT_ROWS"
-# Discovery does not require a staleness signal. A standalone or Codex session
-# may have no Claude history, but its current repository still has worktrees.
+# Discovery does not require a staleness signal. A standalone session may have
+# no agent history, but its current repository still has worktrees.
 printf '%s\n' "$ROOT" > "$T/repo-candidates"
 [ "$ALL" -eq 0 ] || awk -F'\t' '{ print $2 }' "$T/ws" >> "$T/repo-candidates"
 : > "$T/seen-repos"

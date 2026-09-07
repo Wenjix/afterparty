@@ -21,7 +21,7 @@ bash = os.environ['AFTERPARTY_TEST_BASH']
 if os.name == 'nt' and not bash.endswith('.exe') and pathlib.Path(bash+'.exe').is_file():
     bash += '.exe'
 fixture_uid = int(os.environ['AFTERPARTY_TEST_UID'])
-root = pathlib.Path(tempfile.mkdtemp(prefix='afterparty devclean approval-'))
+root = pathlib.Path(tempfile.mkdtemp(prefix='afterparty devclean approval-')).resolve()
 failures = []
 
 def to_shell(path):
@@ -59,7 +59,8 @@ def fixture(name):
                REVIEW_COMMAND='next-server', REVIEW_UID=str(fixture_uid),
                REVIEW_WORKSPACE=shell_path(t/'workspace'), REVIEW_AGENTS='0', REVIEW_AGENT_STATE=shell_path(t/'agents'),
                REVIEW_NATIVE_CALLS=str(t/'calls'), REVIEW_NATIVE_SIM_FILE=str(t/'simulators.json'), REVIEW_SIM_NOOP='0',
-               AFTERPARTY_TRANSCRIPT_ROOT=shell_path(t/'transcripts'), BASH_ENV=shell_path(t/'bash-env'))
+               AFTERPARTY_TRANSCRIPT_ROOT=shell_path(t/'transcripts'),
+               AFTERPARTY_CODEX_ROOT=shell_path(t/'codex-index'), BASH_ENV=shell_path(t/'bash-env'))
     (t/'workspace').mkdir(); (t/'agents').mkdir()
     put(t/'bash-env', '''kill() {
   printf '%s\\n' "$*" >> "$REVIEW_SIGNALS"

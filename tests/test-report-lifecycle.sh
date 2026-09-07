@@ -3,6 +3,8 @@
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$(mktemp -d)"; trap 'cd /; rm -rf "$T"' EXIT
+# Isolate automatic Codex discovery even when CODEX_HOME is inherited.
+export AFTERPARTY_CODEX_ROOT="$T/codex-index"
 mkdir -p "$T/install space" "$T/w" "$T/other" "$T/shim" "$T/home"
 cp -R "$REPO/skills/afterparty" "$T/install space/afterparty"
 LIB="$T/install space/afterparty/lib"; BIN="$T/install space/afterparty/bin/afterparty"
