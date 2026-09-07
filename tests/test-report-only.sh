@@ -111,5 +111,27 @@ for calls in "$T/r2-tools.log" "$T/r3-tools.log"; do
 done
 [ "$FAILS" -eq "$_b" ] && pass "R4: apply uses intercepted machine tools from a disposable cwd"
 
+# ---------- R5: compatibility refusal cannot silently become success ----------
+_b=$FAILS
+mkdir -p "$T/outside"
+for mode in plain json; do
+  if [ "$mode" = json ]; then
+    OUT="$(cd "$T/outside" && bash "$LIB/audit-git.sh" --clean --json 2>&1)"; rc=$?
+  else
+    OUT="$(cd "$T/outside" && bash "$LIB/audit-git.sh" --clean 2>&1)"; rc=$?
+  fi
+  [ "$rc" -eq 2 ] || fail "R5: non-repository --clean ($mode) returned $rc"
+  printf '%s\n' "$OUT" | grep -q 'git --clean is report-only' \
+    || fail "R5: non-repository refusal ($mode) did not explain the flag"
+done
+OUT="$(cd "$T/outside" && bash "$LIB/audit-git.sh" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && printf '%s\n' "$OUT" | grep -q 'not a git repository' \
+  || fail 'R5: ordinary non-repository reporting should remain successful'
+OUT="$(bash "$LIB/clean-artifacts.sh" --root "$T/g/repo" --plan --clean 2>&1)"; rc=$?
+[ "$rc" -eq 2 ] || fail 'R5: --plan --clean silently emitted a successful proposal'
+printf '%s\n' "$OUT" | grep -q -- '--plan and --clean cannot be combined' \
+  || fail 'R5: incompatible artifact modes did not reach the argument guard'
+[ "$FAILS" -eq "$_b" ] && pass 'R5: report-only refusals hold outside Git and for conflicting modes'
+
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi

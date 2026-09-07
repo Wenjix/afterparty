@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# process-ledger.sh - track long-running processes an agent starts, then stop
-# only those recorded process groups when the task is done. Default actions are
-# dry-run so cleanup never surprises the user.
+# process-ledger.sh - record existing processes and review their process groups.
+# add and prune update the ledger immediately; stop signals only with --kill.
+# add attributes a record to the caller's workspace, not the target PID's cwd.
+# Text after -- is an optional display label; it does not launch a command or
+# verify the target's argv. With no label, add reads the target's command.
 #
 # Usage:
 #   process-ledger.sh add --pid 123 --kind dev --port 3000 --purpose "verify UI" -- pnpm dev website
-#   process-ledger.sh list
-#   process-ledger.sh list --json       # JSON Lines (one object per row)
-#   process-ledger.sh stop              # dry run for current repo (--all: every repo)
-#   process-ledger.sh stop --kill       # stop recorded live groups (--keep <pgid> spares one)
-#   process-ledger.sh prune             # drop dead entries for current repo
+#   process-ledger.sh list [--json] [--root DIR | --all] [--kind KIND]
+#   process-ledger.sh stop [--kill] [--root DIR | --all] [--kind KIND] [--keep PGID]
+#   process-ledger.sh prune [--root DIR | --all]
+# list, stop and prune default to the caller's Git root (or exact cwd outside
+# Git). stop --kill acts on matching recorded groups; it has no idle/CPU gate.
+# --keep (alias --keep-pgid) spares one group. Prune drops only verified absent
+# groups and retains records whose group is live or cannot be inspected.
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,7 +35,7 @@ LEDGER_LOCK="${LEDGER}.lock"
 SELF_PGID="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')"
 
 usage() {
-  sed -n '2,12p' "$0"
+  sed -n '2,16p' "$0"
 }
 
 ensure_ledger() {

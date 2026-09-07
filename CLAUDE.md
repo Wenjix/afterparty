@@ -20,15 +20,16 @@ mechanics when you touch them.
   SIGKILL) and skip any group containing a protected process
   (pgid_has_protected); devclean's orphan cleanup signals PIDs instead —
   orphans may share groups with unrelated processes, so group-kill would be
-  riskier there. Orphan-targeting of MCP/agent processes is devclean's
-  feature, not a protect-list violation. The protect list + its helpers live
+  riskier there. Devclean also checks the shared protection patterns and
+  withholds matching PIDs. The protect list + its helpers live
   ONLY in skills/afterparty/lib/protect.sh (shared — don't duplicate). It
   covers bare interactive shells via an end-anchored pattern — argumented
   `sh -c` wrappers inside target groups must stay killable — and running
-  agent sessions (claude, Codex) via an executable-anchored pattern: a bare
+  agent sessions (claude, Codex) via token/path boundaries: a bare
   substring would match the `.claude/...` path in the argv of every shell
   Claude Code spawns, so pgid_has_protected would refuse the dev-server
-  groups this tool exists to clean. Category patterns face the same hazard
+  groups this tool exists to clean. These patterns are heuristic and do not
+  cover every editor, shell invocation, or MCP server. Category patterns face the same hazard
   from the opposite side: an agent's whole prompt lives in its argv, so no
   pattern may span a space with `.*` or it will match ordinary prose.
 - `glance` is the return surface and is READ-ONLY by construction: no --kill,
@@ -36,10 +37,12 @@ mechanics when you touch them.
   cannot make it mutate. Its severity axis is MAGNITUDE (cpu, count, idle
   time); reversibility belongs to the approval surface, not here. Workspace
   identity and staleness live ONLY in skills/afterparty/lib/workspace.sh
-  (shared - don't duplicate): identity comes from the cwd an agent transcript
+  (shared - don't duplicate): indexed identity comes from the cwd a Claude transcript
   records, never from the directory slug, which collapses both "/" and "." to
   "-" and cannot be decoded unambiguously. A workspace with no transcript has
   NO last-touched time - treat unknown as "cannot tell", never "forgotten".
+  Activity uses transcript-file mtime, not a measure of human presence; visible
+  processes without an indexed transcript remain visible through cwd attribution.
   Attribution is one `lsof -d cwd` call for the whole machine; per-pid would
   be ~500 forks. Never key staleness on process liveness alone.
 - `plan` proposes and `apply` disposes, and apply NEVER signals: it delegates to
@@ -49,30 +52,36 @@ mechanics when you touch them.
   plan must withhold any group matching no category or it would approve an
   action that silently never happens. And the checkbox is the authority, not
   the fingerprint - the fingerprint (pgid + start time + command, lib/
-  fingerprint.sh) only proves the group is still the one reviewed, so a
-  recycled pgid is refused rather than re-targeted. Eligibility is the
-  two-signal rule in lib/eligible.sh; `unknown` is never eligible.
+  fingerprint.sh) compares observed identity with the reviewed group. These
+  checks are not atomic OS ownership guarantees. Process eligibility is the
+  two-signal rule in lib/eligible.sh; `unknown` is never eligible for a process
+  plan. Worktrees/artifacts instead require their filesystem, occupancy and
+  identity checks; stale transcript evidence is not required for their removal.
 - TSV rows written for `read` must never carry an empty middle field: tab is
   IFS-whitespace, so consecutive tabs collapse and every later column shifts
   left. Emit a sentinel ("-"). test-review-fixes C6 pins this for the ledger;
   plan.sh reintroduced it once already.
 - devclean --history age-gates Codex session transcripts (CODEX_SESSION_AGE_DAYS,
-  env-overridable, default 30 like Claude Code's retention): transcripts are
+  env-overridable, default 30): transcripts are
   resume history and the audit trail of agent work — date-folder selection is followed by a complete last-modification scan.
   Recent or uninspectable history is withheld. pnpm store maintenance also lives in devclean --disk, as
   `pnpm store prune` ONLY — the store is shared across projects, never rm -rf
-  it; artifacts deliberately has no --deep flag anymore.
+  it; its configured store may be outside HOME. History also covers whole
+  Codex log and Gemini browser-recording directories, not Claude transcripts.
+  artifacts deliberately has no --deep flag anymore.
 - Discovery may be heuristic; DESTRUCTION requires fresh, positive proof. Three surfaces are now REPORT-ONLY: `git --clean`, `artifacts --clean`
   (both exit 2), and devclean's roaming `clean_find`
   project scan (reports, withholds). The cut is roaming-vs-named, not
   apply-vs-report: `clean_dir` targets an exact allowlisted cache path and
   still deletes; `clean_find` walks $DOCUMENTS_ROOT hunting a NAME with no
-  liveness, git-tracked, or age gate. Removal is moving behind plan/apply as
+  liveness, git-tracked, or age gate. Repository removal uses plan/apply as
   typed targets (process-group, worktree, artifact), each with its own
   fingerprint and apply-time policy. Approval does NOT replace safety checks:
   tracked target, symlink or scope escape, repo root, nested repo, and
   incomplete scans stay hard vetoes even when a human ticks the box, and every plan item starts unchecked. Plan defaults to the current repo;
-  --all explicitly widens process/worktree discovery. Devclean requires
+  --all includes other visible Git workspaces for processes and additional
+  transcript-indexed repositories for worktrees. Artifact scope stays the
+  selected repository. Devclean requires
   individual preview target IDs; --disk never implies process stopping.
 - `stop --kill` stops ledger-recorded groups; `audit --kill
   tests|dev|browser` kills by pattern category. Worktree removal requires a
@@ -84,9 +93,12 @@ mechanics when you touch them.
   A nested-repository scan excludes only the worktree's own root `.git` entry;
   ignored nested repositories and scan failures still veto removal.
 - Mutation receipts are postcondition-based: signal delivery and `rm` return
-  codes are not enough. Confirm the process/group is absent or the target path
-  disappeared, count partial failures, return nonzero, and append the outcome
-  through lib/journal.sh. Never journal dry runs.
+  codes are not enough for signals and path deletion. Confirm the process/group
+  is absent or the target path disappeared; native-tool operations such as pnpm
+  maintenance use that tool's result. Count failures, return nonzero, and append
+  mutation outcomes through lib/journal.sh. Some pre-mutation refusals are only
+  printed. Never journal dry runs; receipt failure must not erase a confirmed
+  mutation from counts or return a successful overall status.
 - Private mutable state is centralized in lib/state.sh. Reports are
   workspace-keyed unless a repo opts into gitignored report.md; ledger add and
   prune mutations must hold the portable lock. Preserve 0700/0600 modes where
@@ -134,29 +146,30 @@ mechanics when you touch them.
   test, and a receipt hardcoded the words the assertion searched for. Verify a
   new guard by mutating the production code in a scratch copy and confirming the
   test goes red.
-- Test isolation is by PATH shim, not by HOME: two devclean surfaces address
-  the real machine whatever HOME says. run_safe_orphans runs in default/explicit --orphans mode and may signal
-  reviewed targets under --apply --target (and
-  ORPHAN_PATTERNS includes claude and codex), and the background-agent step
-  drives launchctl gui/<uid>/<label>. Any test that reaches --apply MUST
-  shim pgrep, launchctl AND pnpm, or it will kill the developer's own agents,
-  disable their real ChatGPT/Figma agents, and prune their shared pnpm store.
-  pnpm is the third HOME-immune surface: it resolves its store from the OS
-  passwd entry, not $HOME or XDG vars, so fixture isolation does not reach it. Verify with a logging shim on
+- Test isolation requires intercepted tools/signals and disposable state, not
+  just HOME. Orphan discovery reaches the real process table and launch-agent
+  operations reach launchctl gui/<uid>/<label>. pnpm resolves a configured
+  store that may be independent of HOME. Any fixture reaching --apply MUST
+  intercept kill, pgrep, launchctl AND pnpm before entering production code.
+  ORPHAN_PATTERNS includes agent names, but shared protection still vetoes them.
+  Verify with a logging shim on
   PATH: nothing from an --apply path should reach the real binaries.
+  The Linux live-kill suite intentionally uses real processes and broad category
+  discovery; run the full suite in a disposable VM/container or CI runner.
   Fixtures that age files need the GNU-then-BSD touch fallback (touch -d,
   else touch -t with date -v) — the suite must pass on macOS too.
 
-**Environment gotcha:** I develop on Windows 11 but the scripts are bash targeting
-macOS/Linux. Under Git Bash, `rg` and `lsof` are missing and `ps` lacks -Ao, so
-process audits print loud warnings and mostly-empty reports — expected, not a bug.
-`afterparty git` IS fully testable here (git works; note it emits C:/ paths while
-$PWD is /c/ — never compare them). Verify with `bash -n`, `bash tests/run.sh`
-(tests/test-kill.sh self-skips here), and `claude plugin validate .`; real kill
-behavior is covered by CI's ubuntu job (tests/test-kill.sh — live processes).
+**Platform notes:** The scripts target macOS/Linux Bash. Under stock Git Bash,
+`rg` and `lsof` may be missing and `ps` lacks the required detailed table;
+process audits must report unavailable evidence. Git reports work, but worktree
+and artifact deletion still require complete occupancy and identity evidence.
+Git may emit C:/ paths while $PWD is /c/ — normalize before comparing. Use
+`bash -n` for syntax; the full suite belongs in an isolated runner and the
+live-kill suite self-skips on unsupported platforms. Validate the marketplace,
+plugin manifest, skills and commands explicitly as described in README.md;
+marketplace validation alone does not inspect skill/command/hook contents.
 Check line endings with `git ls-files --eol` (MSYS grep silently strips CR, so
-grepping for \r lies); if a working copy shows w/crlf, fix via `rm` +
-`git checkout --`.
+grepping for \r lies). Normalize line endings without discarding local edits.
 
 **Conventions:** lowercase conventional commits (feat:/fix:/docs:/style:).
 LF endings enforced via .gitattributes — scripts must never pick up CRLF.
@@ -168,5 +181,6 @@ CHANGELOG.md in the same change.
 blocking; full severity is advisory-only for now). Cleanup areas researched
 (2026-07) but deliberately deferred:
 ml/gpu audit category (jupyter, ollama/vllm, tensorboard, nvidia-smi VRAM
-orphans), docker debris, and agent harness-state cleanup (old
-transcripts/scratchpads, temp browser profiles).
+orphans), docker debris, and additional agent harness-state cleanup
+(scratchpads and temporary browser profiles). Codex history and Gemini browser
+recordings already have the explicit devclean --history mode.

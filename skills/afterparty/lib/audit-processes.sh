@@ -1,22 +1,24 @@
 #!/usr/bin/env bash
-# audit-processes.sh — find (and optionally kill) stray agent-spawned processes
-# that linger after a task and burn CPU/RAM: test/watch runners, dev servers, and
-# automation browsers. Default is a DRY-RUN report. Killing requires --kill and a
-# category. Kills happen by process GROUP (pgid) so the whole pnpm->node->worker tree
-# dies together, and a hardcoded protect-list keeps IDEs/agent-runtimes/MCP servers
-# safe.
+# audit-processes.sh — report visible test/watch runners, dev servers and
+# automation browsers. Classification does not prove an agent spawned them or
+# that they are idle. --kill CATEGORY authorizes all matching visible groups;
+# --pgid narrows that set. Signals affect every current member of a process
+# group, including unclassified siblings; descendants in other groups remain.
+# Identity checks and the bundled protection patterns can withhold signals.
 #
 # Usage:
 #   audit-processes.sh                      # report all categories (dry run)
-#   audit-processes.sh --kill tests         # kill runaway test/watch groups
-#   audit-processes.sh --kill dev --keep 87239   # kill dev servers except pgid 87239
-#   audit-processes.sh --kill browser       # kill automation Chrome (never MCP servers)
-#   audit-processes.sh --kill tests,dev     # multiple categories
+#   audit-processes.sh --kill tests         # all detected test/watch groups
+#   audit-processes.sh --kill dev --keep 87239   # all detected dev groups except 87239
+#   audit-processes.sh --kill browser       # all detected automation-browser groups
+#   audit-processes.sh --kill tests,dev     # multiple machine-wide categories
 #   audit-processes.sh --kill dev --pgid 123,456  # only reviewed groups
 #   audit-processes.sh --kill dev --pgid 123 --expect 123:9f3ac1b2c3d4  # and only if unchanged
 #   audit-processes.sh --json               # JSON Lines report (no --kill)
+#   audit-processes.sh --strict             # nonzero for unavailable process/listener scans
 #
-# Exit codes: 0 ok · 1 unavailable/failed mutation · 2 usage error.
+# Exit codes: 0 report/no failed cleanup (may include protected or absent groups);
+# 1 failed cleanup or unavailable scans with --strict; 2 usage error.
 set -uo pipefail
 
 # --- constants ---------------------------------------------------------------
@@ -33,7 +35,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Category patterns live in categories.sh so plan.sh matches on exactly the
 # same definitions this script kills by; duplicating them is how the two drift.
 . "$DIR/categories.sh"
-# Identity checked at the signal boundary when --expect is supplied.
+# Identity is checked at the signal boundary. --expect supplies the reviewed
+# fingerprint; otherwise the command captures one for each selected group.
 . "$DIR/fingerprint.sh"
 LOCALHOST_RE='^(node|bun|deno|python|uvicorn|ruby|rails|go|cargo|java|next|vite|webpack|cloudflared)[[:space:]]|:3000|:3001|:3002|:5173|:5174|:8000|:8080|:8787'
 
@@ -372,7 +375,7 @@ while [ $# -gt 0 ]; do
     --expect) EXPECT_MAP="$(need_value "$1" "${2-}")" || exit 2; shift 2 ;;
     --json) JSON=1; shift ;;
     --strict) STRICT=1; shift ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -510,7 +513,7 @@ if [ -z "$KILL_CATS" ]; then
     "DRY RUN — reporting stray processes (use --kill <tests|dev|browser> to act)"
   s_dim "Scope: all visible workspaces; detected processes are not necessarily idle"
   report_localhost;                                                N_LISTEN=$LAST_N
-  report "Test / watch runners (usually safe to kill)" tests;  N_TESTS=$LAST_N
+  report "Test / watch runners (review current work before stopping)" tests;  N_TESTS=$LAST_N
   report "Dev servers (keep the one you are actively using)" dev; N_DEV=$LAST_N
   report "Automation browsers (close via the browser tool first)" browser; N_BROWSER=$LAST_N
   N_UNAVAILABLE=0

@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
-# clean-artifacts.sh — report (and optionally delete) regenerable build/cache
+# clean-artifacts.sh — report or propose known build/cache
 # artifacts in a repo: Turborepo/Next/Vite caches, build outputs, test artifacts,
 # *.tsbuildinfo, eslint cache, coverage. Default is a DRY-RUN with sizes.
 #
 # Usage:
 #   clean-artifacts.sh [--root DIR]          # report reclaimable space (dry run)
 #   clean-artifacts.sh --plan [--root DIR]   # unchecked artifact proposal
-#   clean-artifacts.sh --plan --caches-only # omit build outputs
+#   clean-artifacts.sh --plan --caches-only # omit build and test outputs
 #   clean-artifacts.sh --clean              # report-only, exits 2
 #
-# Safety: only well-known artifact paths are touched; node_modules/.git/nested
-# repos are pruned; matched dirs are not descended into (no double counting);
-# any path that still contains git-tracked files is skipped.
-# Exit: 0 ok · 1 partial cleanup failure · 2 usage/scope refusal.
+# No deletion occurs here. afterparty apply removes only reviewed typed targets
+# that pass fresh Git, filesystem, scope, occupancy and identity checks.
+# Discovery skips dependency/repository traversal and withholds tracked/nested
+# targets. The legacy --allow-non-repo-root flag never permits removal.
+# Exit: 0 report/proposal completed · 1 incomplete scan · 2 usage/scope refusal.
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,10 +34,14 @@ while [ $# -gt 0 ]; do
     --plan) AS_PLAN=1; shift ;;
     --caches-only) CACHES_ONLY=1; shift ;;
     --allow-non-repo-root) ALLOW_NON_REPO_ROOT=1; shift ;;
-    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^set -uo pipefail/{ /^set /d; p; }' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
+if [ "$AS_PLAN" -eq 1 ] && [ "$CLEAN_REQUESTED" -eq 1 ]; then
+  echo '--plan and --clean cannot be combined; --clean is report-only' >&2
+  exit 2
+fi
 
 if [ ! -d "$ROOT" ]; then
   echo "artifact root is not a directory: $ROOT" >&2
@@ -49,7 +54,7 @@ if git -C "$ROOT" rev-parse --show-toplevel >/dev/null 2>&1; then
   ROOT="$(git -C "$ROOT" rev-parse --show-toplevel)"
   ROOT="$(cd "$ROOT" && pwd -P)"
 elif [ "$CLEAN_REQUESTED" -eq 1 ] && [ "$ALLOW_NON_REPO_ROOT" -ne 1 ]; then
-  echo "refusing artifact cleanup outside a git repository: $ROOT (pass --allow-non-repo-root to override)" >&2
+  echo "artifacts --clean is report-only; typed removal requires a Git repository: $ROOT" >&2
   exit 2
 fi
 

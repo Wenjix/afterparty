@@ -4,18 +4,19 @@
 # prompt text.
 #
 # Usage:
-#   agent-hygiene.sh list [--json] [--all]
-#   agent-hygiene.sh audit [--kill <tests|dev|browser>] [--keep <pgid>] [--json] [--report]
+#   agent-hygiene.sh list [--json] [--all|--root DIR] [--kind KIND]
+#   agent-hygiene.sh audit [--strict] [--json|--report]
+#   agent-hygiene.sh audit --kill tests,dev,browser [--pgid ID[,ID...]] [--keep ID]
 #   agent-hygiene.sh add --pid 123 --kind dev --port 3000 --purpose "verify UI" -- pnpm dev website
-#   agent-hygiene.sh stop [--kill] [--keep <pgid>] [--all]
-#   agent-hygiene.sh prune
+#   agent-hygiene.sh stop [--kill] [--keep PGID] [--all|--root DIR] [--kind KIND]
+#   agent-hygiene.sh prune [--all|--root DIR]
 #   agent-hygiene.sh git [--clean] [--age <days>] [--root <dir>] [--json]
-#   agent-hygiene.sh artifacts [clean-artifacts args...]
+#   agent-hygiene.sh artifacts [--root DIR] [--caches-only] [--plan|--clean]
 #   agent-hygiene.sh devclean [--orphans|--deep|--optimize|--disk|--history] [--apply --target ID]
 #   agent-hygiene.sh glance [--oneline] [--json]
 #   agent-hygiene.sh plan [--root DIR] [--all] [--artifacts-only] [--caches-only]
 #   agent-hygiene.sh apply <plan.md>
-#   agent-hygiene.sh doctor
+#   agent-hygiene.sh doctor [--strict]
 #   agent-hygiene.sh report [--show|--remind]
 #   agent-hygiene.sh report-path
 #   agent-hygiene.sh actions [--all|--workspace DIR] [--since YYYY-MM-DD] [--path]
@@ -32,9 +33,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/journal.sh"
 
 usage() {
-  # Range tracks the header comment above; adding a command line means
-  # widening it, or the last entry silently drops out of --help.
-  sed -n '2,23p' "$0"
+  # The header ends at set; additional usage lines must remain visible.
+  sed -n '2,/^set -euo pipefail/{ /^set /d; p; }' "$0"
 }
 
 # The one finale card for the composite audit, fed by the children's tally.
@@ -116,7 +116,7 @@ print_finale_card() {
       s_card_line "     ${C_CYAN}afterparty stop --kill${C_RESET}"
     fi
     if [ "$found" -gt 0 ]; then
-      s_card_line "     ${C_CYAN}afterparty audit --kill tests,dev,browser${C_RESET}"
+      s_card_line "     ${C_CYAN}afterparty audit --kill tests,dev,browser --pgid <reviewed-pgid>${C_RESET}"
     fi
     if [ "$gitf" -gt 0 ]; then
       s_card_line "     ${C_CYAN}afterparty plan${C_RESET}  (git --clean is report-only)"

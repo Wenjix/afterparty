@@ -5,7 +5,7 @@ license: ./LICENSE
 compatibility: Requires Bash 3.2+, Git, and standard Unix process tools. macOS/Linux terminals and WSL are supported; Git Bash provides Git/filesystem commands with degraded process audits.
 metadata:
   author: Wenjix
-  version: "0.11.0"
+  version: "0.11.1"
 ---
 
 # Afterparty
@@ -19,7 +19,7 @@ On return:
 "${CLAUDE_SKILL_DIR}/bin/afterparty" glance
 ```
 
-Save a checklist; have the user approve targets, then apply:
+Save a checklist; apply only targets the user has approved:
 
 ```bash
 "${CLAUDE_SKILL_DIR}/bin/afterparty" plan > cleanup-plan.md
@@ -53,8 +53,8 @@ Only act after reviewing the dry run:
 `git`/`artifacts` report; approve removal through `plan`/`apply`.
 Devclean requires reviewed `--target` IDs.
 
-`--json` emits JSON Lines. `audit --report` saves a snapshot; `report-path`
-locates it. Hooks only record session endings. `actions` shows workspace history.
+Supported `--json` commands emit JSON Lines. `audit --report` saves a snapshot;
+`report-path` locates it. Plugin hooks remind on start and record end markers;
+Plain skill installs include no hooks. `actions` shows workspace history.
 
-Never kill the editor, Codex, the user's shell, or shared MCP servers unless the
-script proves they are safe orphaned targets.
+Scripts always withhold protected editors, agents, shells, and shared MCP servers.

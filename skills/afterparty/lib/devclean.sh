@@ -11,7 +11,7 @@
 #   devclean.sh --disk                   # preview rebuildable caches; never signals
 #   devclean.sh --history                # preview stale transcripts/logs/recordings
 #   devclean.sh --disk --apply --target ID # apply one reviewed target
-#   devclean.sh --target ID --target ID  # select multiple targets
+#   devclean.sh --disk --apply --target ID --target ID # apply multiple disk targets
 #   devclean.sh --dry-run                # force preview
 #   devclean.sh --documents-root DIR    # where --disk scans for project artifacts
 #   devclean.sh --project-maxdepth N    # --disk project scan depth (default 6)
@@ -19,8 +19,8 @@
 #   devclean.sh --allow-broad-documents-root # permit HOME/root project scans
 set -uo pipefail
 
-# Every cleanup target below is composed from $HOME; an empty HOME would turn
-# them into root-anchored paths.
+# Filesystem cleanup paths are composed from $HOME, except the configured pnpm
+# store. An empty HOME would turn the composed paths into root-anchored paths.
 if [ -z "${HOME:-}" ]; then
   echo "devclean.sh: HOME is not set; refusing to run" >&2
   exit 2
@@ -126,9 +126,17 @@ N_PROC=0
 N_PROC_STOPPED=0
 N_OPT=0   # optimize findings/actions: crash reporters, crashpad files, agents
 N_OPT_DONE=0
-N_FAILED=0
-# Age gate for Codex session transcripts; default matches Claude Code's
-# default transcript retention. Override via the environment.
+N_FAILED=0 N_RECEIPT_FAILED=0
+# Receipt persistence is independent of the action's verified postcondition.
+# Preserve confirmed action counts, but never let a lost receipt return success.
+devclean_receipt() {
+  if ! journal_action "$@"; then
+    N_RECEIPT_FAILED=$((N_RECEIPT_FAILED + 1))
+    printf 'devclean: receipt unavailable for %s (%s); action outcome is unchanged\n' "$1" "$3" >&2
+  fi
+}
+# Age gate for Codex sessions/logs and Gemini browser recordings. Override via
+# the environment; only wholly stale directories of at least 1 MiB are offered.
 CODEX_SESSION_AGE_DAYS="${CODEX_SESSION_AGE_DAYS:-30}"
 case "$CODEX_SESSION_AGE_DAYS" in
   ''|0|*[!0-9]*) echo "CODEX_SESSION_AGE_DAYS wants a positive whole number of days" >&2; exit 2 ;;
@@ -285,22 +293,48 @@ filter_pids() {
 }
 
 pids_by_pattern() {
-  local pattern="$1" scope="${2:-all}" rc
+  local pattern="$1" scope="${2:-all}" rc snapshot matches
   if command -v pgrep >/dev/null 2>&1; then
     if [ "$scope" = "orphans" ]; then
-      pgrep -P 1 -f "$pattern" 2>/dev/null; rc=$?
+      matches="$(pgrep -P 1 -f "$pattern" 2> "$PROCESS_CONTEXT/discovery.err")"; rc=$?
     else
-      pgrep -f "$pattern" 2>/dev/null; rc=$?
+      matches="$(pgrep -f "$pattern" 2> "$PROCESS_CONTEXT/discovery.err")"; rc=$?
     fi
-    [ "$rc" -le 1 ] || : > "$PROCESS_CONTEXT/discovery-incomplete"
-    return
+    # pgrep uses 1 for a completed search with no matches, and 2+ for failure.
+    # Never let partial output, malformed PIDs or diagnostic warnings imply a
+    # complete candidate list.
+    if [ "$rc" -gt 1 ] || [ -s "$PROCESS_CONTEXT/discovery.err" ]; then
+      : > "$PROCESS_CONTEXT/discovery-incomplete"; return 2
+    fi
+    if [ "$rc" -eq 1 ] && [ -z "$matches" ]; then return 0; fi
+    if [ "$rc" -ne 0 ] || ! printf '%s\n' "$matches" | awk '
+      /^[[:space:]]*[0-9]+[[:space:]]*$/ {seen=1; next}
+      {bad=1}
+      END {exit (bad || !seen)}'; then
+      : > "$PROCESS_CONTEXT/discovery-incomplete"; return 2
+    fi
+    printf '%s\n' "$matches"
+    return 0
   fi
 
-  if [ "$scope" = "orphans" ]; then
-    ps -eo ppid=,pid=,command= 2>/dev/null | awk '$1 == 1 { $1=""; print }' | match_i "$pattern" | awk '{print $1}' || true
-  else
-    ps -eo pid=,command= 2>/dev/null | match_i "$pattern" | awk '{print $1}' || true
+  # Separate scanner success from a matcher returning 1 for "no candidates".
+  # A successful full process table must contain at least one valid row.
+  if ! snapshot="$(ps -eo ppid=,pid=,command= 2> "$PROCESS_CONTEXT/discovery.err")" \
+    || [ -s "$PROCESS_CONTEXT/discovery.err" ] \
+    || ! printf '%s\n' "$snapshot" | awk '
+      NF >= 3 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {seen=1; next}
+      {bad=1}
+      END {exit (bad || !seen)}'; then
+    : > "$PROCESS_CONTEXT/discovery-incomplete"; return 2
   fi
+  matches="$(printf '%s\n' "$snapshot" \
+    | awk -v scope="$scope" 'scope != "orphans" || $1 == 1 {$1=""; print}' \
+    | match_i "$pattern")"; rc=$?
+  case "$rc" in
+    0) printf '%s\n' "$matches" | awk '{print $1}' ;;
+    1) return 0 ;;
+    *) : > "$PROCESS_CONTEXT/discovery-incomplete"; return 2 ;;
+  esac
 }
 
 print_process_table() {
@@ -356,10 +390,10 @@ terminate_pids() {
       [ -n "$expected" ] || identity_rc=2
       if [ "$identity_rc" -eq 1 ]; then
         s_skip "  pid $pid identity changed before signal — skipped"
-        journal_action process.stop "pid:$pid" failed "identity changed before signal"
+        devclean_receipt process.stop "pid:$pid" failed "identity changed before signal"
       else
         s_skip "  could not inspect pid $pid immediately before signal — skipped"
-        journal_action process.stop "pid:$pid" failed "identity unavailable before signal"
+        devclean_receipt process.stop "pid:$pid" failed "identity unavailable before signal"
       fi
       failed=$((failed + 1))
     fi
@@ -391,7 +425,7 @@ terminate_pids() {
       set -- $pids
       N_PROC_STOPPED=$((N_PROC_STOPPED + $#))
       for pid in $pids; do
-        journal_action process.stop "pid:$pid" succeeded "process confirmed absent"
+        devclean_receipt process.stop "pid:$pid" succeeded "process confirmed absent"
       done
       N_FAILED=$((N_FAILED + failed))
       [ "$failed" -eq 0 ]
@@ -412,10 +446,10 @@ terminate_pids() {
       handled="$handled $pid"
       if [ "$identity_rc" -eq 1 ]; then
         s_skip "  pid $pid identity changed before SIGKILL — skipped"
-        journal_action process.stop "pid:$pid" failed "identity changed before SIGKILL"
+        devclean_receipt process.stop "pid:$pid" failed "identity changed before SIGKILL"
       else
         s_skip "  could not inspect pid $pid before SIGKILL — skipped"
-        journal_action process.stop "pid:$pid" failed "identity unavailable before SIGKILL"
+        devclean_receipt process.stop "pid:$pid" failed "identity unavailable before SIGKILL"
       fi
       failed=$((failed + 1))
     fi
@@ -425,16 +459,16 @@ terminate_pids() {
     case " $handled " in *" $pid "*) continue ;; esac
     if pid_exists "$pid"; then
       s_skip "  failed to stop pid $pid"
-      journal_action process.stop "pid:$pid" failed "process still live"
+      devclean_receipt process.stop "pid:$pid" failed "process still live"
       failed=$((failed + 1))
     else
       state_rc=$?
       if [ "$state_rc" -eq 2 ]; then
         s_skip "  could not confirm pid $pid exited"
-        journal_action process.stop "pid:$pid" failed "exit could not be confirmed"
+        devclean_receipt process.stop "pid:$pid" failed "exit could not be confirmed"
         failed=$((failed + 1))
       else
-        journal_action process.stop "pid:$pid" succeeded "process confirmed absent"
+        devclean_receipt process.stop "pid:$pid" succeeded "process confirmed absent"
         stopped=$((stopped + 1))
       fi
     fi
@@ -449,6 +483,7 @@ cleanup_pattern() {
   pids="$(filter_pids $(pids_by_pattern "$pattern" "$scope"))"
   s_hdr "$label ($scope)"
   if [ -e "$PROCESS_CONTEXT/discovery-incomplete" ]; then
+    N_FAILED=$((N_FAILED + 1))
     withhold "$label" 'process discovery unavailable'; return 1
   fi
   if [ -z "$pids" ]; then
@@ -549,10 +584,10 @@ sys.exit(0 if states == ["Shutdown"] else 1)
 SIMS
       then
         N_OPT_DONE=$((N_OPT_DONE + 1)); s_ok "  confirmed simulator shutdown: $name"
-        journal_action simulator.shutdown "$udid" succeeded 'device state is Shutdown'
+        devclean_receipt simulator.shutdown "$udid" succeeded 'device state is Shutdown'
       else
         N_FAILED=$((N_FAILED + 1)); s_skip "  could not confirm simulator shutdown: $name"
-        journal_action simulator.shutdown "$udid" failed 'Shutdown state could not be confirmed'
+        devclean_receipt simulator.shutdown "$udid" failed 'Shutdown state could not be confirmed'
       fi
     fi
   done < "$PROCESS_CONTEXT/booted"
@@ -588,11 +623,11 @@ patch_crash_reporters() {
       N_OPT_DONE=$((N_OPT_DONE + 1))
       s_ok "  disabled crash reporter in $label"
       printf '    Restore after closing the app: cp -- %q %q\n' "$backup" "$argv"
-      journal_action config.update "$argv" succeeded "disabled crash reporter; restore=$backup"
+      devclean_receipt config.update "$argv" succeeded "disabled crash reporter; restore=$backup"
     else
       N_FAILED=$((N_FAILED + 1))
       s_skip "  failed to disable crash reporter in $label"
-      journal_action config.update "$argv" failed 'active JSONC setting was not changed'
+      devclean_receipt config.update "$argv" failed 'active JSONC setting was not changed'
     fi
   done
   [ "$found" -eq 1 ] || s_dim "  (none enabled)"
@@ -619,7 +654,7 @@ clean_crashpad_dumps() {
         s_skip "  refusing Crashpad directory outside HOME: $dir"
         if [ "$DRY_RUN" -eq 0 ]; then
           N_FAILED=$((N_FAILED + 1))
-          journal_action crash_dump.clean "$dir" failed "target resolves outside HOME or is a symlink"
+          devclean_receipt crash_dump.clean "$dir" failed "target resolves outside HOME or is a symlink"
         fi
         continue
       fi
@@ -629,7 +664,7 @@ clean_crashpad_dumps() {
         s_skip "  could not inspect Crashpad directory: $dir"
         if [ "$DRY_RUN" -eq 0 ]; then
           N_FAILED=$((N_FAILED + 1))
-          journal_action crash_dump.clean "$dir" failed "initial scan unavailable"
+          devclean_receipt crash_dump.clean "$dir" failed "initial scan unavailable"
         fi
         continue
       fi
@@ -643,7 +678,7 @@ clean_crashpad_dumps() {
         find "$dir" -type f -exec rm -f {} + 2>/dev/null
         if ! remaining="$(count_files "$dir")"; then
           s_skip "  could not confirm Crashpad cleanup under $dir"
-          journal_action crash_dump.clean "$dir" failed "postcondition scan unavailable"
+          devclean_receipt crash_dump.clean "$dir" failed "postcondition scan unavailable"
           N_FAILED=$((N_FAILED + 1))
           continue
         fi
@@ -652,10 +687,10 @@ clean_crashpad_dumps() {
         N_OPT_DONE=$((N_OPT_DONE + removed))
         if [ "${remaining:-0}" -eq 0 ]; then
           s_ok "  deleted $removed files under $dir"
-          journal_action crash_dump.clean "$dir" succeeded "files=$removed"
+          devclean_receipt crash_dump.clean "$dir" succeeded "files=$removed"
         else
           s_skip "  failed to delete ${remaining:-0} files under $dir"
-          journal_action crash_dump.clean "$dir" failed "deleted=$removed; remaining=${remaining:-0}"
+          devclean_receipt crash_dump.clean "$dir" failed "deleted=$removed; remaining=${remaining:-0}"
           N_FAILED=$((N_FAILED + 1))
         fi
       fi
@@ -668,7 +703,7 @@ clean_crashpad_dumps() {
         s_skip "  refusing diagnostic reports outside HOME: $diag"
         if [ "$DRY_RUN" -eq 0 ]; then
           N_FAILED=$((N_FAILED + 1))
-          journal_action crash_dump.clean "$diag" failed "target resolves outside HOME or is a symlink"
+          devclean_receipt crash_dump.clean "$diag" failed "target resolves outside HOME or is a symlink"
         fi
       else
         diag="$canonical"
@@ -677,7 +712,7 @@ clean_crashpad_dumps() {
           s_skip "  could not inspect diagnostic reports: $diag"
           if [ "$DRY_RUN" -eq 0 ]; then
             N_FAILED=$((N_FAILED + 1))
-            journal_action crash_dump.clean "$diag" failed "initial scan unavailable"
+            devclean_receipt crash_dump.clean "$diag" failed "initial scan unavailable"
           fi
           n=0
         fi
@@ -691,7 +726,7 @@ clean_crashpad_dumps() {
             find "$diag" -name 'chrome_crashpad_handler*.ips' -type f -exec rm -f {} + 2>/dev/null
             if ! remaining="$(count_files "$diag" 'chrome_crashpad_handler*.ips')"; then
               s_skip "  could not confirm diagnostic report cleanup under $diag"
-              journal_action crash_dump.clean "$diag" failed "postcondition scan unavailable"
+              devclean_receipt crash_dump.clean "$diag" failed "postcondition scan unavailable"
               N_FAILED=$((N_FAILED + 1))
             else
               removed=$((n - ${remaining:-0}))
@@ -699,10 +734,10 @@ clean_crashpad_dumps() {
               N_OPT_DONE=$((N_OPT_DONE + removed))
               if [ "${remaining:-0}" -eq 0 ]; then
                 s_ok "  deleted $removed chrome_crashpad_handler reports"
-                journal_action crash_dump.clean "$diag" succeeded "files=$removed"
+                devclean_receipt crash_dump.clean "$diag" succeeded "files=$removed"
               else
                 s_skip "  failed to delete ${remaining:-0} chrome_crashpad_handler reports"
-                journal_action crash_dump.clean "$diag" failed "deleted=$removed; remaining=${remaining:-0}"
+                devclean_receipt crash_dump.clean "$diag" failed "deleted=$removed; remaining=${remaining:-0}"
                 N_FAILED=$((N_FAILED + 1))
               fi
             fi
@@ -718,7 +753,7 @@ clean_crashpad_dumps() {
         s_skip "  refusing Crashpad directory outside HOME: $dir"
         if [ "$DRY_RUN" -eq 0 ]; then
           N_FAILED=$((N_FAILED + 1))
-          journal_action crash_dump.clean "$dir" failed "target resolves outside HOME or is a symlink"
+          devclean_receipt crash_dump.clean "$dir" failed "target resolves outside HOME or is a symlink"
         fi
         continue
       fi
@@ -728,7 +763,7 @@ clean_crashpad_dumps() {
         s_skip "  could not inspect Crashpad directory: $dir"
         if [ "$DRY_RUN" -eq 0 ]; then
           N_FAILED=$((N_FAILED + 1))
-          journal_action crash_dump.clean "$dir" failed "initial scan unavailable"
+          devclean_receipt crash_dump.clean "$dir" failed "initial scan unavailable"
         fi
         continue
       fi
@@ -742,7 +777,7 @@ clean_crashpad_dumps() {
         find "$dir" -type f -exec rm -f {} + 2>/dev/null
         if ! remaining="$(count_files "$dir")"; then
           s_skip "  could not confirm Crashpad cleanup under $dir"
-          journal_action crash_dump.clean "$dir" failed "postcondition scan unavailable"
+          devclean_receipt crash_dump.clean "$dir" failed "postcondition scan unavailable"
           N_FAILED=$((N_FAILED + 1))
           continue
         fi
@@ -751,10 +786,10 @@ clean_crashpad_dumps() {
         N_OPT_DONE=$((N_OPT_DONE + removed))
         if [ "${remaining:-0}" -eq 0 ]; then
           s_ok "  deleted $removed files under $dir"
-          journal_action crash_dump.clean "$dir" succeeded "files=$removed"
+          devclean_receipt crash_dump.clean "$dir" succeeded "files=$removed"
         else
           s_skip "  failed to delete ${remaining:-0} files under $dir"
-          journal_action crash_dump.clean "$dir" failed "deleted=$removed; remaining=${remaining:-0}"
+          devclean_receipt crash_dump.clean "$dir" failed "deleted=$removed; remaining=${remaining:-0}"
           N_FAILED=$((N_FAILED + 1))
         fi
       fi
@@ -794,16 +829,16 @@ disable_background_agents() {
           N_OPT_DONE=$((N_OPT_DONE + 1))
           s_ok "  disabled $name ($label)"
           s_dim "    Restore: launchctl enable gui/$(id -u)/$label ; then reopen $name's application"
-          journal_action background_agent.disable "$label" succeeded "$name"
+          devclean_receipt background_agent.disable "$label" succeeded "$name"
         else
           N_FAILED=$((N_FAILED + 1))
           s_skip "  failed to stop $name ($label)"
-          journal_action background_agent.disable "$label" failed "agent still registered"
+          devclean_receipt background_agent.disable "$label" failed "agent still registered"
         fi
       else
         N_FAILED=$((N_FAILED + 1))
         s_skip "  failed to disable $name ($label)"
-        journal_action background_agent.disable "$label" failed "launchctl disable failed"
+        devclean_receipt background_agent.disable "$label" failed "launchctl disable failed"
       fi
     fi
   done
@@ -905,7 +940,7 @@ clean_dir() {
   if ! canonical="$(home_dir_canonical "$target")"; then
     s_skip "  refusing $label outside HOME: $target"
     if [ "$DRY_RUN" -eq 0 ]; then
-      journal_action cache.clean "$target" failed "target resolves outside HOME"
+      devclean_receipt cache.clean "$target" failed "target resolves outside HOME"
       N_FAILED=$((N_FAILED + 1))
     fi
     return 1
@@ -941,10 +976,10 @@ clean_dir() {
       DISK_TOTAL_KB=$((DISK_TOTAL_KB + kb))
       if [ "$kind" = history ]; then N_HISTORY_DONE=$((N_HISTORY_DONE + 1)); else N_CACHE_DONE=$((N_CACHE_DONE + 1)); fi
       s_ok "  cleaned $label: $target ($(human_mb "$kb"))"
-      journal_action "$operation" "$target" succeeded "kilobytes=$kb; label=$label"
+      devclean_receipt "$operation" "$target" succeeded "kilobytes=$kb; label=$label"
     else
       s_skip "  failed to clean $label: $target"
-      journal_action "$operation" "$target" failed "target still exists; label=$label"
+      devclean_receipt "$operation" "$target" failed "target still exists; label=$label"
       N_FAILED=$((N_FAILED + 1))
       return 1
     fi
@@ -1004,13 +1039,10 @@ clean_find() {
   s_dim "  report-only: $found $label dirs ($(human_mb "$total")); excluded from reclaimable total"
 }
 
-# Codex CLI keeps every session transcript forever (no built-in retention),
-# so old ones are fair game — but recent transcripts power resume and are the
-# audit trail of what agents did. Delete only date folders older than
-# CODEX_SESSION_AGE_DAYS, mirroring Claude Code's default retention. The
-# YYYY/MM/DD layout makes this a zero-padded string comparison, no mtimes.
-# A successful scan of every regular file must prove retention age. The date
-# bucket is only discovery: a resumed old session can have fresh file mtimes.
+# Codex date folders are discovery candidates, not proof of inactivity.
+# Their YYYY/MM/DD paths must predate the configured cutoff, and a successful
+# scan of every regular file must prove retention age. A resumed old session
+# can have fresh file mtimes. Claude transcripts are not selected here.
 history_is_stale() {
   local path="$1" file stamp seen=0 cutoff
   cutoff=$(( $(date +%s) - CODEX_SESSION_AGE_DAYS * 86400 ))
@@ -1085,7 +1117,7 @@ clean_pnpm_store() {
   fi
   if ! pnpm store prune >/dev/null 2>&1; then
     s_skip "  failed to prune pnpm store"
-    journal_action cache.clean "$store" failed "pnpm store prune failed"
+    devclean_receipt cache.clean "$store" failed "pnpm store prune failed"
     N_FAILED=$((N_FAILED + 1))
     return 1
   fi
@@ -1094,17 +1126,14 @@ clean_pnpm_store() {
   case "$kb_after" in ''|*[!0-9]*) size_known=0 ;; esac
   if [ "$size_known" -eq 0 ]; then
     s_ok "  pruned pnpm store (size change unavailable)"
-    journal_action cache.clean "$store" succeeded "label=pnpm store; kilobytes unavailable"
+    devclean_receipt cache.clean "$store" succeeded "label=pnpm store; kilobytes unavailable"
     return 0
   fi
   freed=$(( ${kb_before:-0} - ${kb_after:-0} ))
   [ "$freed" -lt 0 ] && freed=0
   DISK_TOTAL_KB=$((DISK_TOTAL_KB + freed))
   s_ok "  pruned pnpm store: freed $(human_mb "$freed") (now $(human_mb "${kb_after:-0}"))"
-  # journal_action returns nonzero when the journal is busy, and this is the
-  # last statement of the function -- without || true a busy journal would make
-  # a successful prune look like a failed one to the caller.
-  journal_action cache.clean "$store" succeeded "kilobytes=$freed; label=pnpm store" || true
+  devclean_receipt cache.clean "$store" succeeded "kilobytes=$freed; label=pnpm store"
 }
 
 clean_fvm_incomplete() {
@@ -1239,8 +1268,8 @@ if [ "$DRY_RUN" -eq 0 ]; then
       *) withhold "$requested" 'not found with the reviewed identity in the selected modes; preview again' ;;
     esac
   done
-  printf 'Selected cleanup: %s process(es) stopped, %s cache action(s), %s history action(s), %s settings/dump/agent actions, %s withheld, %s unselected, %s failed\n' \
-    "$N_PROC_STOPPED" "$N_CACHE_DONE" "$N_HISTORY_DONE" "$N_OPT_DONE" "$N_WITHHELD" "$N_UNSELECTED" "$N_FAILED"
+  printf 'Selected cleanup: %s process(es) stopped, %s cache action(s), %s history action(s), %s settings/dump/agent actions, %s withheld, %s unselected, %s failed, %s receipt failure(s)\n' \
+    "$N_PROC_STOPPED" "$N_CACHE_DONE" "$N_HISTORY_DONE" "$N_OPT_DONE" "$N_WITHHELD" "$N_UNSELECTED" "$N_FAILED" "$N_RECEIPT_FAILED"
 elif [ -n "$SEEN_TARGETS" ]; then
   printf 'To apply selected targets: '; followup_command; printf '\n'
 fi
@@ -1261,9 +1290,10 @@ if cards_on; then
       "$([ "$N_OPT_DONE" -gt 0 ] && echo "$G_OK $N_OPT_DONE tidied")" \
       "$([ "$DISK_TOTAL_KB" -gt 0 ] && echo "$(human_mb "$DISK_TOTAL_KB") freed")" \
       "$([ "$N_WITHHELD" -gt 0 ] && echo "$G_SKIP $N_WITHHELD withheld")" \
-      "$([ "$N_FAILED" -gt 0 ] && echo "$G_SKIP $N_FAILED failed")")"
+      "$([ "$N_FAILED" -gt 0 ] && echo "$G_SKIP $N_FAILED failed")" \
+      "$([ "$N_RECEIPT_FAILED" -gt 0 ] && echo "$G_SKIP $N_RECEIPT_FAILED receipt failure(s)")")"
     if [ -n "$segs" ]; then s_card_line "   $segs"; fi
-    if [ "$N_PROC_STOPPED" -eq 0 ] && [ "$DISK_TOTAL_KB" -eq 0 ] && [ "$N_OPT_DONE" -eq 0 ] && [ "$N_FAILED" -eq 0 ]; then
+    if [ "$N_PROC_STOPPED" -eq 0 ] && [ "$DISK_TOTAL_KB" -eq 0 ] && [ "$N_OPT_DONE" -eq 0 ] && [ "$N_FAILED" -eq 0 ] && [ "$N_RECEIPT_FAILED" -eq 0 ]; then
       if [ "$N_WITHHELD" -gt 0 ] || [ "$N_UNSELECTED" -gt 0 ]; then
         s_card_line "   no work confirmed — $N_WITHHELD withheld, $N_UNSELECTED unselected"
       else s_card_line "   nothing needed doing — already spotless ✨"; fi
@@ -1272,6 +1302,7 @@ if cards_on; then
       [ "$N_OPT_DONE" -gt 0 ] && s_card_line "   tidied $(s_n "$N_OPT_DONE" 'optimize target' 'optimize targets')"
       [ "$DISK_TOTAL_KB" -gt 0 ] && s_card_line "   $(human_mb "$DISK_TOTAL_KB") hauled to the curb"
       [ "$N_FAILED" -gt 0 ] && s_card_line "   $N_FAILED action(s) could not be confirmed"
+      [ "$N_RECEIPT_FAILED" -gt 0 ] && s_card_line "   $N_RECEIPT_FAILED receipt(s) could not be recorded; action counts above remain confirmed"
       [ "$N_WITHHELD" -gt 0 ] && s_card_line "   $N_WITHHELD target(s) withheld; see reasons above"
       s_card_line
       s_card_line "   thanks for partying responsibly 🎉"
@@ -1298,4 +1329,4 @@ if cards_on; then
   s_card_close
 fi
 
-if [ "$N_FAILED" -gt 0 ] || { [ "$DRY_RUN" -eq 0 ] && [ "$N_WITHHELD" -gt 0 ]; }; then exit 1; fi
+if [ "$N_FAILED" -gt 0 ] || [ "$N_RECEIPT_FAILED" -gt 0 ] || { [ "$DRY_RUN" -eq 0 ] && [ "$N_WITHHELD" -gt 0 ]; }; then exit 1; fi

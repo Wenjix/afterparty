@@ -2,11 +2,11 @@
 # plan.sh - write a proposal for what could be cleaned, one checkbox per
 # target, for a person to edit.
 #
-# A proposal, not a decision. Items that pass the two-signal gate arrive
-# unchecked; in-use, still-working, and no-signal items are withheld with
-# the reason stated, so the withholding is visible rather than silent. Every
-# checked line carries a fingerprint, which is what lets apply refuse an item
-# that moved between planning and applying.
+# Every actionable item starts unchecked and carries a fingerprint. Process
+# groups require old Claude transcript activity and low observed CPU; in-use,
+# busy and unknown groups are withheld. Worktree transcript age is context,
+# not an eligibility gate. Worktree and artifact proposals instead require
+# their filesystem, identity and occupancy checks.
 #
 # Usage:
 #   plan.sh [--root DIR] [--all] [--artifacts-only] [--caches-only]
@@ -30,7 +30,7 @@ while [ $# -gt 0 ]; do
     --all) ALL=1; shift ;;
     --artifacts-only) ARTIFACTS_ONLY=1; shift ;;
     --caches-only) CACHES_ONLY=1; shift ;;
-    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     *) echo "plan: unknown option: $1" >&2
        echo "plan proposes; 'apply' is what acts on it." >&2
        exit 2 ;;
@@ -115,7 +115,7 @@ awk '/^p[0-9]+$/ {pid=substr($0,2)} /^n.*:[0-9]+$/ {port=$0; sub(/^.*:/,"",port)
 printf '# afterparty plan schema: 1\n'
 printf '# afterparty plan — %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 printf '# Check a box to approve it. apply refuses any item whose fingerprint moved,\n'
-printf '# and re-checks eligibility, so a plan cannot outlive what it described.\n'
+printf '# and repeats process eligibility or filesystem checks for each target.\n'
 echo
 printf 'Scope: %s; process/worktree discovery: %s. All actions start unchecked.\n' "$ROOT" "$([ "$ALL" -eq 1 ] && echo machine-wide || echo current-repository)"
 echo '## Process groups'
@@ -209,9 +209,9 @@ emit_process_groups
 # 0.9.0. This is where removal comes back: as a typed target, surfaced for a
 # person and executed only through apply.
 #
-# Filesystem items are ALWAYS unchecked. Restarting a dev server and deleting a
-# worktree are not the same consequence, and a default that treats them alike
-# is a default that will eventually be wrong in the expensive direction.
+# Filesystem items, like process groups, are unchecked. Worktree activity labels
+# give review context; only structural, identity and occupancy checks withhold
+# these proposals. A checked worktree does not require a stale transcript.
 echo
 echo '## Worktrees'
 echo
@@ -257,8 +257,8 @@ else
     [ -n "$wtpath" ] || continue
     reason="$(veto_for worktree "$wtpath" "$repo" "$T/wt-cwd")"
     # Staleness: the worktree's own transcript if it has one, else the repo's.
-    # A worktree is part of the work someone does in that repo, so the repo
-    # being fresh is a reason to leave its worktrees alone.
+    # This is review context: a recent repository transcript may be a reason
+    # for the reviewer to leave the worktree alone, but is not a removal veto.
     touched="$(awk -F'\t' -v w="$wtpath" 'function samepath(a,b){return (length(a)==length(b) && index(a,b)==1)} samepath($2,w) { print $1; exit }' "$T/ws")"
     [ -n "$touched" ] || touched="$(awk -F'\t' -v w="$repo" 'function samepath(a,b){return (length(a)==length(b) && index(a,b)==1)} samepath($2,w) { print $1; exit }' "$T/ws")"
     if [ -n "$touched" ]; then

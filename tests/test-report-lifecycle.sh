@@ -170,7 +170,12 @@ r=run_bash(['-c',command],env=conflicting_env)
 assert '1 process scope holding 1 process' in r.stdout, r.stdout
 after=(temp/'scans').read_text(encoding="utf-8")[len(before):]
 assert 'fixture-ps' in after and 'fixture-lsof' in after, after
-source=(repo/'commands/afterparty.md').read_text(encoding="utf-8")
+invocations=[path.stem for path in (repo/'commands').glob('*.md')]
+invocations += [re.search(r'^name:\s*(\S+)',path.read_text(encoding="utf-8"),re.M).group(1)
+                for path in (repo/'skills').glob('*/SKILL.md')]
+assert len(invocations)==len(set(invocations)), ('duplicate plugin invocation', invocations)
+assert {'afterparty','audit'} <= set(invocations), invocations
+source=(repo/'commands/audit.md').read_text(encoding="utf-8")
 command=re.search(r'!`(.*?)`',source,re.S).group(1)
 plugin=temp/'plugin'; (plugin/'skills').mkdir(parents=True)
 shutil.copytree(bundle, plugin/'skills/afterparty')

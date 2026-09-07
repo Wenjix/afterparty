@@ -1,5 +1,8 @@
 # PR review fixes
 
+Historical implementation record for 0.10.0; current command contracts are in
+[README.md](../../README.md).
+
 This plan addresses the review of PR #10 (`d2beff1`) and PR #11 (`0824511`).
 The KG5 test correction belongs to #10. The remaining fixes belong to #11,
 which inherits the correction through its stacked base.

@@ -285,6 +285,86 @@ try:
               and 'disable gui/'+str(fixture_uid)+'/com.openai.chat-helper' not in calls,
               'D14: only selected launch agent may be disabled')
         check('Restore: launchctl enable' in result.stdout,'D14: persistent agent changes must explain restoration')
+
+    # A confirmed mutation and a missing receipt are separate outcomes. A
+    # blocked journal must affect the exit status without erasing the success.
+    for kind in ('setting', 'cache', 'package-store'):
+        t,home,env=fixture('receipt-'+kind)
+        blocked=t/'blocked-cache'; put(blocked,'not a directory\n')
+        env['XDG_CACHE_HOME']=shell_path(blocked)
+        if kind == 'setting':
+            target=home/'.vscode/argv.json'; put(target,'{"enable-crash-reporter": true}\n')
+            mode=['--optimize']; effect='crash reporting in vscode'; count='1 settings/dump/agent actions'
+        else:
+            mode=['--disk','--no-repo-artifacts']; count='1 cache action(s)'
+            target=home/'.gradle/caches/blob' if kind == 'cache' else t/'package-store/blob'
+            blob(target)
+            effect='Gradle caches' if kind == 'cache' else 'pnpm store prune'
+            if kind == 'package-store':
+                env['REVIEW_STORE']=shell_path(target.parent)
+                put(t/'shims/pnpm', '''#!/usr/bin/env bash
+printf 'pnpm %s\\n' "$*" >> "$REVIEW_CALLS"
+case "$*" in
+  'store path') printf '%s\\n' "$REVIEW_STORE" ;;
+  'store prune') exit 0 ;;
+  *) exit 1 ;;
+esac
+''',True)
+        chosen=targets(run(t,env,*mode).stdout,effect)
+        check(len(chosen)==1,'D17: receipt failure fixture needs an exact '+kind+' target')
+        if chosen:
+            result=run(t,env,*mode,'--apply','--target',chosen[0])
+            if kind == 'setting':
+                changed='"enable-crash-reporter": false' in target.read_text()
+            elif kind == 'cache':
+                changed=not target.exists()
+            else:
+                changed='pnpm store prune\n' in (t/'calls').read_text() and target.exists()
+            check(changed and count in result.stdout and '0 failed, 1 receipt failure(s)' in result.stdout,
+                  'D17: confirmed '+kind+' mutation must survive separate receipt failure accounting: '+result.stdout)
+            check(result.returncode!=0 and 'could not create action journal directory' in result.stdout,
+                  'D17: '+kind+' receipt failure must be diagnosed and return nonzero: '+result.stdout)
+
+    # Match absence is valid only after a successful scan. Exercise both
+    # backends, including a complete process table with no orphan candidates.
+    for backend in ('pgrep', 'ps'):
+        for outcome in ('empty', 'failed'):
+            t,home,env=fixture('discovery-'+backend+'-'+outcome)
+            env['AFTERPARTY_STYLE']='always'; env['AFTERPARTY_CARD']='1'
+            if backend == 'pgrep':
+                put(t/'shims/pgrep', '#!/usr/bin/env bash\nprintf "pgrep discovery\\n" >> "$REVIEW_CALLS"\nexit '+('1' if outcome=='empty' else '2')+'\n',True)
+            else:
+                # Bootstrap still verifies the installed safety interceptors;
+                # only devclean's own lookup simulates an absent pgrep tool.
+                with (t/'bash-env').open('a',encoding='utf-8',newline='\n') as stream:
+                    stream.write('''case "$0" in
+  */devclean.sh)
+    command() {
+      [ "$*" != '-v pgrep' ] || return 1
+      builtin command "$@"
+    }
+    ;;
+esac
+''')
+                put(t/'shims/ps', '''#!/usr/bin/env bash
+case "$*" in
+  '-eo ppid=,pid=,command=')
+    printf 'ps fallback discovery\\n' >> "$REVIEW_CALLS"
+'''+("    printf '0 1 /sbin/init\\n1 200 sleep 10\\n'; exit 0\n" if outcome=='empty' else "    exit 2\n")+'''    ;;
+  *) exit 1 ;;
+esac
+''',True)
+            result=run(t,env,'--orphans')
+            calls=(t/'calls').read_text() if (t/'calls').exists() else ''
+            check(('pgrep discovery' if backend=='pgrep' else 'ps fallback discovery') in calls,
+                  'D18: '+backend+' '+outcome+' discovery path must actually run: '+result.stdout)
+            if outcome == 'empty':
+                check(result.returncode==0 and '(none)' in result.stdout and 'spotless' in result.stdout,
+                      'D18: completed '+backend+' scan with no matches must remain a successful empty report: '+result.stdout)
+            else:
+                check(result.returncode!=0 and 'process discovery unavailable' in result.stdout and 'spotless' not in result.stdout,
+                      'D18: failed '+backend+' discovery must return nonzero and withhold a spotless claim: '+result.stdout)
+            check(not (t/'signals').exists(),'D18: discovery fixtures must never signal')
 finally:
     shutil.rmtree(root)
 if failures:

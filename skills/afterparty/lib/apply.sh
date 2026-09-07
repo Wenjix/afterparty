@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 # apply.sh - execute the boxes a person checked in a plan, and nothing else.
 #
-# apply does NOT kill anything itself. audit-processes.sh already carries the
-# protect list, process-group semantics, postcondition receipts, and the
-# journal; reimplementing any of that here would mean two kill disciplines
-# drifting apart. apply's whole job is to decide WHICH groups are still
-# legitimate targets and hand those to the existing gated path.
+# apply delegates process signals to audit-processes.sh and removes checked
+# worktrees/artifacts through their own handlers. All checked metadata is
+# validated before any action, then each target is rechecked independently.
+# A later refusal does not roll back earlier completed actions.
 #
-# Three ways an item is refused rather than acted on:
-#   drift    the fingerprint moved -- a recycled pgid now holds a different
-#            process, and killing it would destroy something never reviewed
-#   gone     the group no longer exists
-#   unchecked  the box was never ticked, or was withheld by the plan
+# Process groups require fresh identity, attribution and two-signal eligibility;
+# filesystem targets require fresh identity and their structural/occupancy
+# vetoes. Worktree/artifact removal has no transcript-age or CPU gate.
+# Changed fingerprints, held targets and failed checks return nonzero.
+# Already absent targets and unchecked boxes are no-ops.
 #
 # Usage:
 #   apply.sh <plan.md>
@@ -90,8 +89,8 @@ group_facts() {
       fi
       cand="$(ws_owner_of "$dir" < "$T/ws" 2>/dev/null)" || cand=""
       # Every member is resolved, not just the first. A group can gain a child
-      # in a live workspace after planning while its leader -- and therefore
-      # its fingerprint -- stays exactly the same. Killing on the strength of
+      # in a live workspace after planning while the member anchoring its
+      # fingerprint stays exactly the same. Killing on the strength of
       # the stale member would take the active work with it.
       if [ -z "$cand" ]; then
         # A cwd that resolves to NO indexed workspace is unknown ownership, not
@@ -228,9 +227,9 @@ for cat in tests dev browser; do
         expect="${t##*:}"
         # Re-verify identity immediately before signalling, not just at parse
         # time: the gap between the two is where a group could be recycled.
-        # Leader identity (pgid + start time + command) is what detects
-        # recycling; hashing every member instead would go stale on any child
-        # spawn, and busy dev groups churn members every few seconds.
+        # The first observed member anchors the fingerprint (pgid + start time
+        # + command); it is not a hash of all members. Child churn alone need
+        # not invalidate approval; audit rechecks protection before signals.
         if ! now_fp="$(fp_for_pgid "$pg" 2>/dev/null)" || [ "$now_fp" != "$expect" ]; then
           s_skip "  pgid $pg — dropped at the last check, identity changed"
           N_DRIFT=$((N_DRIFT + 1))

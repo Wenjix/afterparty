@@ -1,22 +1,19 @@
 #!/usr/bin/env bash
-# audit-git.sh — report (and optionally clean) the git mess agent sessions
-# leave behind: stale worktrees, agent-named branches, an abandoned
-# .git/index.lock, merge-conflict litter, and stash pileup. Default is a
-# DRY-RUN report. --clean applies only the safe subset: worktree prune,
-# removal of CLEAN stale worktrees (never --force), deletion of MERGED
-# agent branches (-d, never -D), an index.lock past the age gate, and
-# UNTRACKED conflict litter. Unmerged branches, dirty worktrees, and
-# stashes are report-only, always.
+# audit-git.sh — report Git session leftovers without deleting anything:
+# worktrees, agent-named branches, old index locks, conflict files and stashes.
+# Age and naming are discovery heuristics, not authorization to remove data.
+# Worktree removal requires a checked afterparty plan and afterparty apply.
+# Branches, locks, conflict files and stashes remain report-only.
 #
 # Usage:
 #   audit-git.sh                    # dry-run report for the repo at cwd
-#   audit-git.sh --clean            # apply the safe subset
+#   audit-git.sh --clean            # report-only compatibility flag; exits 2
 #   audit-git.sh --age 14           # staleness threshold in days (default 7)
 #   audit-git.sh --root DIR         # operate on the repo containing DIR
 #   audit-git.sh --json             # JSON Lines output (one object per finding)
 #
-# Not a git repo: prints a note and exits 0 (safe for hooks in any cwd).
-# Exit codes: 0 ok (even with findings) · 1 partial cleanup failure · 2 usage.
+# Not a Git repo: reports no repository and exits 0, or 2 for --clean.
+# Exit codes: 0 report completed · 1 reported inspection failure · 2 usage/refusal.
 set -uo pipefail
 
 # --- constants ---------------------------------------------------------------
@@ -41,7 +38,7 @@ while [ $# -gt 0 ]; do
     --age) AGE_DAYS="${2:?}"; shift 2 ;;
     --root) ROOT="${2:?}"; shift 2 ;;
     --json) JSON=1; shift ;;
-    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^set -uo pipefail/{ /^set /d; p; }' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -50,6 +47,10 @@ case "$AGE_DAYS" in ''|*[!0-9]*) echo "--age wants a whole number of days" >&2; 
 # --- repo gate + facts ---------------------------------------------------------
 if ! git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
   [ "$JSON" -eq 1 ] || echo "not a git repository: $ROOT (nothing to do)"
+  if [ "$CLEAN_REQUESTED" -eq 1 ]; then
+    echo 'git --clean is report-only; worktree removal requires plan/apply' >&2
+    exit 2
+  fi
   exit 0
 fi
 
@@ -65,9 +66,8 @@ g() { git -C "$ROOT" "$@"; }
 # ~20 agent worktrees open at once that is a live sibling's .env and .venv.
 #
 # Discovery may be heuristic; destruction requires fresh, positive proof.
-# Removal is moving behind `afterparty plan` / `apply`, where a target is
-# fingerprinted, re-checked for liveness at apply time, and approved by a
-# person. Until those typed targets exist, this refuses rather than guesses.
+# Worktree removal uses `afterparty plan` / `apply`, with reviewed targets and
+# fresh filesystem, occupancy and identity checks. This flag never removes.
 if [ "$CLEAN_REQUESTED" -eq 1 ]; then
   DO_CLEAN=0
   GIT_CLEAN_WITHHELD=1

@@ -2,6 +2,29 @@
 
 All notable changes to Afterparty are documented here. Versions follow semantic versioning.
 
+## [0.11.1] - 2026-09-06
+
+### Fixed
+
+- Devclean reports lost receipts separately from completed actions and returns
+  nonzero. Failed orphan discovery cannot produce a successful spotless result.
+- Process-plan eligibility uses the documented defaults for invalid startup
+  idle/CPU settings instead of accepting fresh processes or failing arithmetic.
+- `git --clean` also refuses outside a repository; conflicting artifact
+  `--plan --clean` flags return a usage error instead of a successful proposal.
+- The explicit plugin audit command is `/afterparty:audit`, distinct from the
+  `/afterparty:afterparty` skill, avoiding same-name command precedence.
+
+### Documentation
+
+- Audited README, agent instructions, help, inline contracts, packaging, and
+  historical plans against source. Clarified target-specific eligibility,
+  heuristic protection, caller-based ledger attribution, report scope, history
+  targets, native-tool limitations, and optional migration advice.
+- Corrected fresh-install skill copies, hosted-runtime claims, component
+  validation commands, and isolated test instructions. Removed the obsolete
+  terminal illustration that recommended direct Git deletion.
+
 ## [0.11.0] - 2026-09-06
 
 ### Changed
@@ -33,8 +56,9 @@ All notable changes to Afterparty are documented here. Versions follow semantic 
   lifecycle coverage are corrected. Optimize edits effective JSONC settings with
   backup and restoration instructions.
 
-Regenerate cleanup plans for the new defaults. Legacy ledger rows remain visible
-as unverified; record the current process again before authorizing its cleanup.
+If you have saved cleanup plans, regenerate them for the new defaults. Existing
+ledger rows without member identity cannot authorize cleanup; register a known
+running process again if you need to manage it. Fresh setups need no migration.
 
 ## [0.10.0] - 2026-09-06
 

@@ -2,13 +2,12 @@
 # workspace.sh - workspace attribution and staleness, sourced (not executed) by
 # glance.sh, the same way protect.sh and json.sh are shared.
 #
-# Answers the two questions the kill paths cannot: which workspace does this
-# process belong to, and how long since anyone worked there. Staleness matters
-# because process liveness is the wrong signal -- a finished agent leaves its
-# dev server running long after you stopped caring, and a long tool call goes
-# quiet while very much still working. Callers combine last-touched with cpu.
+# Associates process cwd paths with workspaces found in Claude transcript files
+# and reports the newest selected transcript file's mtime. This is observed
+# agent-file activity, not verified human use or exclusive process ownership.
+# Process-plan callers combine that activity time with observed CPU.
 #
-# A workspace with no agent transcript has NO last-touched time. That is
+# A workspace with no readable Claude transcript has NO last-touched time. That is
 # "cannot tell", never "forgotten" -- callers must not treat unknown as stale.
 
 WS_TRANSCRIPT_ROOT="${AFTERPARTY_TRANSCRIPT_ROOT:-$HOME/.claude/projects}"
@@ -34,7 +33,10 @@ ws_human_age() {
   fi
 }
 
-# Emit "<epoch>\t<cwd>" per workspace that has an agent transcript.
+# Emit "<epoch>\t<cwd>" from the newest *.jsonl file in each immediate project
+# directory under AFTERPARTY_TRANSCRIPT_ROOT (default ~/.claude/projects).
+# Epoch is that file's mtime; cwd is its first compact JSON "cwd":"..." field.
+# This does not parse arbitrary transcript JSON or index other agents' formats.
 #
 # Identity comes from the cwd the transcript records, never from the directory
 # name: the slug is lossy (both "/" and "." collapse to "-") and undocumented,

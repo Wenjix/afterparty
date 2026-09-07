@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# journal.sh - append privacy-preserving local mutation outcomes as JSON Lines.
+# journal.sh - append local mutation outcomes with common credential redaction.
 
 JOURNAL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$JOURNAL_DIR/state.sh"

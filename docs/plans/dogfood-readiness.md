@@ -1,5 +1,8 @@
 # Dogfood readiness fixes
 
+Historical implementation record for 0.11.0; current command contracts are in
+[README.md](../../README.md).
+
 Review baseline: `2e516ad` (2026-09-06). The user approved this sequence and
 previously authorized committing and pushing the resulting fixes.
 
@@ -111,10 +114,13 @@ Validation:
 Portable identity and cwd scans are bounded observations, not atomic operating
 system ownership guarantees. Redaction is best effort for recognized formats.
 Session-end hooks deliberately record a marker, not a promise of a completed
-exit-time audit. Regenerate plans and re-record legacy ledger entries before
-using their mutation paths.
+exit-time audit. Existing users can regenerate saved plans for the new defaults
+and register known running processes again if their legacy records lack member
+identity. No migration is needed for a fresh setup; the owner's prior entries
+were test fixtures.
 
 Native Linux/Windows CI is checked after pushing and reported separately.
+Both passed on `e0d3bf1` ([run 34057969681](https://github.com/Wenjix/afterparty/actions/runs/34057969681)).
 
 The first Linux run caught a stale live-kill fixture that invented an absent
 PGID and expected the old PID-recycling message. The fixture now records the

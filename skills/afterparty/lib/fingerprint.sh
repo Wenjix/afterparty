@@ -4,9 +4,10 @@
 # This is what makes an approval bind. Between writing a plan and applying it
 # the process table moves: pids die and the kernel recycles their numbers. A
 # plan that named only a pgid would happily kill whatever drifted into the
-# slot, with every check passing. Hashing the group's start time and command
-# alongside the pgid means a recycled group reads as a different item and gets
-# refused rather than re-targeted.
+# slot, with every check passing. The plan/audit fingerprint hashes the first
+# observed group member's start time and command alongside its PGID. It detects
+# changes to that identity anchor, not every membership or command change in
+# the group. Ledger continuity uses the separate member-token manifest below.
 #
 # Start time, not elapsed time: elapsed changes every second, start does not.
 
@@ -28,8 +29,9 @@ fp_hash() {
   printf '%012d' "$((sum % 1000000000000))" | cut -c1-12
 }
 
-# Fingerprint of the process group $1. Nonzero when the group is gone, so a
-# caller cannot mistake "vanished" for "unchanged".
+# Fingerprint of the first observed member in process group $1. Nonzero when
+# no fingerprint can be read, including an absent group or failed inspection;
+# callers use fp_group_state to distinguish verified absence from unavailable.
 fp_for_pgid() {
   local pg="$1" sig
   case "$pg" in ''|*[!0-9]*) return 1 ;; esac
@@ -159,8 +161,9 @@ fp_for_worktree() {
 # filesystem generation number. It does NOT prove the contents are
 # unchanged -- a directory's mtime does not move when a file deep inside it
 # changes. Contents are not what approval was given for; the person approved
-# "this artifact directory, which I judged abandoned", and staleness is
-# re-checked separately at apply time.
+# "this artifact directory". Apply separately rechecks repository boundaries,
+# tracked/nested data and process cwd occupancy; it does not measure age or
+# prove that a process elsewhere is no longer using these contents.
 fp_for_artifact() {
   local p="$1" id
   [ -n "$p" ] || return 1

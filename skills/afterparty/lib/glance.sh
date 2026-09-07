@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # glance.sh - "what did I leave running?", answered on returning to the machine.
 #
-# Machine-wide, grouped by workspace, sorted so the workspaces nobody has
-# touched sink to the bottom. Severity here is MAGNITUDE, not reversibility:
+# Visible processes grouped by workspace, ordered by observed Claude transcript
+# activity with unknown attribution retained. Severity is magnitude:
 # this view exists to make you look up, and the plan is where consequence gets
 # weighed. Read-only by construction -- there is deliberately no flag that acts.
 #
-# Attribution costs one lsof call for every process cwd rather than one per
-# pid; per-pid would be ~500 forks on a normal machine.
+# Attribution uses one lsof scan of process working directories. Transcript
+# mtimes are activity evidence, not proof of human presence or abandonment.
 #
 # Usage:
 #   glance.sh [--oneline] [--json]
@@ -24,7 +24,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --oneline) ONELINE=1; shift ;;
     --json)    AS_JSON=1; shift ;;
-    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^set -uo pipefail/{ /^set /d; p; }' "$0"; exit 0 ;;
     *) echo "glance: unknown option: $1" >&2
        echo "glance reports; it never acts. Use 'audit --kill' or 'plan' to change anything." >&2
        exit 2 ;;
