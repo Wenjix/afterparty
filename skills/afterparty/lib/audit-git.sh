@@ -1,22 +1,19 @@
 #!/usr/bin/env bash
-# audit-git.sh — report (and optionally clean) the git mess agent sessions
-# leave behind: stale worktrees, agent-named branches, an abandoned
-# .git/index.lock, merge-conflict litter, and stash pileup. Default is a
-# DRY-RUN report. --clean applies only the safe subset: worktree prune,
-# removal of CLEAN stale worktrees (never --force), deletion of MERGED
-# agent branches (-d, never -D), an index.lock past the age gate, and
-# UNTRACKED conflict litter. Unmerged branches, dirty worktrees, and
-# stashes are report-only, always.
+# audit-git.sh — report Git session leftovers without deleting anything:
+# worktrees, agent-named branches, old index locks, conflict files and stashes.
+# Age and naming are discovery heuristics, not authorization to remove data.
+# Worktree removal requires a checked afterparty plan and afterparty apply.
+# Branches, locks, conflict files and stashes remain report-only.
 #
 # Usage:
 #   audit-git.sh                    # dry-run report for the repo at cwd
-#   audit-git.sh --clean            # apply the safe subset
+#   audit-git.sh --clean            # report-only compatibility flag; exits 2
 #   audit-git.sh --age 14           # staleness threshold in days (default 7)
 #   audit-git.sh --root DIR         # operate on the repo containing DIR
 #   audit-git.sh --json             # JSON Lines output (one object per finding)
 #
-# Not a git repo: prints a note and exits 0 (safe for hooks in any cwd).
-# Exit codes: 0 ok (even with findings) · 1 partial cleanup failure · 2 usage.
+# Not a Git repo: reports no repository and exits 0, or 2 for --clean.
+# Exit codes: 0 report completed · 1 reported inspection failure · 2 usage/refusal.
 set -uo pipefail
 
 # --- constants ---------------------------------------------------------------
@@ -41,7 +38,7 @@ while [ $# -gt 0 ]; do
     --age) AGE_DAYS="${2:?}"; shift 2 ;;
     --root) ROOT="${2:?}"; shift 2 ;;
     --json) JSON=1; shift ;;
-    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^set -uo pipefail/{ /^set /d; p; }' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -50,6 +47,10 @@ case "$AGE_DAYS" in ''|*[!0-9]*) echo "--age wants a whole number of days" >&2; 
 # --- repo gate + facts ---------------------------------------------------------
 if ! git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
   [ "$JSON" -eq 1 ] || echo "not a git repository: $ROOT (nothing to do)"
+  if [ "$CLEAN_REQUESTED" -eq 1 ]; then
+    echo 'git --clean is report-only; worktree removal requires plan/apply' >&2
+    exit 2
+  fi
   exit 0
 fi
 
@@ -65,9 +66,8 @@ g() { git -C "$ROOT" "$@"; }
 # ~20 agent worktrees open at once that is a live sibling's .env and .venv.
 #
 # Discovery may be heuristic; destruction requires fresh, positive proof.
-# Removal is moving behind `afterparty plan` / `apply`, where a target is
-# fingerprinted, re-checked for liveness at apply time, and approved by a
-# person. Until those typed targets exist, this refuses rather than guesses.
+# Worktree removal uses `afterparty plan` / `apply`, with reviewed targets and
+# fresh filesystem, occupancy and identity checks. This flag never removes.
 if [ "$CLEAN_REQUESTED" -eq 1 ]; then
   DO_CLEAN=0
   GIT_CLEAN_WITHHELD=1
@@ -543,7 +543,8 @@ print_git_card() {
     [ "$N_LITTER" -gt 0 ] && s_card_line "   $(s_n "$N_LITTER" 'litter file' 'litter files') (${LITTER_BYTES} B)"
     [ "$N_STASH" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_STASH" 'stash on the shelf — your call' 'stashes on the shelf — your call'))${C_RESET}"
     s_card_line
-    s_card_line "   closing time: ${C_CYAN}afterparty git --clean${C_RESET}"
+    printf -v quoted_root %q "$ROOT"
+    s_card_line "   review: ${C_CYAN}afterparty plan --root $quoted_root${C_RESET}"
   else
     s_card_line "${C_BOLD}${C_GRN}✨ spotless — no git mess left behind${C_RESET}"
     [ "$N_STASH" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_STASH" 'stash on the shelf — your call' 'stashes on the shelf — your call'))${C_RESET}"
@@ -558,8 +559,11 @@ if [ "$JSON" -eq 0 ]; then
     s_mode "$C_RED" "CLEAN" " — sweeping up the git leftovers in $ROOT (safe subset only)" \
       "CLEAN — applying safe git cleanup in $ROOT"
   else
-    s_mode "$C_YEL" "DRY RUN" " — checking what the party did to $ROOT (--clean applies the safe subset)" \
-      "DRY RUN — reporting git leftovers in $ROOT (use --clean to apply the safe subset)"
+    # --clean stopped applying anything in 0.9.0; it reports and exits 2. The
+    # banner kept advertising it as the way to act, which is the one line a
+    # person reads before deciding what to run next.
+    s_mode "$C_YEL" "DRY RUN" " — checking what the party did to $ROOT (approve removals via afterparty plan)" \
+      "DRY RUN — reporting git leftovers in $ROOT (approve removals via 'afterparty plan', then 'afterparty apply')"
   fi
 fi
 
@@ -578,16 +582,16 @@ if [ "$JSON" -eq 0 ]; then
   [ "$N_FAILED" -eq 0 ] || printf ', %s failed' "$N_FAILED"
   printf '\n'
   [ "$DO_CLEAN" -eq 1 ] || echo "Nothing was changed."
-  if [ "$GIT_CLEAN_WITHHELD" -eq 1 ]; then
-    echo "--clean is report-only: removing a worktree needs approval, not a stale mtime." >&2
-    echo "Review and approve with: afterparty plan  then  afterparty apply <plan>" >&2
-    exit 2
-  fi
   tally_add git.findings "$((N_PRUNABLE + N_WT + N_BRANCH + N_LOCK + N_LITTER))"
   tally_add git.litter_bytes "$LITTER_BYTES"
   tally_add git.stashes "$N_STASH"
   tally_add git.failed "$N_FAILED"
   if cards_on; then print_git_card; fi
 fi
+if [ "$GIT_CLEAN_WITHHELD" -eq 1 ]; then
+    echo "--clean is report-only: removing a worktree needs approval, not a stale mtime." >&2
+    echo "Review and approve with: afterparty plan  then  afterparty apply <plan>" >&2
+    exit 2
+  fi
 if [ "$DO_CLEAN" -eq 1 ] && [ "$N_FAILED" -gt 0 ]; then exit 1; fi
 exit 0

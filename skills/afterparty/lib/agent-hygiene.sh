@@ -4,21 +4,22 @@
 # prompt text.
 #
 # Usage:
-#   agent-hygiene.sh list [--json] [--all]
-#   agent-hygiene.sh audit [--kill <tests|dev|browser>] [--keep <pgid>] [--json] [--report]
+#   agent-hygiene.sh list [--json] [--all|--root DIR] [--kind KIND]
+#   agent-hygiene.sh audit [--strict] [--json|--report]
+#   agent-hygiene.sh audit --kill tests,dev,browser [--pgid ID[,ID...]] [--keep ID]
 #   agent-hygiene.sh add --pid 123 --kind dev --port 3000 --purpose "verify UI" -- pnpm dev website
-#   agent-hygiene.sh stop [--kill] [--keep <pgid>] [--all]
-#   agent-hygiene.sh prune
+#   agent-hygiene.sh stop [--kill] [--keep PGID] [--all|--root DIR] [--kind KIND]
+#   agent-hygiene.sh prune [--all|--root DIR]
 #   agent-hygiene.sh git [--clean] [--age <days>] [--root <dir>] [--json]
-#   agent-hygiene.sh artifacts [clean-artifacts args...]
-#   agent-hygiene.sh devclean [--deep] [--optimize] [--disk] [--apply]
+#   agent-hygiene.sh artifacts [--root DIR] [--caches-only] [--plan|--clean]
+#   agent-hygiene.sh devclean [--orphans|--deep|--optimize|--disk|--history] [--apply --target ID]
 #   agent-hygiene.sh glance [--oneline] [--json]
-#   agent-hygiene.sh plan
+#   agent-hygiene.sh plan [--root DIR] [--all] [--artifacts-only] [--caches-only]
 #   agent-hygiene.sh apply <plan.md>
-#   agent-hygiene.sh doctor
+#   agent-hygiene.sh doctor [--strict]
 #   agent-hygiene.sh report [--show|--remind]
 #   agent-hygiene.sh report-path
-#   agent-hygiene.sh actions [--show|--path]
+#   agent-hygiene.sh actions [--all|--workspace DIR] [--since YYYY-MM-DD] [--path]
 #   agent-hygiene.sh actions-path
 #   agent-hygiene.sh --version
 set -euo pipefail
@@ -28,11 +29,12 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/style.sh"
 # Shared private-state locations (reports, ledger, action journal).
 . "$DIR/state.sh"
+. "$DIR/report.sh"
+. "$DIR/journal.sh"
 
 usage() {
-  # Range tracks the header comment above; adding a command line means
-  # widening it, or the last entry silently drops out of --help.
-  sed -n '2,23p' "$0"
+  # The header ends at set; additional usage lines must remain visible.
+  sed -n '2,/^set -euo pipefail/{ /^set /d; p; }' "$0"
 }
 
 # The one finale card for the composite audit, fed by the children's tally.
@@ -114,7 +116,7 @@ print_finale_card() {
       s_card_line "     ${C_CYAN}afterparty stop --kill${C_RESET}"
     fi
     if [ "$found" -gt 0 ]; then
-      s_card_line "     ${C_CYAN}afterparty audit --kill tests,dev,browser${C_RESET}"
+      s_card_line "     ${C_CYAN}afterparty audit --kill tests,dev,browser --pgid <reviewed-pgid>${C_RESET}"
     fi
     if [ "$gitf" -gt 0 ]; then
       s_card_line "     ${C_CYAN}afterparty plan${C_RESET}  (git --clean is report-only)"
@@ -178,52 +180,38 @@ case "$cmd" in
     fi
     run_audit() {
       local audit_rc=0
-      "$DIR/process-ledger.sh" list ${JSON_FLAG:+"$JSON_FLAG"} || audit_rc=1
-      "$DIR/audit-processes.sh" ${ARGS[@]+"${ARGS[@]}"} || audit_rc=1
-      "$DIR/audit-git.sh" ${JSON_FLAG:+"$JSON_FLAG"} || audit_rc=1
+      REPORT_STRICT="${REPORT_STRICT:-}"
+      local section child_rc
+      for section in ledger processes git; do
+        child_rc=0
+        case "$section" in
+          ledger) "$DIR/process-ledger.sh" list ${JSON_FLAG:+"$JSON_FLAG"} || child_rc=$? ;;
+          processes) "$DIR/audit-processes.sh" ${REPORT_STRICT:+"$REPORT_STRICT"} ${ARGS[@]+"${ARGS[@]}"} || child_rc=$? ;;
+          git) "$DIR/audit-git.sh" ${JSON_FLAG:+"$JSON_FLAG"} || child_rc=$? ;;
+        esac
+        if [ "$child_rc" -ne 0 ]; then
+          audit_rc=1
+          [ -z "${REPORT_STATUS_FILE:-}" ] || printf '%s\n' "$section" >> "$REPORT_STATUS_FILE"
+          printf 'audit section %s incomplete (exit %s)\n' "$section" "$child_rc" >&2
+        fi
+      done
       return "$audit_rc"
     }
     if [ "$REPORT" -eq 1 ]; then
-      REPORT_FILE="$(state_report_path "$PWD")"
-      REPORT_DIR="$(dirname "$REPORT_FILE")"
-      CACHE_ROOT="$(state_cache_root)"
-      case "$REPORT_FILE" in
-        "$CACHE_ROOT"/*) state_secure_dir "$REPORT_DIR" ;;
-      esac
-      echo "note: writing audit report to $REPORT_FILE" >&2
-      # Children write into this pipe (not a tty) so their output is plain,
-      # and AFTERPARTY_STYLE=never makes that unconditional — a globally
-      # exported =always must never put ANSI into report.md. The sed turns
-      # the "=== X ===" headers into markdown H2s for the next session's
-      # reader; contract data lines never match the pattern.
-      REPORT_TMP="$(mktemp "$REPORT_DIR/.report.md.XXXXXX")"
-      report_tmp_cleanup() { [ -z "${REPORT_TMP:-}" ] || rm -f "$REPORT_TMP"; }
-      trap report_tmp_cleanup EXIT
-      trap 'report_tmp_cleanup; exit 130' INT
-      trap 'report_tmp_cleanup; exit 143' TERM
+      REPORT_WORK="$(mktemp -d)" || exit 1
+      trap 'rm -rf "$REPORT_WORK"' EXIT
+      REPORT_STATUS_FILE="$REPORT_WORK/status"
+      : > "$REPORT_STATUS_FILE"
+      REPORT_STRICT=--strict
       REPORT_RC=0
-      (
-        export AFTERPARTY_STYLE=never
-        printf '# afterparty report — what the last session left behind\n\n'
-        printf 'generated %s — afterparty audit --report\n\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-        run_audit
-      # `|| REPORT_RC=$?` so `set -e` plus pipefail cannot abort HERE. A child
-      # audit exiting non-zero used to kill the script at this line: the fully
-      # rendered report was deleted by the EXIT trap, the previous report.md
-      # was left in place, and the run still exited 0 — so the SessionEnd hook
-      # believed it had written a fresh report while the reader got a stale
-      # one. A partial report is worth more than a stale one, and the failure
-      # belongs in the exit status, not in a missing file.
-      ) | sed -e 's/^=== \(.*\) ===$/## \1/' > "$REPORT_TMP" || REPORT_RC=$?
-      chmod 600 "$REPORT_TMP" 2>/dev/null || true
-      mv -f "$REPORT_TMP" "$REPORT_FILE"
-      REPORT_TMP=""
-      trap - EXIT INT TERM
-      cat "$REPORT_FILE"
+      (export AFTERPARTY_STYLE=never; run_audit) > "$REPORT_WORK/raw" 2>&1 || REPORT_RC=$?
+      sed -e 's/^=== \(.*\) ===$/## \1/' "$REPORT_WORK/raw" > "$REPORT_WORK/body"
+      REPORT_FAILED="$(paste -sd, "$REPORT_STATUS_FILE")"
+      report_persist "$REPORT_WORK/body" "$REPORT_RC" "$REPORT_FAILED" || exit 1
       if [ "$REPORT_RC" -ne 0 ]; then
         echo "note: report written, but at least one audit reported a problem" >&2
-        exit "$REPORT_RC"
       fi
+      exit "$REPORT_RC"
     else
       if [ "$STYLE_ON" -eq 1 ] && [ -z "$JSON_FLAG" ]; then
         s_banner "afterparty — last call" "let's see what the session left behind"
@@ -275,15 +263,15 @@ case "$cmd" in
     done
     export AFTERPARTY_CARD=0
     DOCTOR_FAILED=0
-    "$DIR/process-ledger.sh" list
+    "$DIR/process-ledger.sh" list || DOCTOR_FAILED=1
     if [ "$DOCTOR_STRICT" -eq 1 ]; then
       "$DIR/audit-processes.sh" --strict || DOCTOR_FAILED=1
     else
-      "$DIR/audit-processes.sh"
+      "$DIR/audit-processes.sh" || DOCTOR_FAILED=1
     fi
-    "$DIR/audit-git.sh"
-    "$DIR/clean-artifacts.sh"
-    "$DIR/devclean.sh"
+    "$DIR/audit-git.sh" || DOCTOR_FAILED=1
+    "$DIR/clean-artifacts.sh" || DOCTOR_FAILED=1
+    "$DIR/devclean.sh" || DOCTOR_FAILED=1
     exit "$DOCTOR_FAILED"
     ;;
   report-path)
@@ -293,13 +281,13 @@ case "$cmd" in
     REPORT_FILE="$(state_report_path "$PWD")"
     case "${1:---show}" in
       --remind)
-        if [ -f "$REPORT_FILE" ]; then
-          printf 'Afterparty: the previous session report is available at %s. Review it before starting duplicate services.\n' "$REPORT_FILE"
-        fi
+        report_remind "$REPORT_FILE"
         ;;
+      --session-end) report_session_end ;;
       --show)
         if [ -f "$REPORT_FILE" ]; then
           cat "$REPORT_FILE"
+          [ "$(report_meta "$REPORT_FILE" status)" != incomplete ] || exit 1
         else
           echo "no afterparty report for this workspace" >&2
           exit 1
@@ -312,19 +300,7 @@ case "$cmd" in
     state_actions_path
     ;;
   actions)
-    ACTIONS_FILE="$(state_actions_path)"
-    case "${1:---show}" in
-      --show)
-        if [ -f "$ACTIONS_FILE" ]; then
-          cat "$ACTIONS_FILE"
-        else
-          echo "no afterparty actions have been recorded" >&2
-          exit 1
-        fi
-        ;;
-      --path) printf '%s\n' "$ACTIONS_FILE" ;;
-      *) echo "unknown actions arg: $1" >&2; exit 2 ;;
-    esac
+    journal_show "$@"
     ;;
   -h|--help|help)
     usage

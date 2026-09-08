@@ -15,6 +15,7 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB="$REPO/skills/afterparty/lib"
+. "$LIB/fingerprint.sh"
 FAILS=0
 fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 pass() { echo "ok: $*"; }
@@ -51,6 +52,7 @@ CTR="$T/ctr"
 case "\$*" in
   *pid,ppid,pgid,%cpu,etime,command*)
     printf '%s 1 %s 0.0 01:00:00 /usr/local/bin/nodemon server.js\n' "\$PG" "\$PG" ;;
+  *pid=,pgid=,lstart=,command=*) printf '%s %s Tue Aug 18 09:00:00 2026 /usr/local/bin/nodemon server.js\n' "\$PG" "\$PG" ;;
   *pgid=,lstart=,command=*)
     n=0; [ -f "\$CTR" ] && n=\$(cat "\$CTR"); echo \$((n + 1)) > "\$CTR"
     if [ "\$DRIFT" = "1" ] && [ "\$n" -ge 1 ]; then
@@ -189,6 +191,7 @@ LSHIM="$T/lshim"; mkdir -p "$LSHIM"
 cat > "$LSHIM/ps" <<'PS'
 #!/usr/bin/env bash
 case "$*" in
+  *pid=,pgid=,lstart=,command=*) printf '77800 77800 Tue Aug 18 09:00:00 2026 npm run dev\n' ;;
   *-o\ pgid=*-p\ 77800*) printf '77800
 ' ;;
   *-o\ pgid=*-p*)        printf '99999
@@ -210,8 +213,7 @@ esac
 PS
 chmod +x "$LSHIM/ps"
 KG5CTR="$T/kg5ctr"; rm -f "$KG5CTR"; export KG5CTR
-printf '2026-01-01T00:00:00Z	/r	/r	77800	77800	dev			npm run dev
-' > "$T/ledger.tsv"
+printf '2026-01-01T00:00:00Z	/r	/r	77800	77800	dev			npm run dev	%s\n' "$(PATH="$LSHIM:$PATH" fp_members_for_pgid 77800)" > "$T/ledger.tsv"
 : > "$KILLLOG"
 LOUT="$(PATH="$LSHIM:$PATH" AGENT_PROCESS_LEDGER="$T/ledger.tsv" AFTERPARTY_STYLE=never   bash "$LIB/process-ledger.sh" stop --kill --all 2>&1)"
 printf '%s\n' "$LOUT" | grep -q 'kill pgid 77800' \
@@ -234,6 +236,7 @@ SSHIM="$T/sshim"; mkdir -p "$SSHIM"
 cat > "$SSHIM/ps" <<'PS'
 #!/usr/bin/env bash
 case "$*" in
+  *pid=,pgid=,lstart=,command=*) printf '8801 8801 Tue Aug 18 09:00:00 2026 npm run dev\n8802 8802 Tue Aug 18 09:00:00 2026 vitest --watch\n' ;;
   *-o\ pgid=*-p\ 8801*) printf '8801
 ' ;;
   *-o\ pgid=*-p\ 8802*) printf '8802
@@ -255,10 +258,8 @@ esac
 PS
 chmod +x "$SSHIM/ps"
 mkledger() {
-  printf '2026-01-01T00:00:00Z	%s	%s	8801	8801	dev			npm run dev
-' "$1" "$1" >  "$T/sl.tsv"
-  printf '2026-01-01T00:00:00Z	%s	%s	8802	8802	tests			vitest --watch
-' "$1" "$1" >> "$T/sl.tsv"
+  printf '2026-01-01T00:00:00Z	%s	%s	8801	8801	dev			npm run dev	%s\n' "$1" "$1" "$(PATH="$SSHIM:$PATH" fp_members_for_pgid 8801)" >  "$T/sl.tsv"
+  printf '2026-01-01T00:00:00Z	%s	%s	8802	8802	tests			vitest --watch	%s\n' "$1" "$1" "$(PATH="$SSHIM:$PATH" fp_members_for_pgid 8802)" >> "$T/sl.tsv"
 }
 run_stop() {
   PATH="$SSHIM:$PATH" AGENT_PROCESS_LEDGER="$T/sl.tsv" AFTERPARTY_STYLE=never     bash "$LIB/process-ledger.sh" stop --kill "$@" 2>&1

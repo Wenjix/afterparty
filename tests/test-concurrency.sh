@@ -103,7 +103,7 @@ PT="$T/prune"; mkdir -p "$PT/shim"
 printf '#!/usr/bin/env bash\nsleep 0.3\nexit 1\n' > "$PT/shim/ps"; chmod +x "$PT/shim/ps"
 PL="$PT/ledger.tsv"
 i=1; while [ "$i" -le 30 ]; do
-  printf '2026-01-01T00:00:00Z\t/r\t/r\t9%04d\t\tdev\t\t\tsleep\n' "$i" >> "$PL"
+  printf '2026-01-01T00:00:00Z\t/r\t/r\t9%04d\t9%04d\tdev\t\t\tsleep\n' "$i" "$i" >> "$PL"
   i=$((i + 1))
 done
 ( PATH="$PT/shim:$PATH" AGENT_PROCESS_LEDGER="$PL" bash "$LIB/process-ledger.sh" prune --all >/dev/null 2>&1 ) &
