@@ -47,7 +47,29 @@ pass "audit-processes --json + guardrails"
 FAKE="$T/ledger.tsv"
 printf '2026-07-14T00:00:00Z\t%s\t%s\t999999\t999999\tdev\t3000\tsay "hi" \\ done\tpnpm dev\n' \
   "$(git -C "$REPO" rev-parse --show-toplevel)" "$REPO" > "$FAKE"
-OUT="$(cd "$REPO" && AGENT_PROCESS_LEDGER="$FAKE" bash "$LIB/process-ledger.sh" list --json)"
+# JSON status is determined by controlled scan evidence, not the host OS:
+# Git Bash cannot provide the detailed process table and must report unknown.
+LEDGER_SHIM="$T/ledger-shim"; mkdir -p "$LEDGER_SHIM"
+cat > "$LEDGER_SHIM/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  "-Ao pid=,pgid=,lstart=,command=")
+    printf 'member scan\n' >> "$AFTERPARTY_JSON_PS_LOG"
+    if [ "${AFTERPARTY_JSON_PS_FAILURE:-0}" = 1 ]; then
+      echo 'fixture process inspection unavailable' >&2
+      exit 1
+    fi
+    printf '424242 424242 Sun Sep 6 10:00:00 2026 bash\n'
+    ;;
+  "-o pgid= -p "*) printf '424242\n' ;;
+  *) exit 1 ;;
+esac
+PS
+chmod +x "$LEDGER_SHIM/ps"
+OUT="$(cd "$REPO" && PATH="$LEDGER_SHIM:$PATH" AFTERPARTY_JSON_PS_LOG="$T/ledger-ps.log" \
+  AGENT_PROCESS_LEDGER="$FAKE" bash "$LIB/process-ledger.sh" list --json)"
+[ "$?" -eq 0 ] || fail "ledger controlled absent scan failed"
+grep -q '^member scan$' "$T/ledger-ps.log" || fail "ledger positive scan fixture was not reached"
 N="$(printf '%s\n' "$OUT" | "$PY" -c "$PYCHECK")" || fail "ledger --json invalid"
 [ "$N" = "1" ] || fail "ledger --json expected 1 row, got $N"
 printf '%s\n' "$OUT" | "$PY" -c '
@@ -57,7 +79,20 @@ assert r["section"] == "ledger" and r["status"] == "dead", r
 assert r["cpu"] is None, "dead row cpu should be null"
 assert chr(34) in r["purpose"] and chr(92) in r["purpose"], "purpose escaping broken: " + r["purpose"]
 ' || fail "ledger row content wrong"
-pass "ledger list --json escapes and nulls correctly"
+# The same ledger with an unavailable scan must preserve unknown, never dead.
+UNKNOWN="$(cd "$REPO" && PATH="$LEDGER_SHIM:$PATH" AFTERPARTY_JSON_PS_LOG="$T/ledger-unavailable.log" \
+  AFTERPARTY_JSON_PS_FAILURE=1 AGENT_PROCESS_LEDGER="$FAKE" bash "$LIB/process-ledger.sh" list --json)"
+[ "$?" -eq 0 ] || fail "ledger unavailable scan should remain reportable"
+grep -q '^member scan$' "$T/ledger-unavailable.log" || fail "ledger unavailable scan fixture was not reached"
+printf '%s\n' "$UNKNOWN" | "$PY" -c '
+import json, sys
+rows = [json.loads(line) for line in sys.stdin if line.strip()]
+assert len(rows) == 1, rows
+r = rows[0]
+assert r["section"] == "ledger" and r["status"] == "unknown", r
+assert r["pid"] == 999999 and r["pgid"] == 999999 and r["cpu"] is None, r
+' || fail "unavailable ledger inspection was mistaken for absence"
+pass "ledger list --json escapes correctly and distinguishes confirmed absence from unavailable inspection"
 
 # ---------- composite audit --json ----------
 OUT="$(cd "$REPO" && AGENT_PROCESS_LEDGER="$FAKE" "$BIN" audit --json 2>/dev/null)"
@@ -79,7 +114,7 @@ pass "--report/--json mutually exclusive"
 # ---------- audit --report in an opted-in repo (report.md gitignored) ----------
 rm -f "$REPO/report.md"
 (cd "$REPO" && AGENT_PROCESS_LEDGER="$FAKE" "$BIN" audit --report) >"$T/r.out" 2>"$T/r.err"; RC=$?
-[ "$RC" -eq 0 ] || fail "audit --report exit=$RC"
+[ "$RC" -eq 0 ] || { [ "$RC" -eq 1 ] && grep -q 'Status: incomplete' "$REPO/report.md"; } || fail "audit --report exit=$RC without an incomplete report"
 [ -f "$REPO/report.md" ] || fail "report.md not written at opted-in repo root"
 grep -q '^# afterparty report — what the last session left behind$' "$REPO/report.md" || fail "report header missing"
 grep -q '^## Worktrees$' "$REPO/report.md" || fail "git section missing from report"
@@ -94,7 +129,7 @@ pass "audit --report writes gitignored repo-root report.md"
 mkdir -p "$T/plain" && cd "$T/plain" && git init -q
 FALLBACK_REPORT="$(XDG_CACHE_HOME="$T/cache" "$BIN" report-path)"
 XDG_CACHE_HOME="$T/cache" AGENT_PROCESS_LEDGER="$FAKE" "$BIN" audit --report >/dev/null 2>"$T/r2.err"; RC=$?
-[ "$RC" -eq 0 ] || fail "audit --report (plain repo) exit=$RC"
+[ "$RC" -eq 0 ] || { [ "$RC" -eq 1 ] && grep -q 'Status: incomplete' "$FALLBACK_REPORT"; } || fail "audit --report (plain repo) exit=$RC without an incomplete report"
 [ -f "$FALLBACK_REPORT" ] || fail "fallback report.md not written to repo-scoped cache"
 [ -f "$T/plain/report.md" ] && fail "litter: report.md written into non-opted-in repo"
 pass "litter guard: non-opted-in repo falls back to ledger home"
@@ -103,7 +138,7 @@ pass "litter guard: non-opted-in repo falls back to ledger home"
 cd "$T"
 NO_REPO_REPORT="$(XDG_CACHE_HOME="$T/cache2" "$BIN" report-path)"
 XDG_CACHE_HOME="$T/cache2" "$BIN" audit --report >/dev/null 2>&1; RC=$?
-[ "$RC" -eq 0 ] || fail "audit --report (no repo) exit=$RC"
+[ "$RC" -eq 0 ] || { [ "$RC" -eq 1 ] && grep -q 'Status: incomplete' "$NO_REPO_REPORT"; } || fail "audit --report (no repo) exit=$RC without an incomplete report"
 [ -f "$NO_REPO_REPORT" ] || fail "no-repo report not written to workspace-scoped cache"
 pass "audit --report outside a repo still lands in ledger home"
 
