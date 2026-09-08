@@ -206,7 +206,13 @@ chmod +x "$SHIM/audit-processes.sh"
 mkplan "$FPNOW"
 run_apply >/dev/null 2>&1
 rc=$?
+# Anchored on the delegation-failure BRANCH, not merely on a non-zero exit.
+# Survivors also make apply exit non-zero, and the shim leaves the group alive,
+# so an exit-code-only assertion passed even with the delegation check removed.
 [ "$rc" -ne 0 ] || fail "A9: delegation failed but apply exited 0"
+printf '%s\n' "$(PATH="$SHIM:$PATH" AFTERPARTY_TRANSCRIPT_ROOT="$RIDLE" AFTERPARTY_STYLE=never bash "$LIB/apply.sh" "$T/plan.md" 2>&1)" \
+  | grep -q 'delegation failed for' \
+  || fail "A9: the delegation-failure branch was never entered"
 [ "$FAILS" -eq "$_b" ] && pass "A9: a failed delegation exits nonzero"
 printf '#!/usr/bin/env bash\necho "$*" >> "%s"\nexit 0\n' "$T/delegated" > "$SHIM/audit-processes.sh"
 chmod +x "$SHIM/audit-processes.sh"

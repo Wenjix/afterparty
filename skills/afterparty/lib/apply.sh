@@ -104,7 +104,7 @@ group_facts() {
     if [ "$mixed" -eq 1 ]; then
       printf -- 'mixed\t%s' "$maxcpu"
     elif [ -n "$best" ]; then
-      printf '%s\t%s' "$(awk -F'\t' -v w="$best" '$2 == w { print $1; exit }' "$T/ws")" "$maxcpu"
+      printf '%s\t%s' "$(awk -F'\t' -v w="$best" 'function samepath(a,b){return (length(a)==length(b) && index(a,b)==1)} samepath($2,w) { print $1; exit }' "$T/ws")" "$maxcpu"
     else
       printf -- '-\t%s' "$maxcpu"
     fi
@@ -190,7 +190,11 @@ done < "$PLAN"
 journal_outcome() {
   local status=succeeded
   [ "$N_OK" -gt 0 ] || status=no-op
-  if [ "$N_FAILED" -gt 0 ] || [ "$N_SURVIVED" -gt 0 ]; then status=failed; fi
+  # A survivor is not the same as a failure. audit declining to kill a
+  # protected group is a CORRECT outcome; the work simply was not confirmed.
+  # Filing that as "failed" made the receipt misdescribe a working refusal.
+  [ "$N_SURVIVED" -gt 0 ] && status=incomplete
+  [ "$N_FAILED" -gt 0 ] && status=failed
   journal_action plan.apply "plan:$(basename "$PLAN")" "$status" \
     "applied=$N_OK refused=$N_DRIFT gone=$N_GONE held=$N_HELD survived=$N_SURVIVED failed=$N_FAILED"
 }
@@ -264,4 +268,10 @@ printf '%s applied · %s refused (drift) · %s gone · %s held · %s survived ·
   "$N_OK" "$N_DRIFT" "$N_GONE" "$N_HELD" "$N_SURVIVED" "$N_FAILED"
 # Receipts are postcondition-based: a delegation that failed did not do the
 # work, so the exit status must say so.
-[ "$N_FAILED" -eq 0 ] || exit 1
+# A run where every approved group SURVIVED did no work, and a caller cannot
+# tell that from "cleaned up" if both exit 0. Survivors are counted as a
+# failure of the run, matching the postcondition rule: the receipt describes
+# what was confirmed, and nothing was.
+if [ "$N_FAILED" -ne 0 ] || [ "$N_SURVIVED" -ne 0 ]; then
+  exit 1
+fi

@@ -195,17 +195,27 @@ case "$*" in
 ' ;;   # this shell's own group
   *-p\ 77800*)           printf '77800 npm run dev
 ' ;;
-  # the recheck before SIGTERM: ps SUCCEEDS and the group is gone
-  *-Ao\ pgid=,command=*) exit 0 ;;
-  *-Ao\ pgid=*)          exit 0 ;;
+  # STATEFUL: alive on the FIRST scan so the row survives DISCOVERY, gone on
+  # every later one so the PRE-SIGTERM recheck is the call site exercised. An
+  # always-absent shim withheld the row at the discovery guard instead, so
+  # $groups was empty, the signalling loop never ran, and both assertions were
+  # satisfied by a guard the case is not about.
+  *-Ao\ pgid=,command=*)
+    n=0; [ -f "$KG5CTR" ] && n=$(cat "$KG5CTR"); echo $((n + 1)) > "$KG5CTR"
+    [ "$n" -ge 1 ] && exit 0
+    printf '77800 npm run dev\n' ;;
+  *-Ao\ pgid=*) exit 0 ;;
   *) exit 1 ;;
 esac
 PS
 chmod +x "$LSHIM/ps"
+KG5CTR="$T/kg5ctr"; rm -f "$KG5CTR"; export KG5CTR
 printf '2026-01-01T00:00:00Z	/r	/r	77800	77800	dev			npm run dev
 ' > "$T/ledger.tsv"
 : > "$KILLLOG"
 LOUT="$(PATH="$LSHIM:$PATH" AGENT_PROCESS_LEDGER="$T/ledger.tsv" AFTERPARTY_STYLE=never   bash "$LIB/process-ledger.sh" stop --kill --all 2>&1)"
+printf '%s\n' "$LOUT" | grep -q 'kill pgid 77800' \
+  || fail "KG5: the row never reached the signalling loop — the pre-SIGTERM guard was not the one tested"
 grep -q -- '-77800' "$KILLLOG"   && fail "KG5: ledger signalled a group ps reported absent"
 printf '%s
 ' "$LOUT" | grep -qi 'already exited'   || fail "KG5: ledger did not report the group as already gone: $LOUT"
@@ -213,6 +223,80 @@ printf '%s
 bash -c 'kill -TERM -424242 2>/dev/null' || true
 grep -q -- '-424242' "$KILLLOG" || fail "KG5: kill log is not recording — the check above proved nothing"
 [ "$FAILS" -eq "$_b" ] && pass "KG5: the ledger stop path treats an absent group as terminal"
+
+# ---------- KG6: stop --kill scoping decides what gets signalled ----------
+# --keep spares a group, --kind narrows by category, and the default scope is
+# the current workspace. All three were untested ON THE DESTRUCTIVE PATH, so
+# nothing proved a spared group is actually spared -- only that the flags
+# parse. Each case asserts BOTH directions: the in-scope group is signalled and
+# the out-of-scope one is not, so a scope that matched nothing would fail too.
+SSHIM="$T/sshim"; mkdir -p "$SSHIM"
+cat > "$SSHIM/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  *-o\ pgid=*-p\ 8801*) printf '8801
+' ;;
+  *-o\ pgid=*-p\ 8802*) printf '8802
+' ;;
+  *-o\ pgid=*-p*)       printf '99999
+' ;;
+  *-p\ 8801*)           printf '8801 npm run dev
+' ;;
+  *-p\ 8802*)           printf '8802 vitest --watch
+' ;;
+  *-Ao\ pgid=,command=*) printf '8801 npm run dev
+8802 vitest --watch
+' ;;
+  *-Ao\ pgid=*)          printf '8801
+8802
+' ;;
+  *) exit 1 ;;
+esac
+PS
+chmod +x "$SSHIM/ps"
+mkledger() {
+  printf '2026-01-01T00:00:00Z	%s	%s	8801	8801	dev			npm run dev
+' "$1" "$1" >  "$T/sl.tsv"
+  printf '2026-01-01T00:00:00Z	%s	%s	8802	8802	tests			vitest --watch
+' "$1" "$1" >> "$T/sl.tsv"
+}
+run_stop() {
+  PATH="$SSHIM:$PATH" AGENT_PROCESS_LEDGER="$T/sl.tsv" AFTERPARTY_STYLE=never     bash "$LIB/process-ledger.sh" stop --kill "$@" 2>&1
+}
+
+_b=$FAILS
+mkledger /r
+: > "$KILLLOG"; run_stop --all --keep 8801 >/dev/null 2>&1
+grep -q -- '-8801' "$KILLLOG" && fail "KG6: --keep did not spare pgid 8801"
+grep -q -- '-8802' "$KILLLOG" || fail "KG6: --keep spared everything, so the check proves nothing"
+[ "$FAILS" -eq "$_b" ] && pass "KG6: --keep spares its group and only its group"
+
+_b=$FAILS
+: > "$KILLLOG"; run_stop --all --kind tests >/dev/null 2>&1
+grep -q -- '-8802' "$KILLLOG" || fail "KG6: --kind tests did not signal the tests group"
+grep -q -- '-8801' "$KILLLOG" && fail "KG6: --kind tests also signalled the dev group"
+[ "$FAILS" -eq "$_b" ] && pass "KG6: --kind narrows the kill to that category"
+
+_b=$FAILS
+mkledger /some/other/workspace
+: > "$KILLLOG"; ( cd "$T" && run_stop >/dev/null 2>&1 )
+grep -qE -- '-880[12]' "$KILLLOG"   && fail "KG6: a row from an unrelated workspace was signalled without --all"
+# A row belonging to ANOTHER workspace must not be signalled without --all.
+# This briefly matched by path containment so a subdirectory row would be found
+# from the parent — which also meant $HOME, not being a repo, silently acquired
+# --all semantics and reached every project beneath it. Missing a row is
+# fail-safe; matching a stranger's row is not.
+mkdir -p "$T/ws/other"
+mkledger "$T/ws/other"
+: > "$KILLLOG"; ( cd "$T/ws" && run_stop >/dev/null 2>&1 )
+grep -qE -- '-880[12]' "$KILLLOG" \
+  && fail "KG6: signalled a row belonging to a different workspace without --all"
+# Positive control in the SAME world: --all reaches it, so the absence above is
+# a scope decision and not an empty fixture or a dead shim.
+: > "$KILLLOG"; ( cd "$T/ws" && run_stop --all >/dev/null 2>&1 )
+grep -q -- '-8801' "$KILLLOG" \
+  || fail "KG6: --all did not reach the row either — the fixture proves nothing"
+[ "$FAILS" -eq "$_b" ] && pass "KG6: the default scope is this workspace, and it is not empty"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi
