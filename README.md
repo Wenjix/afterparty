@@ -12,6 +12,8 @@ An agent session ends and leaves things behind: a dev server still bound to
 `localhost:3000`, a Vitest watcher no one is watching, a headless Chrome with
 no owner, worktrees and `claude/*` branches no one will return to, and a
 gigabyte of `.next` and `node_modules/.cache`.
+It can also leave setup instructions describing removed behavior, unfinished
+plans, and temporary notes that need review.
 
 Afterparty inventories these leftovers, reports what it could inspect, and
 requires specific approval before cleanup. Missing evidence required by a
@@ -58,10 +60,13 @@ The plugin adds lifecycle wiring around the same terminal CLI:
 - a bounded synchronous `SessionEnd` hook records the session ID and end time;
   it performs no audit or cleanup;
 - a lightweight `SessionStart` hook shows the last explicit audit's age and
-  completion status, plus the session-end marker;
+  completion status, the session-end marker, and saved documentation summaries;
 - `/afterparty:audit` runs the audit on demand; `clean` requests cleanup within
   the user's approved scope. A failing audit stays visible without aborting
   the instructions. `/afterparty:afterparty` loads the general cleanup skill.
+- `/afterparty:docs` reviews documentation affected by coding changes, prepares
+  concrete treatment choices, and records the agent's review. Use `--since REF`
+  for a known starting commit or `--full` for a repository documentation review.
 
 Run `afterparty audit --report` when you need a durable current snapshot. The
 session-end marker explicitly says no exit-time scan occurred; it does not
@@ -101,9 +106,9 @@ runtime, but they cannot inspect or clean processes on your local machine.
 Claude's hosted script support is described in its
 [custom skills guide](https://support.claude.com/en/articles/12512198-how-to-create-custom-skills#add-scripts).
 
-The skill itself stays tiny by design. It is the *when* — a memory hook that
-reminds the agent cleanup is due. The scripts are the *how*, and they are the
-only thing that ever acts.
+The skill stays tiny: it reminds the agent when review or cleanup is due.
+Scripts collect evidence and perform approved resource cleanup. For documentation,
+the invoking agent checks meaning, prepares previews, and applies selected edits.
 
 ### As a standalone CLI
 
@@ -129,6 +134,7 @@ write local state, as described below.
 | Command | Reports | Acts with |
 | --- | --- | --- |
 | `afterparty glance` | processes visible to the scanner, grouped by workspace with unknown attribution retained | *(reports only)* |
+| `afterparty docs` | affected documentation, reference hints, and local-link observations | *(collects evidence; the agent reviews and edits selected treatments)* |
 | `afterparty plan` | unchecked process, worktree, and artifact checklist for the current repository | *(proposes only)* |
 | `afterparty apply <plan>` | executes the boxes you checked, refusing anything that moved | *(acts on approved targets)* |
 | `afterparty audit` | recorded processes, dev servers, watchers, browsers, git litter | `--kill tests\|dev\|browser` |
@@ -148,6 +154,7 @@ devclean mode or a prerequisite that replaces cleanup-time checks.
 afterparty audit                   # ledger, machine processes/listeners, and current Git repo
 afterparty audit --json            # same findings, as JSON Lines
 afterparty audit --report          # persist the report for the next session
+afterparty docs --report --json    # collect documentation evidence for agent review
 afterparty report --show           # read this workspace's persisted report
 afterparty audit --kill dev --pgid <reviewed-pgid> # act only on a reviewed group
 afterparty add --pid <PID> --kind dev --port <PORT> --purpose "<why>" -- <command>
@@ -190,7 +197,7 @@ reviewed.
 The post-session report is the point, so it comes in three shapes:
 
 - **Styled**, on an interactive terminal — for you (see [Style](#style)).
-- **JSON Lines**, via `--json` on `audit`, `list`, and `git` — one
+- **JSON Lines**, via `--json` on `audit`, `list`, `git`, and `docs` — one
   `schema_version: 1` object per finding, for agents and scripts.
 - **Persisted**, via `audit --report` — written to `report.md` at the repo
   root *only* when the repo already gitignores that name (a cleanup tool must
@@ -210,6 +217,80 @@ unavailable process capabilities while returning 0; use `audit --strict` or
 when all invoked audit sections return success; it does not cover every
 Afterparty capability or prove that the
 machine has no other processes.
+
+## Documentation review
+
+Run `/afterparty:docs` in the Claude plugin before the final coding handoff.
+The command collects evidence, has the active agent check documentation against
+the implementation, and presents numbered treatment choices with concrete
+previews. It honors treatment scope already authorized; invocation alone requests
+review. You can select several items together, override a treatment, or defer
+them. For example: "Update 1 and 2; mark 3 historical; defer 4."
+
+Treatments are **update**, **mark historical**, **consolidate**, **archive**,
+**delete**, **flag for review**, and **keep**. Each finding includes evidence and
+a reason. Edits require patch previews; moves/deletions include exact paths,
+unique-content preservation and incoming-link checks. Uncertain findings
+recommend flag or keep. Flagging records a concern in the private review report;
+adding a warning to the document is a separate proposed edit. Historical records
+retain their release or decision context; age alone does not establish staleness.
+
+The terminal CLI supplies evidence and storage; the invoking agent performs the
+semantic review and applies selected edits with its normal editing tools:
+
+```bash
+afterparty docs                           # evidence for current changes, no project writes
+afterparty docs --since <git-ref> --report --json
+afterparty docs --full --report           # all documentation in this repository
+afterparty docs --template <scan-id>      # empty JSON record for the agent to fill
+afterparty docs --save-review <file.json> # store the agent's review and decisions
+afterparty docs --check <scan-id>         # recheck evidence before selected edits
+afterparty docs --show                    # last agent review, or evidence if none
+afterparty docs --report-path             # location of that report
+```
+
+`--root DIR` selects a repository. The default compares HEAD with staged,
+unstaged and untracked files; it includes pre-existing local changes and excludes
+earlier session commits. Use a known session-start ref with `--since` to include
+those commits. No session-start baseline is inferred or silently recorded by
+hooks. `--full` includes all documentation discovered within the selected
+repository. JSON output is versioned JSON Lines; `--json --report` is supported
+for documentation evidence.
+
+Discovery covers Markdown/MDX, reStructuredText, AsciiDoc, text documents and
+extensionless README/changelog files known to Git or untracked and not ignored.
+Candidates include changed documents, applicable README/agent guidance, and
+documents mentioning changed paths, basenames, flags or selected symbols from
+the diff. These are heuristics: behavior changes can affect documents without
+matching names, so the agent can widen the review. Local Markdown link checks
+cover simple inline/reference destinations with extensions, excluding fenced and
+inline code. They do not fetch remote links, check anchors, resolve website
+routes, or fully parse every Markdown construct. Missing destinations are review
+hints, including in historical documents.
+
+Common dependency/build directories, ignored untracked files, directories and
+submodules are excluded. Symlinks, nested-repository traversal, unreadable files,
+non-UTF-8 documents, relevant files over 2 MiB and diff/symbol inspection limits
+produce explicit gaps. Incomplete collection returns nonzero and cannot support
+a complete review. The scan reads files without executing documented commands.
+
+`--report` saves evidence under the shared private workspace state, separately
+from process audit reports. Agent reviews have their own immutable revisions;
+new evidence does not overwrite the last review. `--show` prefers that review,
+identifies its original scope and timestamp, and returns nonzero for partial
+coverage. Complete collection and complete agent review are distinct statuses;
+complete review may still have unresolved findings. The agent carries unresolved
+findings into later reviews. Plugin start reminders show both saved evidence and
+review summaries, including the unresolved count; session end still only writes
+its bounded marker.
+
+`--check` compares document/changed-file hashes, HEAD, baseline, local-link
+observations and file inventory. Changed or incomplete evidence requires a fresh review before edits;
+it is not an atomic filesystem guarantee. Saving a review records agent-reported
+decisions and whether its evidence still matches, without applying changes or
+independently verifying reported outcomes. Review text uses best-effort credential
+redaction; paths and hashes are retained. See the bundled
+[review protocol and JSON format](skills/afterparty/docs-review.md).
 
 ## The ledger
 
@@ -513,7 +594,7 @@ actual targets and consequences even when their checks pass.
   matching; the audit falls back to `grep -E` when it is missing.
 - `lsof` for listener reports and filesystem occupancy checks. Reports expose
   missing tools; worktree and artifact removal require a successful scan.
-- Python 3 for Claude/Codex activity indexing, effective JSONC configuration
+- Python 3 for documentation evidence/review storage, Claude/Codex activity indexing, effective JSONC configuration
   edits, and macOS simulator inspection. Missing support makes transcript
   activity unavailable and withholds dependent process cleanup and those
   optimize/simulator targets. Other CLI capabilities keep their own checks.

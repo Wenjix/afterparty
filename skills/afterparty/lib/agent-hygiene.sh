@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# agent-hygiene.sh - one script entrypoint for agent process tracking, audit,
-# and cleanup. The skill should route here instead of reimplementing logic in
-# prompt text.
+# agent-hygiene.sh - entrypoint for process tracking, cleanup and documentation
+# evidence. Skills route deterministic work here; documentation review and
+# selected document edits belong to the invoking agent.
 #
 # Usage:
 #   agent-hygiene.sh list [--json] [--all|--root DIR] [--kind KIND]
@@ -14,6 +14,8 @@
 #   agent-hygiene.sh artifacts [--root DIR] [--caches-only] [--plan|--clean]
 #   agent-hygiene.sh devclean [--orphans|--deep|--optimize|--disk|--history] [--apply --target ID]
 #   agent-hygiene.sh glance [--oneline] [--json]
+#   agent-hygiene.sh docs [--root DIR] [--since REF|--full] [--json] [--report]
+#   agent-hygiene.sh docs --show|--report-path|--template SCAN_ID|--check SCAN_ID|--save-review FILE
 #   agent-hygiene.sh plan [--root DIR] [--all] [--artifacts-only] [--caches-only]
 #   agent-hygiene.sh apply <plan.md>
 #   agent-hygiene.sh doctor [--strict]
@@ -244,6 +246,9 @@ case "$cmd" in
     ;;
   glance)
     exec "$DIR/glance.sh" "$@"
+    ;;
+  docs)
+    exec bash "$DIR/docs.sh" "$@"
     ;;
   plan)
     exec "$DIR/plan.sh" "$@"
