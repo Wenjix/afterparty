@@ -5,9 +5,13 @@
 cat_for_command() {
   local cmd="$1" depth="${2:-0}" exe script arg IFS=$' \t\n'
   [ "$depth" -lt 5 ] || return 1
+  # Normalize only known leading executable names before splitting ps text.
+  # Otherwise the spaces in Google Chrome turn its executable into "Google".
+  # Anchoring at the start keeps a browser name in unrelated argv as data.
   case "$cmd" in
-    /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome\ *|/Applications/Chromium.app/Contents/MacOS/Chromium\ *)
-      case "$cmd" in *\ --remote-debugging-port*) printf browser; return 0 ;; esac ;;
+    /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome[[:space:]]*)
+      cmd="chrome${cmd#/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}" ;;
+    Google\ Chrome[[:space:]]*) cmd="chrome${cmd#Google Chrome}" ;;
   esac
   # Disable globbing in the subshell; commands containing * remain literal.
   # shellcheck disable=SC2086
@@ -70,8 +74,13 @@ cat_for_command() {
     turbo)
       for arg in "$@"; do case "$arg" in run|watch|-*) : ;; dev) printf dev; return 0 ;; *) break ;; esac; done ;;
     headless_shell) printf browser; return 0 ;;
-    chrome|chromium|Chromium|Google\ Chrome|firefox)
-      case " $* " in *\ --remote-debugging-port*|*\ --headless*) printf browser; return 0 ;; esac ;;
+    chrome|google-chrome|google-chrome-stable|chromium|chromium-browser|Chromium|firefox)
+      for arg in "$@"; do
+        case "$arg" in
+          --remote-debugging-port|--remote-debugging-port=*|--headless|--headless=*)
+            printf browser; return 0 ;;
+        esac
+      done ;;
   esac
   return 1
 }

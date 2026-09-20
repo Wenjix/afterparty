@@ -2,6 +2,34 @@
 
 All notable changes to Afterparty are documented here. Versions follow semantic versioning.
 
+## [0.13.0] - 2026-09-20
+
+### Added
+
+- `/afterparty:docs` documentation review with evidence-backed recommendations
+  to update, mark historical, consolidate, archive, delete, flag or keep documents.
+  The active agent prepares concrete previews and applies selected treatments.
+- `afterparty docs` collects changed paths, related documentation, purpose hints
+  and unresolved local Markdown links. `--since REF`, `--full` and `--root DIR`
+  make scope explicit; default scope is HEAD versus the working tree, including
+  staged and untracked files. The collector never modifies project documents.
+- Versioned JSON Lines evidence, private snapshots, validated agent review records
+  and separate review revisions. `--show`, `--report-path`, `--template` and
+  `--save-review` support handoff; new scans preserve previous review findings.
+- `docs --check` detects changes to reviewed evidence before agent edits. Partial
+  collection cannot become a complete review. Saved review outcomes are explicitly
+  agent-reported, with evidence freshness recorded separately.
+- SessionStart reminders include documentation evidence/review summaries and
+  unresolved counts. SessionEnd remains a bounded marker without a review scan.
+
+### Fixed
+
+- Browser classification recognizes system `google-chrome`,
+  `google-chrome-stable` and `chromium-browser` processes with automation flags.
+  Normalize the known macOS/bare `Google Chrome` executable before splitting
+  process text, so headless-only launches are recognized too. Match complete
+  automation flag names; lookalike prefixes and unrelated argv remain excluded.
+
 ## [0.12.0] - 2026-09-07
 
 ### Added

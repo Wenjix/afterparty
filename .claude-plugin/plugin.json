@@ -1,7 +1,7 @@
 {
   "name": "afterparty",
-  "description": "Process tracking, audit, and cleanup for coding agents — localhost servers, test watchers, orphaned MCP processes, build artifacts, and dev caches.",
-  "version": "0.12.0",
+  "description": "Post-session cleanup and documentation review for coding agents — processes, worktrees, artifacts, caches, and documentation drift.",
+  "version": "0.13.0",
   "hooks": "./hooks/hooks.json",
   "author": { "name": "Wenjix" },
   "license": "MIT",
