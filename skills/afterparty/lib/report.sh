@@ -59,6 +59,11 @@ report_remind() {
   fi
   marker="$(report_cache_dir)/session-ended.md"
   if [ -f "$marker" ]; then cat "$marker"; fi
+  local docs_dir summary
+  docs_dir="$(state_docs_dir "$PWD")" || return 1
+  for summary in "$docs_dir/scan-summary.txt" "$docs_dir/review-summary.txt"; do
+    [ ! -f "$summary" ] || cat "$summary"
+  done
 }
 
 report_session_end() {

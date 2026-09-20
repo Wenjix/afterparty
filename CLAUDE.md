@@ -12,6 +12,15 @@ mechanics when you touch them.
 
 **Design rules:**
 
+- Documentation review separates deterministic evidence (`lib/docs.py`, via
+  `docs.sh`) from agent judgment (`commands/docs.md` and the bundled
+  `docs-review.md` protocol). Collection never edits project files or calls an
+  LLM. Current guidance and historical records have different purposes; age
+  alone is not a stale verdict. Store evidence and agent reviews separately in
+  `state_docs_dir`; new scans must not erase unresolved reviews. Scope and
+  collection/review completion are explicit. `docs --check` refuses changed or
+  incomplete evidence before the agent's selected edits. Keep documentation
+  out of artifact deletion. Tests cross the public CLI in disposable repos.
 - The skill is a memory hook: keep SKILL.md tiny (~250 words max). Its frontmatter
   description is trigger-only, and the quoted phrases are search keywords — never
   remove them.

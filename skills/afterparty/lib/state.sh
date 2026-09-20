@@ -78,6 +78,14 @@ state_actions_path() {
   printf '%s/actions.jsonl\n' "$cache"
 }
 
+# Documentation evidence and agent reviews are separate from process reports.
+state_docs_dir() {
+  local cache key
+  cache="$(state_cache_root)" || return
+  key="$(state_workspace_key "${1:-$PWD}")" || return
+  printf '%s/reports/%s/docs\n' "$cache" "$key"
+}
+
 state_secure_dir() {
   local dir="$1"
   (umask 077 && mkdir -p "$dir") || return
