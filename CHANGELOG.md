@@ -22,6 +22,14 @@ All notable changes to Afterparty are documented here. Versions follow semantic 
 - SessionStart reminders include documentation evidence/review summaries and
   unresolved counts. SessionEnd remains a bounded marker without a review scan.
 
+### Fixed
+
+- Browser classification recognizes system `google-chrome`,
+  `google-chrome-stable` and `chromium-browser` processes with automation flags.
+  Normalize the known macOS/bare `Google Chrome` executable before splitting
+  process text, so headless-only launches are recognized too. Match complete
+  automation flag names; lookalike prefixes and unrelated argv remain excluded.
+
 ## [0.12.0] - 2026-09-07
 
 ### Added
