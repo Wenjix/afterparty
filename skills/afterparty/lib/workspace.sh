@@ -2,16 +2,17 @@
 # workspace.sh - workspace attribution and staleness, sourced (not executed) by
 # glance.sh, the same way protect.sh and json.sh are shared.
 #
-# Answers the two questions the kill paths cannot: which workspace does this
-# process belong to, and how long since anyone worked there. Staleness matters
-# because process liveness is the wrong signal -- a finished agent leaves its
-# dev server running long after you stopped caring, and a long tool call goes
-# quiet while very much still working. Callers combine last-touched with cpu.
+# Associates process cwd paths with workspaces found in Claude and Codex files
+# and reports the newest observed transcript file's mtime. This is observed
+# agent-file activity, not verified human use or exclusive process ownership.
+# Process-plan callers combine that activity time with observed CPU.
 #
-# A workspace with no agent transcript has NO last-touched time. That is
+# A workspace with no readable transcript has NO last-touched time. That is
 # "cannot tell", never "forgotten" -- callers must not treat unknown as stale.
 
 WS_TRANSCRIPT_ROOT="${AFTERPARTY_TRANSCRIPT_ROOT:-$HOME/.claude/projects}"
+WS_CODEX_ROOT="$HOME/.codex"
+WS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS_IDLE_HOURS="${AFTERPARTY_IDLE_HOURS:-4}"
 WS_STALE_HOURS="${AFTERPARTY_STALE_HOURS:-24}"
 
@@ -34,31 +35,20 @@ ws_human_age() {
   fi
 }
 
-# Emit "<epoch>\t<cwd>" per workspace that has an agent transcript.
-#
-# Identity comes from the cwd the transcript records, never from the directory
-# name: the slug is lossy (both "/" and "." collapse to "-") and undocumented,
-# so decoding it is ambiguous. grep -m1 stops at the first match, which keeps
-# this cheap even against multi-megabyte transcripts.
+# Emit one "<epoch>\t<cwd>" row per normalized workspace. --sources adds a third
+# column naming the contributing transcript providers. The Python reader merges
+# every session's mtime, including resumed Codex cwd changes and newer ancestor
+# activity. It emits no rows if any present provider cannot be fully inspected.
+# Missing optional roots are okay; directories and files are never modified.
 ws_index() {
   local root="${AFTERPARTY_TRANSCRIPT_ROOT:-$WS_TRANSCRIPT_ROOT}"
-  local dir f newest cwd ts
-  [ -d "$root" ] || return 0
-  for dir in "$root"/*/; do
-    [ -d "$dir" ] || continue
-    newest=""
-    for f in "$dir"*.jsonl; do
-      [ -f "$f" ] || continue
-      if [ -z "$newest" ] || [ "$f" -nt "$newest" ]; then newest="$f"; fi
-    done
-    [ -n "$newest" ] || continue
-    cwd="$(grep -m1 -o '"cwd":"[^"]*"' "$newest" 2>/dev/null)" || continue
-    cwd="${cwd#\"cwd\":\"}"
-    cwd="${cwd%\"}"
-    [ -n "$cwd" ] || continue
-    ts="$(ws_mtime "$newest")" || continue
-    printf '%s\t%s\n' "$ts" "$cwd"
-  done
+  local codex_root="${AFTERPARTY_CODEX_ROOT:-${CODEX_HOME:-$WS_CODEX_ROOT}}"
+  command -v python3 >/dev/null 2>&1 || {
+    echo 'workspace activity unavailable: Python 3 is required to inspect transcripts' >&2
+    return 1
+  }
+  PYTHONUTF8=1 PYTHONIOENCODING=utf-8 PYTHONDONTWRITEBYTECODE=1 python3 "$WS_LIB_DIR/workspace-index.py" \
+    --claude-root "$root" --codex-root "$codex_root" "$@"
 }
 
 # Working directory of a live pid. Requires lsof; without it the caller keeps
@@ -74,14 +64,59 @@ ws_for_pid() {
 
 # Emit "<pid>\t<cwd>" for every process, from ONE lsof call. Per-pid lookup
 # would be ~500 forks on a normal machine; this is ~0.4s for all of them.
-# Shared by glance and plan so the attribution model has a single definition.
+# Default discovery is best-effort for read-only attribution. Filesystem
+# removal uses --strict: only a complete, validated scan may establish that a
+# directory is unoccupied. A failed strict scan emits nothing and returns 1;
+# callers must remove its output file rather than retain an empty safe map.
 ws_pid_cwd() {
+  if [ "${1:-}" = --strict ]; then
+    ws_pid_cwd_strict
+    return $?
+  fi
   command -v lsof >/dev/null 2>&1 || return 0
   lsof -a -d cwd -Fpn 2>/dev/null | awk '
     /^p/ { pid = substr($0, 2); next }
     /^n/ { if (pid != "") { print pid "\t" substr($0, 2); pid = "" } }
   '
 }
+
+ws_pid_cwd_strict() (
+  local scan
+  command -v lsof >/dev/null 2>&1 || return 1
+  scan="$(mktemp -d)" || return 1
+  trap 'rm -rf "$scan"' EXIT
+  lsof -a -d cwd -Fpn > "$scan/raw" 2> "$scan/errors" || return 1
+  # lsof can exit 0 while warning that part of a filesystem was inaccessible.
+  # An empty global scan is not positive evidence either: at least the scanner
+  # itself has a cwd. Neither case authorizes removal.
+  [ ! -s "$scan/errors" ] && [ -s "$scan/raw" ] || return 1
+  awk '
+    /^p[1-9][0-9]*$/ {
+      if (pid != "" || seen[$0]++) bad = 1
+      pid = substr($0, 2); file = 0; next
+    }
+    /^fcwd$/ {
+      if (pid == "" || file++) bad = 1
+      next
+    }
+    /^n\// {
+      # Tabs cannot be represented in the TSV contract. lsof also escapes
+      # unusual filename bytes with backslashes; do not mistake those escaped
+      # names for another physical directory and declare the real one vacant.
+      if (pid == "" || file != 1 || $0 ~ /[[:cntrl:]]/ || index($0, "\\") != 0) bad = 1
+      # Linux can report /proc/<pid>/cwd (readlink: Permission denied) as
+      # the name, even without a failing exit status or stderr warning.
+      if ($0 ~ / \((readlink|stat|lstat):/) bad = 1
+      rows[++count] = pid "\t" substr($0, 2)
+      pid = ""; next
+    }
+    { bad = 1 }
+    END {
+      if (bad || pid != "" || count == 0) exit 1
+      for (i = 1; i <= count; i++) print rows[i]
+    }
+  ' "$scan/raw"
+)
 
 # Longest workspace path prefixing <cwd> wins, so a process in
 # repo/packages/web belongs to repo rather than to a shorter ancestor.

@@ -1,9 +1,10 @@
 # shellcheck shell=bash
-# journal.sh - append privacy-preserving local mutation outcomes as JSON Lines.
+# journal.sh - append local mutation outcomes with common credential redaction.
 
 JOURNAL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$JOURNAL_DIR/state.sh"
 . "$JOURNAL_DIR/json.sh"
+. "$JOURNAL_DIR/privacy.sh"
 
 journal_version() {
   local version_file="$JOURNAL_DIR/../VERSION"
@@ -28,7 +29,7 @@ journal_escape_in_place() {
 journal_action() {
   local operation="$1" target="$2" status="$3" detail="${4:-}" path lock row workspace timestamp version cache
   [ "${AFTERPARTY_JOURNAL:-1}" != "0" ] || return 0
-  path="$(state_actions_path)" || return 0
+  path="$(state_actions_path)" || return 1
   lock="${path}.lock"
   if [ -z "${AFTERPARTY_JOURNAL_WORKSPACE_INITIALIZED:-}" ]; then
     AFTERPARTY_JOURNAL_WORKSPACE="$(state_workspace_scope "$PWD")" || AFTERPARTY_JOURNAL_WORKSPACE="$PWD"
@@ -41,6 +42,8 @@ journal_action() {
     AFTERPARTY_JOURNAL_VERSION_INITIALIZED=1
   fi
   version="$AFTERPARTY_JOURNAL_VERSION"
+  target="$(printf '%s\n' "$target" | privacy_redact)"
+  detail="$(printf '%s\n' "$detail" | privacy_redact)"
   journal_escape_in_place timestamp
   journal_escape_in_place version
   journal_escape_in_place operation
@@ -55,7 +58,7 @@ journal_action() {
   if [ -z "${AFTERPARTY_JOURNAL_READY:-}" ]; then
     state_secure_dir "$cache" || {
       printf 'afterparty: could not create action journal directory\n' >&2
-      return 0
+      return 1
     }
     AFTERPARTY_JOURNAL_READY=1
   fi
@@ -67,10 +70,18 @@ journal_action() {
     printf 'afterparty: action journal is busy; outcome was not recorded\n' >&2
     return 1
   fi
+  if [ -z "${AFTERPARTY_JOURNAL_RETAINED:-}" ]; then
+    if ! journal_retain "$path"; then
+      state_lock_release "$lock"
+      echo 'afterparty: journal retention failed; outcome was not recorded' >&2
+      return 1
+    fi
+    AFTERPARTY_JOURNAL_RETAINED=1
+  fi
   if ! (umask 077 && printf '%s\n' "$row" >> "$path"); then
     state_lock_release "$lock"
     printf 'afterparty: could not append to the action journal\n' >&2
-    return 0
+    return 1
   fi
   if [ -z "${AFTERPARTY_JOURNAL_MODE_SET:-}" ]; then
     chmod 600 "$path" 2>/dev/null || true
@@ -78,4 +89,53 @@ journal_action() {
   fi
   state_lock_release "$lock"
   return 0
+}
+
+# Retention is opt-in: 0 (the default) keeps all receipts. Run only while the
+# journal lock is held, and retain unrecognized rows rather than guessing.
+journal_retain() {
+  local path="$1" days="${AFTERPARTY_RETENTION_DAYS:-0}" cutoff tmp
+  case "$days" in ''|*[!0-9]*) echo 'afterparty: AFTERPARTY_RETENTION_DAYS must be a nonnegative integer' >&2; return 1 ;; esac
+  [ "$days" -gt 0 ] || return 0
+  cutoff="$(date -u -d "$days days ago" +%Y-%m-%d 2>/dev/null || date -u -v-"${days}"d +%Y-%m-%d 2>/dev/null)" || return 1
+  [ -f "$path" ] || return 0
+  tmp="$(mktemp "${path}.retention.XXXXXX")" || return 1
+  if ! awk -v cutoff="$cutoff" '
+    /"timestamp":"[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/ {
+      stamp=$0; sub(/^.*"timestamp":"/, "", stamp)
+      if (substr(stamp,1,10) < cutoff) next
+    }
+    {print}' "$path" > "$tmp" || ! chmod 600 "$tmp" || ! mv -f "$tmp" "$path"; then
+    rm -f "$tmp"; return 1
+  fi
+}
+
+journal_show() {
+  local path workspace="" all=0 since="" field row stamp
+  path="$(state_actions_path)" || return 1
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --show) shift ;;
+      --path) printf '%s\n' "$path"; return 0 ;;
+      --all) all=1; shift ;;
+      --workspace) [ "$#" -ge 2 ] || { echo '--workspace requires a directory' >&2; return 2; }; workspace="$2"; shift 2 ;;
+      --since) [ "$#" -ge 2 ] || { echo '--since requires YYYY-MM-DD' >&2; return 2; }; since="$2"; shift 2 ;;
+      *) echo "unknown actions arg: $1" >&2; return 2 ;;
+    esac
+  done
+  if [ -n "$since" ]; then
+    case "$since" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) echo '--since requires YYYY-MM-DD' >&2; return 2 ;; esac
+  fi
+  [ -f "$path" ] || { echo 'no afterparty actions have been recorded' >&2; return 1; }
+  workspace="$(state_workspace_scope "${workspace:-$PWD}")" || return 1
+  field="$(json_kv workspace "$workspace")"
+  # ENVIRON preserves literal backslashes in escaped JSON paths on Windows.
+  AFTERPARTY_ACTIONS_MATCH="$field" awk -v all="$all" -v since="$since" '
+    !all && !index($0, ENVIRON["AFTERPARTY_ACTIONS_MATCH"]) {next}
+    since != "" {
+      if ($0 !~ /"timestamp":"/) next
+      stamp=$0; sub(/^.*"timestamp":"/, "", stamp)
+      if (substr(stamp,1,10) < since) next
+    }
+    {print}' "$path"
 }

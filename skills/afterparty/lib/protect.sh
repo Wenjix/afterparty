@@ -1,23 +1,24 @@
 # shellcheck shell=bash
-# protect.sh - shared protect list, sourced (not executed) by
-# process-ledger.sh and audit-processes.sh so both use the same regex.
-# Never signal these: editors, agent runtimes, IDE-managed MCP servers whose
-# death breaks live tool connections in this or other sessions, and interactive
-# shells. The shell alternative is end-anchored on purpose: it matches a bare
+# protect.sh - shared command-text protection patterns. Ledger/audit/plan use
+# them for group checks; devclean uses the same regex for individual orphan
+# candidates. Coverage includes selected editors, Claude/Codex command tokens,
+# selected MCP servers and bare interactive shells, not every program in those
+# classes. The shell alternative is end-anchored: it matches a bare
 # interactive shell ("-zsh", "bash", "/bin/bash") but never the argumented
 # "sh -c ..." wrappers inside dev-server and test-runner groups, which must
 # stay killable.
 #
-# The claude alternative is anchored on the executable for the same reason.
+# The claude/codex alternative uses token and path-basename boundaries.
 # Claude Code puts a ".claude/shell-snapshots/..." path in the argv of every
 # shell it spawns, so a bare "claude" substring would match the wrapper
 # sharing a dev server's process group; pgid_has_protected would then refuse
 # that group forever and dev servers would become unkillable. Requiring a
 # space or "/" before and a space or end after matches "claude ...", and
 # "/usr/local/bin/claude ...", but never "/Users/x/.claude/anything".
-# This is an audit/ledger kill guard only -- devclean does not source this
-# file, so its deliberate orphan-targeting of agent processes is unaffected.
-PROTECT_RE='Cursor|Code Helper|Electron|/MacOS/Code|Codex|node_repl|extension-host|chrome-devtools-mcp|playwright-mcp|@playwright/mcp|cursor-server|(^|[[:space:]/])claude([[:space:]]|$)|(^|[[:space:]/])-?(bash|zsh|fish)$'
+# This is command-text matching, not parsed executable identity: a matching
+# token later in argv can also protect a process. Devclean withholds matching
+# orphan PIDs; it does not apply this group-level helper to unrelated siblings.
+PROTECT_RE='Cursor|Code Helper|Electron|/MacOS/Code|node_repl|extension-host|chrome-devtools-mcp|playwright-mcp|@playwright/mcp|cursor-server|(^|[[:space:]/])(claude|codex)([[:space:]]|$)|(^|[[:space:]/])-?(bash|zsh|fish|sh|dash|ksh)([[:space:]]+(-l|-i|--login|--interactive))*$'
 
 # True if any live process in process group $1 matches PROTECT_RE. Group kills
 # must check this: filtering protected rows out of a listing does not stop a

@@ -4,6 +4,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$REPO/tests/devclean-fixtures.sh"
 LIB="$REPO/skills/afterparty/lib"
 BIN="$REPO/bin/afterparty"
 PY="$(command -v python3 || command -v python)"
@@ -12,6 +13,8 @@ FAILS=0
 fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 pass() { echo "ok: $*"; }
 T="$(mktemp -d)"
+# Isolate automatic Codex discovery even when CODEX_HOME is inherited.
+export AFTERPARTY_CODEX_ROOT="$T/codex-index"
 trap 'cd /; rm -rf "$T"' EXIT
 cd "$REPO" || exit 1
 
@@ -20,7 +23,7 @@ FAKE="$T/ledger.tsv"
 printf '2026-07-14T00:00:00Z\t%s\t%s\t999999\t\tdev\t\t\tpnpm dev\n' \
   "$(git -C "$REPO" rev-parse --show-toplevel)" "$REPO" > "$FAKE"
 OUT="$(AGENT_PROCESS_LEDGER="$FAKE" bash "$LIB/process-ledger.sh" list 2>/dev/null)"
-printf '%s\n' "$OUT" | grep -Eq '^dead  999999  \?       dev ' || fail "C6: list columns shifted: $(printf '%s' "$OUT" | tail -1)"
+printf '%s\n' "$OUT" | grep -Eq '^unknown[[:space:]]+999999[[:space:]]+\?[[:space:]]+dev ' || fail "C6: list columns shifted: $(printf '%s' "$OUT" | tail -1)"
 printf '%s\n' "$OUT" | grep -q 'pnpm dev' || fail "C6: command column lost"
 J="$(AGENT_PROCESS_LEDGER="$FAKE" bash "$LIB/process-ledger.sh" list --json 2>/dev/null)"
 printf '%s\n' "$J" | "$PY" -c '
@@ -32,15 +35,18 @@ assert r["purpose"] == "", "purpose should be empty, got %r" % r["purpose"]
 assert r["command"] == "pnpm dev", "command shifted: %r" % r["command"]
 assert r["kind"] == "dev", "kind shifted: %r" % r["kind"]
 ' || fail "C6: json row fields wrong"
-AGENT_PROCESS_LEDGER="$FAKE" bash "$LIB/process-ledger.sh" stop >/dev/null 2>&1 || fail "C6: stop choked on padded row"
+SOUT="$(AGENT_PROCESS_LEDGER="$FAKE" bash "$LIB/process-ledger.sh" stop 2>&1)"; SRC=$?
+[ "$SRC" -ne 0 ] && printf '%s\n' "$SOUT" | grep -q 'identity unavailable' \
+  || fail "C6: missing group identity was not explicitly withheld: $SOUT"
 POUT="$(AGENT_PROCESS_LEDGER="$FAKE" bash "$LIB/process-ledger.sh" prune 2>/dev/null)"
-printf '%s\n' "$POUT" | grep -q 'pruned 1 dead entry' || fail "C6: prune miscounted: $POUT"
+printf '%s\n' "$POUT" | grep -q 'kept pid 999999 pgid unknown: inspection unavailable' || fail "C6: prune miscounted: $POUT"
+[ -s "$FAKE" ] || fail 'C6: prune discarded an entry without group identity'
 pass "C6: empty TSV fields parse without shifting (list/json/stop/prune)"
 
 # ---------- C3: --report stays plain even under AFTERPARTY_STYLE=always ----------
 rm -f "$REPO/report.md"
 AFTERPARTY_STYLE=always "$BIN" audit --report > "$T/r.out" 2>/dev/null; RC=$?
-[ "$RC" -eq 0 ] || fail "C3: audit --report exit=$RC"
+[ "$RC" -eq 0 ] || { [ "$RC" -eq 1 ] && grep -q 'Status: incomplete' "$REPO/report.md"; } || fail "C3: audit --report exit=$RC without persisted incomplete status"
 [ -f "$REPO/report.md" ] || fail "C3: report.md not written"
 grep -q "$ESC" "$REPO/report.md" && fail "C3: ANSI leaked into report.md"
 grep -q '^## Worktrees$' "$REPO/report.md" || fail "C3: H2 rewrite defeated"
@@ -84,12 +90,12 @@ chmod +x "$SHIM/launchctl" "$SHIM/pgrep"
 OUT="$(PATH="$SHIM:$PATH" HOME="$H" AFTERPARTY_STYLE=always bash "$LIB/devclean.sh" --optimize 2>/dev/null)"
 printf '%s\n' "$OUT" | grep -q 'would disable crash reporter in vscode' || fail "C4: dry optimize missed argv"
 printf '%s\n' "$OUT" | grep -q '1 optimize target to tidy' || fail "C4: damage card missing optimize line"
-OUT="$(PATH="$SHIM:$PATH" HOME="$H" AFTERPARTY_STYLE=always bash "$LIB/devclean.sh" --optimize --apply 2>/dev/null)"
+OUT="$(PATH="$SHIM:$PATH" HOME="$H" AFTERPARTY_STYLE=always reviewed_devclean "$LIB/devclean.sh" --optimize 2>/dev/null)"
 printf '%s\n' "$OUT" | grep -q 'disabled crash reporter in vscode' || fail "C4: apply did not act"
 printf '%s\n' "$OUT" | grep -q 'tidied 1 optimize target' || fail "C4: receipt missing optimize line"
 grep -q '"enable-crash-reporter": false' "$H/.vscode/argv.json" || fail "C4: argv.json not patched"
-OUT="$(PATH="$SHIM:$PATH" HOME="$H" AFTERPARTY_STYLE=always bash "$LIB/devclean.sh" --optimize --apply 2>/dev/null)"
-printf '%s\n' "$OUT" | grep -q 'nothing needed doing' || fail "C4: second apply should be spotless"
+OUT="$(PATH="$SHIM:$PATH" HOME="$H" AFTERPARTY_STYLE=always bash "$LIB/devclean.sh" --optimize 2>/dev/null)"
+printf '%s\n' "$OUT" | grep -q '(none enabled)' || fail "C4: second apply should be spotless"
 pass "C4: optimize counted in damage and receipt cards"
 
 # ---------- C1: codex sessions age gate ----------
@@ -99,10 +105,11 @@ NEW_DAY="$(date -d '3 days ago' +%Y/%m/%d 2>/dev/null || date -v -3d +%Y/%m/%d)"
 mkdir -p "$H2/.codex/sessions/$OLD_DAY" "$H2/.codex/sessions/$NEW_DAY"
 dd if=/dev/zero of="$H2/.codex/sessions/$OLD_DAY/rollout-old.jsonl" bs=1024 count=2048 2>/dev/null
 dd if=/dev/zero of="$H2/.codex/sessions/$NEW_DAY/rollout-new.jsonl" bs=1024 count=2048 2>/dev/null
-OUT="$(PATH="$SHIM:$PATH" HOME="$H2" bash "$LIB/devclean.sh" --disk --no-repo-artifacts 2>/dev/null)"
-printf '%s\n' "$OUT" | grep -q "would clean Codex sessions (>30d): .*$OLD_DAY" || fail "C1: old date dir not flagged"
+touch -t 202001010000 "$H2/.codex/sessions/$OLD_DAY/rollout-old.jsonl"
+OUT="$(PATH="$SHIM:$PATH" HOME="$H2" bash "$LIB/devclean.sh" --history --no-repo-artifacts 2>/dev/null)"
+printf '%s\n' "$OUT" | grep -q "would clean Codex sessions (>30d since activity): .*$OLD_DAY" || fail "C1: old date dir not flagged"
 printf '%s\n' "$OUT" | grep -q "$NEW_DAY" && fail "C1: recent date dir wrongly flagged"
-PATH="$SHIM:$PATH" HOME="$H2" bash "$LIB/devclean.sh" --disk --no-repo-artifacts --apply >/dev/null 2>&1
+PATH="$SHIM:$PATH" HOME="$H2" reviewed_devclean "$LIB/devclean.sh" --history --no-repo-artifacts >/dev/null 2>&1
 [ ! -d "$H2/.codex/sessions/$OLD_DAY" ] || fail "C1: old dir survived apply"
 [ -d "$H2/.codex/sessions/$NEW_DAY" ] || fail "C1: recent dir was deleted!"
 pass "C1: codex sessions age-gated at 30 days"

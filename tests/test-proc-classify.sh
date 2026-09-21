@@ -49,6 +49,15 @@ case "$*" in
     printf '77105 1 77105 0.0 00:11:22 deno task dev\n'
     printf '77106 1 77106 0.0 00:11:22 bun --watch run dev\n'
     printf '77107 1 77107 0.0 00:11:22 turbo watch dev\n'
+    printf '77201 1 77201 0.0 00:11:22 /usr/bin/google-chrome --remote-debugging-port=9222\n'
+    printf '77202 1 77202 0.0 00:11:22 /opt/google/chrome/google-chrome-stable --headless=new\n'
+    printf '77203 1 77203 0.0 00:11:22 /usr/bin/chromium-browser --headless\n'
+    printf '77204 1 77204 0.0 00:11:22 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless=new\n'
+    printf '77205 1 77205 0.0 00:11:22 chrome --remote-debugging-port=9333\n'
+    printf '77301 1 77301 0.0 00:11:22 agentd inspect google-chrome --headless and --remote-debugging-port=9222\n'
+    printf '77302 1 77302 0.0 00:11:22 /usr/bin/google-chrome https://example.test\n'
+    printf '77303 1 77303 0.0 00:11:22 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome https://example.test\n'
+    printf '77304 1 77304 0.0 00:11:22 chrome --headless-helper --remote-debugging-portal=9222\n'
     ;;
   *-o\ pid=,ppid=,pgid=,rss=,%cpu=,etime=,command=*)
     printf '77001 1 77001 524288 0.0 12-05:39:30 %s\n' "$P" ;;
@@ -180,6 +189,11 @@ while IFS='|' read -r want desc cmd; do
 done <<'CASES'
 tests|a real vitest runner by path|node /repo/node_modules/.bin/vitest --watch
 tests|pytest invoked directly|pytest tests/unit
+tests|pytest invoked as a module|python -m pytest tests/unit
+none|a clone URL is not a dev-server executable|git clone https://github.com/encode/uvicorn.git
+none|an absolute executable with a browser-cache argument is not a browser|/usr/bin/git clone /Users/u/ms-playwright/chrome
+none|prompt prose is not an npm command|agentd please run npm run dev for me
+none|combined shell command flags remain ambiguous|bash -lc next dev
 tests|jest via npx|npx jest --runInBand
 tests|the npm test script|npm test
 tests|ava by path|/repo/node_modules/.bin/ava
@@ -199,11 +213,45 @@ while IFS='|' read -r want desc cmd; do
   fi
 done <<'CASES'
 browser|chrome under remote debugging|/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222
+browser|Linux Google Chrome by executable name|google-chrome --remote-debugging-port=9222
+browser|Linux stable Chrome by absolute path|/opt/google/chrome/google-chrome-stable --headless=new
+browser|Linux Chromium by absolute path|/usr/bin/chromium-browser --headless
+browser|Chrome remote debugging with a separate port value|/usr/bin/google-chrome --remote-debugging-port 9222
+browser|macOS Chrome with only a headless flag|/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless=new
+browser|a spaced Google Chrome executable name|Google Chrome --headless
+browser|system Chrome behind env|env DISPLAY=:99 /usr/bin/google-chrome-stable --remote-debugging-port=9222
+browser|macOS Chrome behind env|env DISPLAY=:99 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless
 browser|a playwright-managed browser|/Users/x/Library/Caches/ms-playwright/chromium-1140/chrome-mac/Chromium --headless
-browser|the chrome devtools mcp bridge|node /x/node_modules/mcp-chrome/dist/index.js
+none|ordinary Linux Chrome without automation flags|/usr/bin/google-chrome https://example.test
+none|ordinary macOS Chrome without automation flags|/Applications/Google Chrome.app/Contents/MacOS/Google Chrome https://example.test
+none|a spaced browser name without automation flags|Google Chrome https://example.test
+none|lookalike headless flag|chrome --headless-helper
+none|lookalike remote debugging flag|chrome --remote-debugging-portal=9222
+none|macOS Chrome with a lookalike remote debugging flag|/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-portability
+none|an unprotected runtime quoting Linux Chrome|agentd inspect google-chrome --headless
+none|an unprotected runtime quoting macOS Chrome|agentd inspect /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222
+none|an MCP bridge is not an automation browser|node /x/node_modules/mcp-chrome/dist/index.js
 none|prose naming playwright and chromium|claude [city] use playwright to test chromium rendering later
 none|prose naming puppeteer|claude [city] the Google Chrome profile needs puppeteer removed
 CASES
+
+# Exercise the real audit consumer as well as the shared classifier. No signal
+# path is invoked: the same listing supplies browser cleanup candidates.
+BROWSERS="$(printf '%s\n' "$OUT" | section 'Automation browsers')"
+for pid in 77201 77202 77203 77204 77205; do
+  if printf '%s\n' "$BROWSERS" | grep -q "$pid"; then
+    pass "C6/$pid: system automation browser appears in audit"
+  else
+    fail "C6/$pid: system automation browser missing from audit"
+  fi
+done
+for pid in 77301 77302 77303 77304; do
+  if printf '%s\n' "$BROWSERS" | grep -q "$pid"; then
+    fail "C6/$pid: non-automation command appears in browser audit"
+  else
+    pass "C6/$pid: non-automation command remains outside browser audit"
+  fi
+done
 
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))

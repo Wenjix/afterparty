@@ -91,22 +91,35 @@ pgrep -f "bin/cursor-server" >/dev/null 2>&1 || fail "protect: cursor-server sib
 [ "$FAILS" -eq "$B3" ] && pass "a protected sibling shields the whole group from --kill"
 
 B4=$FAILS
-# ---------- 4. recycled-pid guard refuses a mismatched group ----------
+# ---------- 4. member-identity guard refuses a recycled group ----------
+. "$LIB/fingerprint.sh"
 P4="$(spawn_group sleep 300)"
 [ -n "$P4" ] || fail "spawn failed (recycle test)"
 SPAWNED_GROUPS="$SPAWNED_GROUPS $P4"
-RECORDED_PGID=$((P4 + 1))
-TEST_PGID="$(ps -o pgid= -p $$ 2>/dev/null | tr -d '[:space:]')"
-if [ "$RECORDED_PGID" = "$TEST_PGID" ]; then
-  RECORDED_PGID=$((RECORDED_PGID + 1))
-fi
-printf '2026-07-14T00:00:00Z\t%s\t%s\t%s\t%s\tdev\t-\trecycle test\tsleep 300\n' \
-  "$(git -C "$REPO" rev-parse --show-toplevel)" "$REPO" "$P4" "$RECORDED_PGID" > "$T/recycled.tsv"
-OUT="$(AGENT_PROCESS_LEDGER="$T/recycled.tsv" bash "$LIB/process-ledger.sh" stop --kill 2>/dev/null)"
-printf '%s\n' "$OUT" | grep -q "skip pid $P4: group changed since it was recorded" \
-  || fail "recycle guard: skip message missing"
+AGENT_PROCESS_LEDGER="$T/verified.tsv" bash "$LIB/process-ledger.sh" add --pid "$P4" \
+  --kind dev --purpose "recycle test" -- sleep 300 >/dev/null || fail "recycle guard: recording failed"
+# Keep the real PGID and current schema, changing only the saved member proof.
+# An invented PGID exits at the absent-group check, while a legacy nine-field
+# row tests missing evidence rather than a verified identity that changed.
+STALE_MEMBER="$P4:$(printf 'earlier process identity for %s' "$P4" | fp_hash)"
+CURRENT_MEMBERS="$(awk -F '\t' 'NF == 10 { print $10 }' "$T/verified.tsv")"
+[ -n "$CURRENT_MEMBERS" ] && [ "$CURRENT_MEMBERS" != "$STALE_MEMBER" ] \
+  || fail "recycle guard: fixture must change a recorded member identity"
+awk -F '\t' -v OFS='\t' -v stale="$STALE_MEMBER" '{$10=stale; print}' \
+  "$T/verified.tsv" > "$T/recycled.tsv"
+OUT="$(AGENT_PROCESS_LEDGER="$T/recycled.tsv" bash "$LIB/process-ledger.sh" stop --kill 2>&1)"
+RC=$?
+[ "$RC" -ne 0 ] || fail "recycle guard: refused identity reported success"
+printf '%s\n' "$OUT" | grep -q "pgid $P4: refused, identity changed or unverified" \
+  || fail "recycle guard: identity refusal missing"
+printf '%s\n' "$OUT" | grep -q "SIGTERM -> pgid $P4" && fail "recycle guard: group was signaled anyway"
 kill -0 "$P4" 2>/dev/null || fail "recycle guard: process was killed despite mismatch"
-[ "$FAILS" -eq "$B4" ] && pass "recycled-pid guard refuses a group that no longer matches"
+# Positive control: the original proof must let this same group reach SIGTERM.
+OUT="$(AGENT_PROCESS_LEDGER="$T/verified.tsv" bash "$LIB/process-ledger.sh" stop --kill 2>&1)"
+[ "$?" -eq 0 ] || fail "recycle guard: matching identity failed"
+printf '%s\n' "$OUT" | grep -q "SIGTERM -> pgid $P4" || fail "recycle guard: positive control did not signal"
+wait_dead "$P4" || fail "recycle guard: positive control survived"
+[ "$FAILS" -eq "$B4" ] && pass "member-identity guard refuses a recycled group and accepts the original proof"
 
 echo
 # ---------- K-expect: identity is enforced at the signal boundary ----------
@@ -114,7 +127,6 @@ echo
 # spawned `sleep`, which matches nothing, so audit exited at "nothing to kill"
 # before kill_group ever ran -- the group survived for the wrong reason and the
 # test asserted nothing. nodemon is in DEV_RE, so the gate is actually reached.
-. "$LIB/fingerprint.sh"
 _b=$FAILS
 PG_A="$(spawn_group "$T/bin/nodemon")"
 SPAWNED_GROUPS="$SPAWNED_GROUPS $PG_A"

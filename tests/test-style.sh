@@ -14,6 +14,8 @@ fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 pass() { echo "ok: $*"; }
 
 T="$(mktemp -d)"
+# Isolate automatic Codex discovery even when CODEX_HOME is inherited.
+export AFTERPARTY_CODEX_ROOT="$T/codex-index"
 trap 'cd /; rm -rf "$T"' EXIT
 cd "$REPO" || exit 1
 
@@ -49,7 +51,7 @@ pass "plain mode: process listings ANSI-free when piped"
 
 # ---------- A1-A4: styled git run ----------
 OUT="$(AFTERPARTY_STYLE=always bash "$LIB/audit-git.sh" 2>/dev/null)"
-case "$OUT" in *"$ESC["*) : ;; *) fail "A1: no ANSI in styled output" ;; esac
+case "$OUT" in *"${ESC}["*) : ;; *) fail "A1: no ANSI in styled output" ;; esac
 echo "$OUT" | grep -q 'DRY RUN'             || fail "A2: DRY RUN lost in styled mode"
 echo "$OUT" | grep -q 'Summary:'            || fail "A2: Summary: lost in styled mode"
 echo "$OUT" | grep -q 'Nothing was changed.' || fail "A2: Nothing was changed. lost"
@@ -72,9 +74,9 @@ pass "A5: --json byte-clean under AFTERPARTY_STYLE=always"
 
 # ---------- A6: NO_COLOR precedence ----------
 OUT="$(NO_COLOR=1 AFTERPARTY_STYLE=always bash "$LIB/audit-git.sh" 2>/dev/null)"
-case "$OUT" in *"$ESC["*) : ;; *) fail "A6: AFTERPARTY_STYLE=always should beat NO_COLOR" ;; esac
+case "$OUT" in *"${ESC}["*) : ;; *) fail "A6: AFTERPARTY_STYLE=always should beat NO_COLOR" ;; esac
 OUT="$(NO_COLOR=1 bash "$LIB/audit-git.sh" 2>/dev/null)"
-case "$OUT" in *"$ESC["*) fail "A6: NO_COLOR alone must stay plain" ;; esac
+case "$OUT" in *"${ESC}["*) fail "A6: NO_COLOR alone must stay plain" ;; esac
 pass "A6: NO_COLOR precedence both directions"
 
 # ---------- A7: composite = exactly one card, banner, no tally litter ----------
@@ -141,6 +143,7 @@ OUT="$(PATH="$PROT_SHIM:$PATH" bash \
 EXPECTED="$(printf '%s\n' \
   "Killing category 'dev' (keep: 2147483000)" \
   "  nothing to kill" \
+  "0 stopped · 0 protected · 0 already gone · 0 failed" \
   "done")"
 [ "$OUT" = "$EXPECTED" ] || fail "A7c: explicit keep changed legacy plain output"
 pass "A7c: explicit keep decision styled, legacy plain output stable"
@@ -174,11 +177,23 @@ pass "S1: git glyphs (styled) + gitfix plain stability"
 
 # ---------- S2: ledger stop — ⊘ on skip decision lines ----------
 LED_SKIP="$T/ledger-skip.tsv"
-printf '2026-07-14T00:00:00Z\t%s\t%s\t%s\t\tdev\t\t\tsleepx\n' \
-  "$(git -C "$REPO" rev-parse --show-toplevel)" "$REPO" "$$" > "$LED_SKIP"
-AGENT_PROCESS_LEDGER="$LED_SKIP" eq stopskip bash "$LIB/process-ledger.sh" stop
-OUT="$(AFTERPARTY_STYLE=always AGENT_PROCESS_LEDGER="$LED_SKIP" bash "$LIB/process-ledger.sh" stop 2>/dev/null)"
-printf '%s\n' "$OUT" | grep -qF '⊘ skip pid' || fail "S2: ledger skip decision missing ⊘"
+SKIP_SHIM="$T/skip-shim"; mkdir -p "$SKIP_SHIM"
+cat > "$SKIP_SHIM/ps" <<'PS'
+#!/usr/bin/env bash
+case "$*" in
+  "-Ao pid=,pgid=,lstart=,command=") printf '12345 77777 Sun Sep 6 10:00:00 2026 sleepx\n' ;;
+  "-o pgid= -p "*) printf '77777\n' ;;
+  *) exit 1 ;;
+esac
+PS
+chmod +x "$SKIP_SHIM/ps"
+SKIP_PROOF="$(PATH="$SKIP_SHIM:$PATH" bash -c '. "$1/fingerprint.sh"; fp_members_for_pgid 77777' _ "$LIB")"
+[ -n "$SKIP_PROOF" ] || fail "S2: identity fixture unavailable before shared-shell check"
+printf '2026-07-14T00:00:00Z\t%s\t%s\t12345\t77777\tdev\t-\t-\tsleepx\t%s\n' \
+  "$(git -C "$REPO" rev-parse --show-toplevel)" "$REPO" "$SKIP_PROOF" > "$LED_SKIP"
+PATH="$SKIP_SHIM:$PATH" AGENT_PROCESS_LEDGER="$LED_SKIP" eq stopskip bash "$LIB/process-ledger.sh" stop
+OUT="$(PATH="$SKIP_SHIM:$PATH" AFTERPARTY_STYLE=always AGENT_PROCESS_LEDGER="$LED_SKIP" bash "$LIB/process-ledger.sh" stop 2>/dev/null)"
+printf '%s\n' "$OUT" | grep -qF '⊘ skip pid 12345: pgid is shared with this shell (77777)' || fail "S2: proven shared-shell skip decision missing ⊘"
 printf '%s\n' "$OUT" | grep -qF '1 skipped' || fail "S2: ledger-clear card missing skipped segment"
 pass "S2: stop skip glyphs (styled) + plain stability"
 
@@ -192,7 +207,7 @@ git -C "$ARTFIX" -c user.email=t@t -c user.name=t commit -qm init
 dd if=/dev/zero of="$ARTFIX/dist/blob" bs=1024 count=200 2>/dev/null
 eq artfix bash "$LIB/clean-artifacts.sh" --root "$ARTFIX"
 OUT="$(AFTERPARTY_STYLE=always bash "$LIB/clean-artifacts.sh" --root "$ARTFIX" 2>/dev/null)"
-printf '%s\n' "$OUT" | grep -qF '⊘ skip (git-tracked): .cache' || fail "S3: artifacts skip decision missing ⊘"
+printf '%s\n' "$OUT" | grep -qF '⊘ skip (tracked): .cache' || fail "S3: artifacts skip decision missing ⊘"
 pass "S3: artifacts skip glyphs (styled) + plain stability"
 
 # ---------- S4: artifacts styled size tints + category share meters ----------

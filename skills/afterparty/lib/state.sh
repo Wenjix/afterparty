@@ -11,6 +11,14 @@ state_cache_root() {
   fi
 }
 
+state_ledger_path() {
+  if [ -n "${AGENT_PROCESS_LEDGER:-}" ]; then
+    printf '%s' "$AGENT_PROCESS_LEDGER"
+  else
+    printf '%s/ledger.tsv' "$(state_cache_root)"
+  fi
+}
+
 state_workspace_scope() {
   local dir="${1:-$PWD}" root
   if root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)"; then
@@ -68,6 +76,14 @@ state_actions_path() {
   local cache
   cache="$(state_cache_root)" || return
   printf '%s/actions.jsonl\n' "$cache"
+}
+
+# Documentation evidence and agent reviews are separate from process reports.
+state_docs_dir() {
+  local cache key
+  cache="$(state_cache_root)" || return
+  key="$(state_workspace_key "${1:-$PWD}")" || return
+  printf '%s/reports/%s/docs\n' "$cache" "$key"
 }
 
 state_secure_dir() {

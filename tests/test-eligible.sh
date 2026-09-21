@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# The two-signal rule. A workspace is only forgotten when nobody has spoken to
-# it for hours AND nothing in it is working. Either signal alone lies: a long
-# tool call goes quiet while still working, and a finished agent leaves its dev
-# server running long after anyone cared.
+# Process-plan eligibility combines transcript age and observed CPU. These
+# tests verify policy decisions; neither observation proves abandonment.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB="$REPO/skills/afterparty/lib"
+T="$(mktemp -d)" || exit 1
+trap 'rm -rf "$T"' EXIT
 FAILS=0
 fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 pass() { echo "ok: $*"; }
@@ -84,6 +84,51 @@ for bad in 0.5 abc -1 ''; do
     || fail "E4: threshold '$bad' zeroed the idle window — a 1-minute-old workspace read as '$got2'"
 done
 [ "$FAILS" -eq "$_b" ] && pass "E4: a malformed idle threshold falls back to the default, never to zero"
+
+# Startup overrides must be present BEFORE the library is sourced. Setting an
+# override only on an already-loaded function cannot catch a poisoned default.
+startup_verdict() {
+  env AFTERPARTY_IDLE_HOURS="$1" AFTERPARTY_BUSY_CPU="$2" \
+    bash -c '. "$1"; elig_verdict "$2" "$3" "$4"' _ \
+    "$LIB/eligible.sh" "$3" "$4" "$NOW"
+}
+
+# ---------- E5: invalid startup idle thresholds restore the 4h window ----------
+_b=$FAILS
+for bad in 0 000 invalid 0.5 -1; do
+  got="$(startup_verdict "$bad" 20 "$FRESH" 0 2> "$T/idle.err")"; rc=$?
+  [ "$rc" -eq 0 ] && [ "$got" = in-use ] \
+    || fail "E5: startup idle '$bad' gave '$got' (exit $rc) for a fresh workspace"
+  grep -Fq "AFTERPARTY_IDLE_HOURS='$bad'" "$T/idle.err" && grep -Fq 'using 4' "$T/idle.err" \
+    || fail "E5: startup idle '$bad' did not explain its default fallback"
+  got="$(startup_verdict "$bad" 20 "$FIVE" 0 2> "$T/idle.err")"; rc=$?
+  [ "$rc" -eq 0 ] && [ "$got" = eligible ] \
+    || fail "E5: startup idle '$bad' did not restore the 4h window for a 5h-old workspace"
+done
+got="$(startup_verdict 08 20 "$FIVE" 0 2> "$T/idle.err")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$got" = in-use ] && [ ! -s "$T/idle.err" ] \
+  || fail "E5: valid startup idle '08' did not retain its 8h window quietly"
+[ "$FAILS" -eq "$_b" ] && pass "E5: startup idle overrides validate before changing eligibility"
+
+# ---------- E6: invalid startup CPU thresholds restore the 20% boundary ----------
+_b=$FAILS
+for bad in invalid 1.2.3 . -1 NaN; do
+  got="$(startup_verdict 4 "$bad" "$FIVE" 19.9 2> "$T/busy.err")"; rc=$?
+  [ "$rc" -eq 0 ] && [ "$got" = eligible ] \
+    || fail "E6: startup CPU '$bad' gave '$got' (exit $rc) below the default boundary"
+  grep -Fq "AFTERPARTY_BUSY_CPU='$bad'" "$T/busy.err" && grep -Fq 'using 20' "$T/busy.err" \
+    || fail "E6: startup CPU '$bad' did not explain its default fallback"
+  got="$(startup_verdict 4 "$bad" "$FIVE" 21 2> "$T/busy.err")"; rc=$?
+  [ "$rc" -eq 0 ] && [ "$got" = working ] \
+    || fail "E6: startup CPU '$bad' did not withhold above the default boundary"
+done
+got="$(startup_verdict 4 20.5 "$FIVE" 20.4 2> "$T/busy.err")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$got" = eligible ] && [ ! -s "$T/busy.err" ] \
+  || fail "E6: valid fractional startup CPU threshold was not retained quietly"
+got="$(startup_verdict 4 20.5 "$FIVE" 20.6 2> "$T/busy.err")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$got" = working ] \
+  || fail "E6: valid fractional startup CPU threshold did not withhold above its boundary"
+[ "$FAILS" -eq "$_b" ] && pass "E6: startup CPU overrides validate before changing eligibility"
 
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))
