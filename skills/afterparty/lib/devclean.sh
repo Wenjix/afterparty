@@ -912,7 +912,7 @@ disk_flush() {
     # actually-empty field collapses and every later column shifts left --
     # which silently swallowed the pnpm line: the text landed in $label and
     # $detail, the thing printed, was empty. Third occurrence of this hazard
-    # in the repo; CLAUDE.md documents it.
+    # in the repo; AGENTS.md documents it.
     IFS=$'\t' read -r type kb label detail <<< "$row"
     [ "$label" = "-" ] && label=""
     if [ "$type" = meter ]; then

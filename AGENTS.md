@@ -1,5 +1,8 @@
 # Afterparty — agent context
 
+This is the canonical repository-wide agent context. Host-specific instruction
+files should defer here instead of duplicating project rules.
+
 **What this is:** My cleanup tool for the mess coding agents leave behind,
 developed independently in this repo (single-root history), shipped three ways:
 Claude Code plugin (.claude-plugin/ manifests + bounded synchronous SessionEnd and
@@ -200,6 +203,12 @@ LF endings enforced via .gitattributes — scripts must never pick up CRLF.
 `skills/afterparty/VERSION` is the canonical release version; synchronize the
 plugin manifest and SKILL metadata, bundle the root license, and update
 CHANGELOG.md in the same change.
+
+**Session completion:** before ending an authorized task, inspect `git status`,
+run the relevant tests, run the documentation review when the user-facing
+contract changed, and summarize unresolved work. Commit, push, merge, and
+release only when the task explicitly authorizes that action. Never describe a
+change as complete while required work remains uncommitted or unverified.
 
 **Known backlog:** shellcheck advisory findings (CI runs `--severity=error`
 blocking; full severity is advisory-only for now). Cleanup areas researched

@@ -2,11 +2,12 @@
 
 Date: 2026-09-06. Baseline: `e0d3bf1`. Corrections ship in 0.11.1.
 
-Reviewed README, CLAUDE.md, the bundled skill, plugin command and hooks,
-manifests, release metadata, CLI help and inline contracts, historical plans,
-and the terminal illustration. Command claims were traced through the router
-to the implementing scripts. Historical changelog entries retain their release
-context; the [README](../../README.md) describes current behavior.
+Reviewed README, the repository agent context (then `CLAUDE.md`, now
+`AGENTS.md`), the bundled skill, plugin command and hooks, manifests, release
+metadata, CLI help and inline contracts, historical plans, and the terminal
+illustration. Command claims were traced through the router to the implementing
+scripts. Historical changelog entries retain their release context; the
+[README](../../README.md) describes current behavior.
 
 ## Documentation corrections
 

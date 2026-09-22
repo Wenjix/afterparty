@@ -20,6 +20,13 @@ anything. Documentation review is a separate agent-led workflow: the
 collector finds evidence and the agent decides whether a document should be
 updated, retained, archived, or otherwise treated.
 
+Afterparty is maintained by Wenjie Fu with coding-agent assistance. Changes
+receive human review before merge or release, and destructive operations remain
+explicitly approval-gated. See the [contribution guide](./CONTRIBUTING.md),
+[security policy](./SECURITY.md), [code of conduct](./CODE_OF_CONDUCT.md), and
+[release checklist](./RELEASING.md) for project policies. Repository-wide agent
+instructions live in [AGENTS.md](./AGENTS.md).
+
 ## Quick start
 
 Choose the installation that matches where you want Afterparty to run.
@@ -510,9 +517,8 @@ claude plugin validate --strict commands
 ```
 
 Marketplace validation does not inspect every skill, command, or hook file;
-validate those directories explicitly. The plugin validator may warn that the
-root `CLAUDE.md` is developer context rather than installed agent context.
-The bundled `SKILL.md` supplies the installed context.
+validate those directories explicitly. The root `AGENTS.md` is repository-wide
+agent context; the bundled `SKILL.md` supplies the installed skill context.
 
 Run `bash tests/run.sh` in a disposable VM, container, or CI runner. Linux
 live-stop tests perform machine-wide discovery and real signals; changing

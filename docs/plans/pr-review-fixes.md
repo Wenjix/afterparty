@@ -93,9 +93,9 @@ Validation on macOS:
 - Eighteen targeted scratch mutations fail their intended assertions: ten
   safety guards, five identity checks, two plan checks, and KG5 reachability.
 - Marketplace validation passes with `--strict`. Plugin-manifest validation
-  passes normally; its strict mode retains the existing warning that root
-  `CLAUDE.md` is developer context, not context loaded by an installed plugin.
-  The shipped skill contains the agent instructions and remains under 250 words.
+  passes normally; the repository-wide agent context is maintained in
+  `AGENTS.md`, while the shipped skill contains the installed instructions and
+  remains under 250 words.
 
 Native Linux and Windows runtimes were unavailable for local validation. Their
 reported failures have regression coverage and fixture fixes; native CI results

@@ -101,11 +101,12 @@ Validation:
   successfully updating the effective setting.
 - Thirty scratch guard mutations were caught by their intended regressions:
   seven process, twelve devclean, seven reporting/privacy, four filesystem/plan.
-- Marketplace and plugin manifests validate. The plugin validator retains its
-  existing warning that root `CLAUDE.md` is developer context, not installed
-  agent context. The bundled generic skill validator predates the existing
-  standard `compatibility` field; supported fields validate in a scratch copy,
-  and the shipped YAML, release metadata and installed behavior are checked.
+- Marketplace and plugin manifests validate. The historical validator warning
+  about the root `CLAUDE.md` referred to developer context rather than installed
+  agent context; the repository now uses `AGENTS.md` as its canonical agent
+  context. The bundled generic skill validator predates the existing standard
+  `compatibility` field; supported fields validate in a scratch copy, and the
+  shipped YAML, release metadata and installed behavior are checked.
 - Copied-bundle integration covers paths with spaces, incomplete reports,
   concurrent writers, credential redaction and hook invocation. An independent
   agent followed the installed skill in an isolated workspace and accurately
