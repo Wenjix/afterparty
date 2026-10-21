@@ -192,16 +192,19 @@ class ReleasePackageTests(unittest.TestCase):
         self.package(output=reference)
         source_name = "afterparty-" + self.version + "-source.tar.gz"
         source_bytes = (reference / source_name).read_bytes()
-        truncated_bytes = source_bytes[:len(source_bytes) // 2]
-        self.output.mkdir()
-        existing = self.output / source_name
-        existing.write_bytes(truncated_bytes)
+        for label, truncated_bytes in (("half", source_bytes[:len(source_bytes) // 2]),
+                                       ("gzip trailer", source_bytes[:-8])):
+            with self.subTest(truncation=label):
+                output = self.base / ("truncated " + label)
+                output.mkdir()
+                existing = output / source_name
+                existing.write_bytes(truncated_bytes)
 
-        result = self.package(expect=1)
-        self.assertIn("incomplete", result.stderr)
-        self.assertIn(str(existing), result.stderr)
-        self.assertEqual(existing.read_bytes(), truncated_bytes)
-        self.assertEqual(list(self.output.iterdir()), [existing])
+                result = self.package(output=output, expect=1)
+                self.assertIn("incomplete", result.stderr)
+                self.assertIn(str(existing), result.stderr)
+                self.assertEqual(existing.read_bytes(), truncated_bytes)
+                self.assertEqual(list(output.iterdir()), [existing])
 
     def test_missing_required_input_refuses_both_archives(self):
         for name in ("skills/afterparty/lib/review_data.py", "hooks/hooks.json",

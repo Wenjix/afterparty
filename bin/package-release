@@ -168,6 +168,9 @@ def write_archive(handle, prefix, files):
 
 def archive_is_complete(path):
     try:
+        with gzip.open(path, "rb") as stream:
+            while stream.read(1024 * 1024):
+                pass
         with tarfile.open(path, "r:gz") as archive:
             for member in archive:
                 extracted = archive.extractfile(member)
