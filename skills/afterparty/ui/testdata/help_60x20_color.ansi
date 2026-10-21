@@ -1,0 +1,20 @@
+ [1;35mafterparty[m [1mREVIEW / Help[m            [2m09:23 UTC · 2m 5s ago[m
+ Scope: /work/afterparty                                  
+ Scan: complete | 3 available | 1 withheld                
+ [1mKeys[m                                                     
+ Space      Mark or unmark                                
+ Enter      Review choices, then Save plan                
+ Up/Down    Move focus                                    
+ i          Inspect target                                
+ d          Show or hide details                          
+ /          Filter targets                                
+ r          Refresh the scan                              
+ q          Quit                                          
+ Ctrl+Z     Suspend; use fg to resume                     
+                                                          
+ [1mScan status[m                                              
+ Scope: /work/afterparty                                  
+ Observed: 09:23 UTC · 2m 5s ago                          
+ [2m2 marked | Lines 1-14 of 22[m                              
+ Mark targets to include in the plan.                     
+ q/Esc/? back | PgUp/PgDn scroll                          

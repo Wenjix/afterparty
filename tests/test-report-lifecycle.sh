@@ -64,7 +64,7 @@ grep -q 'incomplete.*minutes old.*session session-b' "$T/remind" || fail 'L2: re
 [ "$(wc -l < "$T/scans")" = "$BEFORE" ] || fail 'L2: reminder ran an audit'
 printf '{"session_id":"hook-session"}\n' | bash "$BIN" report --session-end > "$T/hook"
 bash "$BIN" report --remind > "$T/remind"
-grep -q 'hook-session.*No exit-time audit was run' "$T/remind" || fail 'L2: marker failed to distinguish session end from audit'
+grep -q 'hook-session.*Afterparty did not run an audit at session end' "$T/remind" || fail 'L2: marker failed to distinguish session end from audit'
 [ "$(wc -l < "$T/scans")" = "$BEFORE" ] || fail 'L2: SessionEnd ran an audit'
 grep -q 'Session: session-b' "$REPORT" || fail 'L2: exit marker overwrote the explicit audit'
 [ "$FAILS" -eq "$_b" ] && pass 'L2: lifecycle only writes a marker and reminds with explicit report freshness'

@@ -98,13 +98,13 @@ grep -q 'dev'  "$T/delegated"  || fail "A1: delegation lost the category"
 _b=$FAILS
 : > "$T/delegated"; mkplan "0000deadbeef"
 OUT="$(run_apply)"
-[ -s "$T/delegated" ] && fail "A2: acted on an item whose fingerprint moved"
+[ -s "$T/delegated" ] && fail "A2: acted on an item whose fingerprint changed"
 # Anchored on the pgid-bearing per-item line. The receipt summary hardcodes the
 # words "refused", "drift" and "held" in its format string regardless of the
 # counters, so a bare word match passed on every exit path and the per-item
 # explanations were entirely uncovered. At 20 workspaces the operator needs to
 # know WHICH group drifted, not that some number did.
-printf '%s\n' "$OUT" | grep -q 'pgid 7001 .*fingerprint moved' \
+printf '%s\n' "$OUT" | grep -q 'pgid 7001 .*fingerprint changed' \
   || fail "A2: no per-item drift line naming pgid 7001: $OUT"
 [ "$FAILS" -eq "$_b" ] && pass "A2: drifted item refused and reported"
 
@@ -327,7 +327,7 @@ for order in loupe-first unplaceable-first; do
   mkplan "$(PATH="$SHIM:$PATH" fp_for_pgid 7001)"
   OUT="$(run_apply)"
   [ -s "$T/delegated" ] && fail "A13/$order: killed a group with an unplaceable member"
-  printf '%s\n' "$OUT" | grep -q 'pgid 7001 .*more than one workspace' \
+  printf '%s\n' "$OUT" | grep -q 'pgid 7001 .*workspace attribution is incomplete or mixed' \
     || fail "A13/$order: unplaceable member not reported as mixed: $OUT"
 done
 [ "$FAILS" -eq "$_b" ] && pass "A13: an unplaceable member withholds the group, in either row order"

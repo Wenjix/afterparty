@@ -196,7 +196,7 @@ def collect(root, since=None, full=False):
     changed = sorted(set(changed + untracked))
     errors, skipped, hashes, changes, texts, documents = [], [], {}, [], {}, []
     if len(patch) > MAX_INPUT:
-        errors.append('Git diff exceeds 4 MiB token inspection limit; changed paths are still reported')
+        errors.append('Git diff exceeds the 4 MiB token inspection limit. The report still lists changed paths.')
         patch = b''
     tokens = set()
     for line in patch.decode('utf-8', 'replace').splitlines():
@@ -204,7 +204,7 @@ def collect(root, since=None, full=False):
             for match in TOKEN.finditer(line[1:]):
                 tokens.add(match.group(1) or match.group())
     if len(tokens) > 2000:
-        errors.append('More than 2000 changed symbols; symbol matching was limited')
+        errors.append('More than 2000 symbols changed. The scan checked only 2000 symbols.')
         tokens = set(sorted(tokens)[:2000])
     for path in sorted(set(files + changed)):
         try:
@@ -272,7 +272,7 @@ def collect(root, since=None, full=False):
         errors.append('HEAD changed during scan')
     scope = ('all repository documentation' if full else
              ('changes since ' + since if since else
-              'staged, unstaged and untracked changes since HEAD; earlier session commits are not included'))
+              'staged, unstaged and untracked changes since HEAD. This scope excludes earlier session commits'))
     signature = digest(encode({'base': base, 'head': head, 'files': files, 'hashes': hashes,
                                'links': {doc['path']: doc['links'] for doc in documents}}).encode())
     return {'schema_version': SCHEMA, 'scan_id': uuid.uuid4().hex, 'created_at': timestamp(),
@@ -333,27 +333,27 @@ def markdown_scan(scan):
              'Collection: ' + scan['collection_status'] + '. Agent review: not reviewed.',
              '', '%d changed paths; %d documentation candidates; %d documents inspected.' %
              (len(scan['changes']), len(candidates), len(scan['documents'])),
-             'Purpose labels and unresolved links are review hints, not staleness verdicts.', '']
+             'Purpose labels and unresolved links need agent review. A scan does not decide whether a document is outdated.', '']
     for doc in candidates:
         lines.append('- ' + encode(doc['path']) + ' [' + doc['purpose_hint'] + ']: ' +
                      ', '.join(sorted(set(reason['kind'] for reason in doc['reasons']))))
     if not candidates:
-        lines.append('No candidates in this scope. Use --since REF or --full to widen the review.')
+        lines.append('No candidate documents in this scope. Use --since REF or --full to review more files.')
     if scan['observations']:
-        lines.extend(['', '## Mechanical observations', ''])
+        lines.extend(['', '## Links to check', ''])
         for item in scan['observations']:
-            lines.append('- %s:%s — unresolved local link to %s; needs review.' %
+            lines.append('- %s:%s - unresolved local link to %s. Check the target.' %
                          (encode(item['path']), item['line'], encode(item['target'])))
     if scan['excluded']:
-        lines.extend(['', 'Excluded %d generated/dependency paths, directories or submodules.' % len(scan['excluded'])])
+        lines.extend(['', 'The scan excluded %d generated paths, dependency paths, directories, or submodules.' % len(scan['excluded'])])
     if scan['errors']:
         lines.extend(['', '## Inspection gaps', ''] + ['- ' + error for error in scan['errors']])
     lines.extend(['', 'Treatments: ' + ', '.join(TREATMENTS) + '.',
-                  'The agent must read candidates and implementation before recommending a treatment.',
+                  'Read each candidate document and the related code before you recommend a treatment.',
                   'This command does not modify documentation.'])
     if scan['persisted']:
         lines.extend(['', 'Prepare a review record: afterparty docs --template ' + scan['scan_id'],
-                      'Before editing reviewed files: afterparty docs --check ' + scan['scan_id']])
+                      'Before you edit reviewed files, run: afterparty docs --check ' + scan['scan_id']])
     return '\n'.join(lines) + '\n'
 
 
@@ -374,12 +374,12 @@ def save_scan(state, scan):
     scan_id = scan['scan_id']
     serialized = encode(scan) + '\n'
     if len(serialized.encode('utf-8')) > MAX_INPUT:
-        raise DocsError('evidence exceeds 4 MiB persistence limit; narrow the repository scope')
+        raise DocsError('Scan data exceeds the 4 MiB storage limit. Select a smaller repository scope.')
     atomic_write(state / 'scans' / (scan_id + '.json'), serialized)
     path = state / 'scans' / (scan_id + '.md')
     atomic_write(path, markdown_scan(scan))
     atomic_write(state / 'latest-scan', scan_id + '\n')
-    atomic_write(state / 'scan-summary.txt', 'Afterparty docs: evidence %s (%s); agent review is separate. %s\n' %
+    atomic_write(state / 'scan-summary.txt', 'Afterparty docs: scan %s (%s). The agent review is separate. %s\n' %
                  (scan_id, scan['collection_status'], path))
     return path
 
@@ -466,7 +466,7 @@ def redact_review(review, bash):
 
 def markdown_review(review):
     lines = ['# Afterparty documentation review', '', 'Scan: ' + review['scan_id'],
-             'Recorded: ' + review['recorded_at'], 'Agent-reported review: ' + review['status'] + '.',
+             'Recorded: ' + review['recorded_at'], 'Agent review: ' + review['status'] + '.',
              'Scope: ' + review['scope'], 'Current at recording: ' + str(review['basis_current']).lower() + '.',
              '', review['summary'], '', '| # | Document | Finding | Treatment | Decision |',
              '| --- | --- | --- | --- | --- |']
@@ -485,7 +485,7 @@ def markdown_review(review):
             lines.append('- %s:%s — %s' % (encode(source['path']), source['line'], source['description']))
         if item.get('preview'):
             lines.extend(['', 'Proposed change:', '', item['preview']])
-    lines.extend(['', 'Decisions and outcomes are recorded by the agent; saving this report does not apply changes.',
+    lines.extend(['', 'The agent records decisions and outcomes. This command saves the report without applying changes.',
                   'Recheck evidence before acting: afterparty docs --check ' + review['scan_id']])
     return '\n'.join(lines) + '\n'
 
@@ -511,7 +511,7 @@ def save_review(state, root, review, bash):
     atomic_write(state / 'latest-review', review_id + '\n')
     pending = sum(item['decision'] in ('pending', 'deferred') for item in review['findings'])
     atomic_write(state / 'review-summary.txt',
-                 'Afterparty docs: last agent review %s (%s), %s unresolved; evidence may have changed. %s\n' %
+                 'Afterparty docs: last agent review %s (%s), %s unresolved. The files can change after this review. %s\n' %
                  (review['scan_id'], review['status'], pending, path))
     return review, path
 
@@ -522,23 +522,23 @@ def latest(state):
         if pointer.exists():
             value = identifier(pointer.read_text(encoding='utf-8').strip())
             return kind, state / (kind + 's') / value
-    raise DocsError('no saved documentation report; run docs --report first')
+    raise DocsError('No saved documentation report exists. Run afterparty docs --report first.')
 
 
 def parser():
     result = argparse.ArgumentParser(prog='afterparty docs', description=
-        'Collect documentation evidence for agent review. Does not edit project files.')
+        'Collect information for an agent to review documentation. This command does not edit project files.')
     result.add_argument('--root', default=os.getcwd(), help='repository directory (default: current)')
     mode = result.add_mutually_exclusive_group()
     mode.add_argument('--since', metavar='REF', help='compare REF to the working tree, including untracked files')
     mode.add_argument('--full', action='store_true', help='include all repository documentation')
-    mode.add_argument('--show', action='store_true', help='show the last agent review, or evidence if none')
-    mode.add_argument('--report-path', action='store_true', help='locate that saved report')
-    mode.add_argument('--template', metavar='SCAN_ID', help='print an empty agent review JSON template')
-    mode.add_argument('--check', metavar='SCAN_ID', help='refuse changed or incomplete evidence before edits')
-    mode.add_argument('--save-review', metavar='FILE', help='record agent-authored review JSON; never applies changes')
+    mode.add_argument('--show', action='store_true', help='show the last agent review, or the scan if no review exists')
+    mode.add_argument('--report-path', action='store_true', help='show the path of the saved report')
+    mode.add_argument('--template', metavar='SCAN_ID', help='print an empty JSON template for an agent review')
+    mode.add_argument('--check', metavar='SCAN_ID', help='check for changed or incomplete scan data before you edit')
+    mode.add_argument('--save-review', metavar='FILE', help='save an agent review from JSON without applying changes')
     result.add_argument('--json', action='store_true', help='emit versioned JSON Lines (templates are JSON objects)')
-    result.add_argument('--report', action='store_true', help='persist evidence in private workspace state')
+    result.add_argument('--report', action='store_true', help='save scan data in the private workspace directory')
     return result
 
 
@@ -564,7 +564,7 @@ def main(state, bash, argv):
             if kind == 'review' and (state / 'latest-scan').exists():
                 recent = (state / 'latest-scan').read_text().strip()
                 if recent != content['scan_id']:
-                    print('\nA separate evidence scan exists: ' + recent + '; this review remains available.')
+                    print('\nA separate evidence scan exists: ' + recent + '. This review remains available.')
         return int(content.get('collection_status', content.get('status')) != 'complete')
     if args.template or args.check:
         scan = load_scan(state, args.template or args.check, root)
@@ -574,8 +574,8 @@ def main(state, bash, argv):
                               'findings': []}, indent=2))
             return 0
         current = scan_current(scan, root)
-        message = ('Evidence still matches; document changes still require the selected scope.' if current else
-                   'Evidence changed or is incomplete; collect and review again before editing.')
+        message = ('The scan still matches the files. Edit only the documents and text that the user approved.' if current else
+                   'The scan data changed or is incomplete. Collect a new scan. Review it before you edit.')
         if args.json:
             print(encode({'schema_version': SCHEMA, 'section': 'docs_check', 'scan_id': scan['scan_id'],
                           'current': current, 'message': message}))

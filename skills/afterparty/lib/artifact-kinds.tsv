@@ -1,0 +1,22 @@
+# entry_type	name_or_pattern	kind
+directory	.turbo	cache
+directory	.vite	cache
+directory	.cache	cache
+directory	.parcel-cache	cache
+directory	.rollup.cache	cache
+directory	.next	build
+directory	dist	build
+directory	build	build
+directory	out	build
+directory	.output	build
+directory	.svelte-kit	build
+directory	.astro	build
+directory	storybook-static	build
+directory	coverage	test
+directory	.nyc_output	test
+directory	test-results	test
+directory	playwright-report	test
+directory	.playwright-mcp	test
+directory	.vitest	test
+file	*.tsbuildinfo	cache
+file	.eslintcache	cache

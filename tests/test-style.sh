@@ -58,7 +58,7 @@ echo "$OUT" | grep -q 'Nothing was changed.' || fail "A2: Nothing was changed. l
 echo "$OUT" | grep -q '● Worktrees'          || fail "A3: styled header missing"
 echo "$OUT" | grep -q '=== Worktrees ==='    && fail "A3: legacy header leaked into styled mode"
 echo "$OUT" | grep -q '╭'                    || fail "A4: card frame missing"
-echo "$OUT" | grep -Eq 'spotless|the damage' || fail "A4: card verdict missing"
+echo "$OUT" | grep -Eq 'No Git cleanup candidates found|Git scan results' || fail "A4: card verdict missing"
 pass "A1-A4: styled git output (ANSI, contracts, glyph header, card)"
 
 # ---------- A5: JSON immune to styling ----------
@@ -83,7 +83,7 @@ pass "A6: NO_COLOR precedence both directions"
 OUT="$(AFTERPARTY_STYLE=always AGENT_PROCESS_LEDGER="$LEDGER" "$BIN" audit 2>/dev/null)"
 N_CARDS="$(printf '%s\n' "$OUT" | grep -c '╭')"
 [ "$N_CARDS" = "1" ] || fail "A7: composite should show exactly 1 card, got $N_CARDS"
-echo "$OUT" | grep -q 'afterparty — last call' || fail "A7: banner missing"
+echo "$OUT" | grep -q 'afterparty audit' || fail "A7: banner missing"
 ls "${TMPDIR:-/tmp}"/afterparty-tally.* >/dev/null 2>&1 && fail "A7: tally tmp files left behind"
 pass "A7: composite audit (one card, banner, tally cleaned)"
 
@@ -115,7 +115,7 @@ OUT="$(PATH="$PROT_SHIM:$PATH" AFTERPARTY_STYLE=always \
   AGENT_PROCESS_LEDGER="$PROT_LEDGER" "$BIN" audit --kill dev 2>/dev/null)"
 printf '%s\n' "$OUT" | grep -qF '⊘ 1 protected' \
   || fail "A7b: protected-only composite receipt lost protected count"
-printf '%s\n' "$OUT" | grep -qF 'spotless — nobody crashed on your couch' \
+printf '%s\n' "$OUT" | grep -qF 'No cleanup candidates found in the inspected scope.' \
   && fail "A7b: protected-only composite kill rendered a false spotless card"
 pass "A7b: protected-only composite kill receipt"
 
@@ -172,7 +172,7 @@ OUT="$(AFTERPARTY_STYLE=always bash "$LIB/audit-git.sh" --root "$GITFIX" 2>/dev/
 printf '%s\n' "$OUT" | grep -qF '▸ would remove foo.orig' || fail "S1: styled would-line missing ▸"
 printf '%s\n' "$OUT" | grep -qF '⊘ left alone:' || fail "S1: young index.lock decision missing ⊘"
 printf '%s\n' "$OUT" | grep -qF '⊘ main:' && fail "S1: main-worktree policy line must stay glyph-free"
-printf '%s\n' "$OUT" | grep -qF '▸ 1 would-clean' || fail "S1: git damage card missing segment line"
+printf '%s\n' "$OUT" | grep -qF '▸ 1 finding' || fail "S1: Git result card missing its finding count"
 pass "S1: git glyphs (styled) + gitfix plain stability"
 
 # ---------- S2: ledger stop — ⊘ on skip decision lines ----------

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Explicit, local build of the optional human reviewer. Ordinary CLI use never builds.
+set -euo pipefail
+REVIEW_BUNDLE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+command -v go >/dev/null 2>&1 || { echo 'Building review requires Go 1.26 or newer.' >&2; exit 1; }
+cd "$REVIEW_BUNDLE/ui"
+CGO_ENABLED=0 go build -trimpath -o "$REVIEW_BUNDLE/bin/afterparty-review" .
+echo "Built $REVIEW_BUNDLE/bin/afterparty-review"

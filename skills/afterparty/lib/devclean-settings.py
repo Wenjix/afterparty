@@ -107,7 +107,7 @@ def main():
         backup_fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         if os.path.islink(backup) or open(backup, "rb").read() != data:
-            raise ValueError("unrelated backup already owns the restore path")
+            raise ValueError("another backup file exists at the restore path")
     else:
         with os.fdopen(backup_fd, "wb") as restore:
             restore.write(data)

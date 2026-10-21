@@ -92,5 +92,109 @@ ERR="$(AFTERPARTY_STYLE=always bash -c \
 [ "$ERR" = 'x' ] || fail "H7: stdout-only pipeline state must stay silent"
 pass "H7: s_heartbeat"
 
+# ---------- H8: width lookup, Unicode wrapping, and the no-Python fallback ----------
+for cols in 60 80 120; do
+  got="$(COLUMNS="$cols" sty s_columns)"
+  [ "$got" = "$cols" ] || fail "H8: COLUMNS=$cols resolved to $got"
+done
+[ "$(COLUMNS=bad sty s_columns)" = 80 ] || fail 'H8: malformed width did not fall back to 80'
+[ "$(COLUMNS=0 sty s_columns)" = 80 ] || fail 'H8: zero width did not fall back to 80'
+RAW='  /workspace/日本語-project/long-name/another-long-name/dist with extra details'
+OUT="$(printf '%s\n' "$RAW" | COLUMNS=60 sty s_wrap)"
+printf '%s\n' "$OUT" | iconv -f UTF-8 -t UTF-8 >/dev/null || fail 'H8: native wrapping cut UTF-8'
+[ "$(printf '%s' "$OUT" | tr -d '[:space:]')" = "$(printf '%s' "$RAW" | tr -d '[:space:]')" ] || fail 'H8: wrapping lost identity text'
+[ "$(printf '%s\n' "$RAW" | COLUMNS=60 pln s_wrap)" = "$RAW" ] || fail 'H8: plain wrapping changed text'
+OUT="$(printf '%s\n' "$RAW" | COLUMNS=60 AFTERPARTY_STYLE=always bash -c '
+  . "$1"
+  command() { if [ "$*" = "-v python3" ]; then return 1; fi; builtin command "$@"; }
+  s_wrap' _ "$STYLE")"
+printf '%s\n' "$OUT" | grep -qF '\xe6' || fail 'H8: missing Python did not enter byte-escape fallback'
+printf '%s\n' "$OUT" | awk 'length($0)>59 {bad=1} END {exit bad}' || fail 'H8: fallback overflowed its width'
+printf '%s\n' "$OUT" | grep -q 'extra details' || fail 'H8: fallback lost tail text'
+pass 'H8: width fallback and complete UTF-8/ASCII identities'
+
+# A redirected stdin must not hide the active output terminal's size.
+if command -v python3 >/dev/null 2>&1; then
+  python3 - "$STYLE" "$BASH" <<'PYTEST' || fail 'H9: output terminal width'
+import os, subprocess, sys
+if os.name != 'nt':
+    import fcntl, pty, struct, termios
+    master, slave = pty.openpty()
+    try:
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 93, 0, 0))
+        for columns in ('60', None):
+            env = dict(os.environ, AFTERPARTY_STYLE='always')
+            env.pop('COLUMNS', None)
+            if columns:
+                env['COLUMNS'] = columns
+            result = subprocess.run([sys.argv[2], '-c', '. "$1"; printf "%s\\n" "$S_COLUMNS"; s_columns',
+                                     'fixture', sys.argv[1]], env=env, stdin=subprocess.DEVNULL,
+                                    stdout=slave, stderr=subprocess.PIPE, timeout=5)
+            assert result.returncode == 0, result.stderr
+            assert os.read(master, 1024).split() == [b'93', b'93']
+    finally:
+        os.close(slave)
+        os.close(master)
+PYTEST
+  pass 'H9: active output terminal wins over COLUMNS with redirected stdin'
+fi
+
+# Wrapping cannot erase significant path spaces or rewrite shell escapes.
+python3 - "$STYLE" "$BASH" <<'PYTEST' || fail 'H10: lossless identity and command rendering'
+import os, re, subprocess, sys
+env = dict(os.environ, AFTERPARTY_STYLE='always', COLUMNS='60')
+def styled(script, *args, text=None):
+    result = subprocess.run([sys.argv[2], '-c', '. "$1"; ' + script, 'fixture', sys.argv[1], *args],
+                            input=text, text=True, encoding='utf-8', capture_output=True, env=env, timeout=5)
+    assert result.returncode == 0, result.stderr
+    return re.sub(r'\x1b\[[0-9;]*m', '', result.stdout)
+base = '    Path: /work/' + 'a' * 41
+outputs = []
+for suffix in (' suffix', '  suffix', r'\ suffix'):
+    original = base + suffix
+    lines = styled('s_wrap', text=original + '\n').splitlines()
+    assert len(lines) > 1, 'fixture did not enter wrapping'
+    assert lines[0] + ''.join(line[4:] for line in lines[1:]) == original
+    outputs.append(lines)
+assert outputs[0] != outputs[1], 'distinct path spaces became identical'
+root = r'/tmp/project  space/日本語/with\backslash'
+line = styled('export LC_ALL=C; printf -v quoted %q "$2"; s_card_command "afterparty plan --root $quoted"', root)
+assert len(line.splitlines()) == 1, 'copyable command gained hard line breaks'
+assert line.startswith('│  afterparty plan'), 'command rendering was not entered'
+command = line[len('│  '):]
+result = subprocess.run([sys.argv[2], '-c', 'afterparty() { printf "%s\\0" "$@"; }; ' + command],
+                        capture_output=True, timeout=5)
+assert result.returncode == 0, result.stderr
+assert result.stdout.split(b'\0') == [b'plan', b'--root', root.encode(), b'']
+PYTEST
+pass 'H10: significant spaces and copyable shell quoting survive rendering'
+
+# Review can retain focus attributes without changing ordinary NO_COLOR output.
+python3 - "$STYLE" "$BASH" <<'PYTEST' || fail 'H11: review NO_COLOR attributes'
+import os, subprocess, sys
+if os.name != 'nt':
+    import pty
+    master, slave = pty.openpty()
+    try:
+        for mode, attributes in (('auto', b'1'), ('never', b'0')):
+            env = dict(os.environ, AFTERPARTY_STYLE=mode, NO_COLOR='1', TERM='xterm-256color')
+            script = ('. "$1"; s_review_theme; '
+                      'printf "%s|%s|%s|%s\\n" "$AFTERPARTY_REVIEW_COLOR" '
+                      '"$AFTERPARTY_REVIEW_ATTRIBUTES" "$AFTERPARTY_REVIEW_BOLD" "$C_BOLD"')
+            result = subprocess.run([sys.argv[2], '-c', script, 'fixture', sys.argv[1]],
+                                    env=env, stdin=subprocess.DEVNULL, stdout=slave,
+                                    stderr=subprocess.PIPE, timeout=5)
+            assert result.returncode == 0, result.stderr
+            color, actual, bold, ordinary = os.read(master, 1024).strip().split(b'|')
+            assert color == b'0', 'NO_COLOR enabled review hues'
+            assert actual == attributes, (mode, actual)
+            assert bold == (b'\x1b[1m' if attributes == b'1' else b''), (mode, bold)
+            assert ordinary == b'', 'review changed ordinary CLI attributes'
+    finally:
+        os.close(slave)
+        os.close(master)
+PYTEST
+pass 'H11: review NO_COLOR keeps focus attributes; ordinary CLI stays plain'
+
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; exit 1; fi

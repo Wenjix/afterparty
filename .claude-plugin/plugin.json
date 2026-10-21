@@ -1,7 +1,7 @@
 {
   "name": "afterparty",
   "description": "Post-session cleanup and documentation review for coding agents — processes, worktrees, artifacts, caches, and documentation drift.",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "hooks": "./hooks/hooks.json",
   "author": { "name": "Wenjix" },
   "license": "MIT",

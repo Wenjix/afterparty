@@ -86,6 +86,26 @@ state_docs_dir() {
   printf '%s/reports/%s/docs\n' "$cache" "$key"
 }
 
+state_review_dir() {
+  local cache key
+  cache="$(state_cache_root)" || return
+  key="$(state_workspace_key "${1:-$PWD}")" || return
+  printf '%s/reviews/%s\n' "$cache" "$key"
+}
+
+state_builds_dir() {
+  local cache
+  cache="$(state_cache_root)" || return
+  printf '%s/builds\n' "$cache"
+}
+
+state_apply_dir() {
+  local cache key
+  cache="$(state_cache_root)" || return
+  key="$(state_workspace_key "${1:-$PWD}")" || return
+  printf '%s/apply/%s\n' "$cache" "$key"
+}
+
 state_secure_dir() {
   local dir="$1"
   (umask 077 && mkdir -p "$dir") || return

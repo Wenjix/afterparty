@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Afterparty partial apply receipt concept</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#202128;color:#ededf3;font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1160px;margin:0 auto;padding:38px}h1{font-size:28px;line-height:1.25;margin:0 0 12px}p{margin:0;color:#b0b1bf;max-width:75ch}.terminal{margin-top:28px;padding:26px 28px;background:#12131b;border:1px solid #454650;font:15px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-variant-numeric:tabular-nums}.brand{color:#e6a3db;font-weight:700}.scope{color:#a6a8ba}.title{margin:22px 0 18px;color:#f0ca85;font-weight:700}.outcome{margin:18px 0}.done{color:#9ed8b6;font-weight:700}.refused{color:#f0ca85;font-weight:700}.failed{color:#f0a8ab;font-weight:700}.detail{margin-left:2ch;color:#a6a8ba;overflow-wrap:anywhere}.totals{margin-top:25px;padding-top:17px;border-top:1px solid #454650}.command{color:#85dce5}.note{margin-top:24px;font-size:14px}.terminal p{font:inherit;color:inherit;max-width:none}@media(max-width:650px){main{padding:22px 14px}.terminal{padding:20px 16px;font-size:13px}h1{font-size:24px}}
+</style>
+</head>
+<body><main>
+<h1>When cleanup is incomplete</h1>
+<p>Proposed terminal receipt, using the same illustrative targets as the review
+mockups. This is a static design example; no action has been executed.</p>
+<div class="terminal" role="region" aria-label="Illustrative partial cleanup result">
+ <div class="brand">afterparty · APPLY RESULT · ILLUSTRATIVE</div>
+ <div class="scope">Scope: /work/afterparty · reviewed plan: cleanup-plan.md</div>
+ <div class="title">Cleanup incomplete</div>
+ <div class="outcome"><div class="done">✓ CONFIRMED · vite · PGID 4821 stopped</div><div class="detail">Both members verified absent.</div><div class="failed detail">Receipt error: outcome could not be written to the journal.</div></div>
+ <div class="outcome"><div class="refused">⊘ REFUSED · docs-pass worktree</div><div class="detail">/work/afterparty-wt/docs-pass</div><div class="detail">Identity changed; no removal attempted. Generate a new plan.</div></div>
+ <div class="outcome"><div class="failed">FAILED · .next removal was not completed</div><div class="detail">/work/afterparty/.next</div><div class="detail">Path remains. Contents may be partly changed; inspect before retrying.</div></div>
+ <div class="totals">1 confirmed · 1 refused · 1 failed<br>1 receipt error · Exit status: 1</div>
+ <div class="detail" style="margin:14px 0 0">The confirmed stop remains completed despite the receipt error.<br>Earlier actions are not undone by a later refusal or failure.</div>
+ <div class="command" style="margin-top:18px">Next: inspect the remaining targets, then generate a fresh plan.</div>
+</div>
+<p class="note">The existing backend remains responsible for postcondition checks
+and journal outcomes. The proposed result view makes those separate facts visible;
+it does not promise undo or report a successful overall cleanup.</p>
+</main></body>
+</html>

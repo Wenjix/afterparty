@@ -116,7 +116,7 @@ class DocumentationTests(unittest.TestCase):
         self.commit()
         default = self.scan()
         self.assertFalse(any(row.get('candidate') for row in default))
-        self.assertIn('earlier session commits are not included', default[0]['scope'])
+        self.assertIn('This scope excludes earlier session commits', default[0]['scope'])
         since = self.scan('--since', self.initial)
         self.assertTrue(any(row.get('path') == 'docs/cli.md' and row.get('candidate') for row in since))
         self.assertEqual(since[0]['base'], self.initial)

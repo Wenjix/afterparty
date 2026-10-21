@@ -147,7 +147,7 @@ case "$P7B_LINE" in
 esac
 printf '%s\n' "$P7B_LINE" | grep -q 'no-rule' \
   || fail "P7b: verdict token is not no-rule (got: $P7B_LINE)"
-printf '%s\n' "$OUT" | grep -A1 '9010' | grep -q 'no kill discipline' \
+printf '%s\n' "$OUT" | grep -A1 '9010' | grep -q 'no stop category matches this command' \
   || fail "P7b: the no-rule reason was not stated"
 [ "$FAILS" -eq "$_b" ] && pass "P7b: an eligible group with no category renders no-rule, with its reason"
 

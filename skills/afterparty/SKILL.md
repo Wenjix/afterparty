@@ -2,31 +2,29 @@
 name: afterparty
 description: Use before starting another localhost server, before coding handoff, when CPU/memory is high, when disk is low, or for "review documentation", "stale docs", "what is running", "what did I leave running", "welcome back", "approve cleanup", "devclean", "orphaned MCP", "cleanup terminals", "localhosts out of control", "free disk space", "stale worktrees", or "leftover branches".
 license: ./LICENSE
-compatibility: Bash 3.2+, Git, Unix tools; Python 3 for activity/docs. macOS/Linux/WSL; Git Bash has degraded process audits.
+compatibility: Bash 3.2+, Git, Unix tools; Python 3 for activity/docs/review. macOS/Linux/WSL; Git Bash has degraded process audits.
 metadata:
   author: Wenjix
-  version: "0.13.0"
+  version: "0.14.0"
 ---
 
-# Afterparty
+Claude sets `${CLAUDE_SKILL_DIR}`. Other agents must use this skill's absolute directory.
 
-Claude substitutes `${CLAUDE_SKILL_DIR}`. Other agents: use this SKILL.md’s
-absolute directory.
-
-On return:
+On return, run:
 
 ```bash
 "${CLAUDE_SKILL_DIR}/bin/afterparty" glance
 ```
 
-Apply only approved targets:
+Create a plan. Check targets the user approves. Apply the plan:
 
 ```bash
 "${CLAUDE_SKILL_DIR}/bin/afterparty" plan > cleanup-plan.md
 "${CLAUDE_SKILL_DIR}/bin/afterparty" apply cleanup-plan.md
 ```
 
-Unchecked defaults; unknown scans, nested repositories and changed identity block removal.
+Targets start unchecked. Incomplete scans, nested repositories, and
+changed identities block removal.
 
 Before handoff, follow [documentation review](docs-review.md):
 
@@ -34,7 +32,7 @@ Before handoff, follow [documentation review](docs-review.md):
 "${CLAUDE_SKILL_DIR}/bin/afterparty" docs --report --json
 ```
 
-Before services and session end:
+Before you start services or end a session, run:
 
 ```bash
 AFTERPARTY_SESSION_ID="${CLAUDE_SESSION_ID}" "${CLAUDE_SKILL_DIR}/bin/afterparty" audit --report
@@ -55,11 +53,12 @@ Review before acting:
 "${CLAUDE_SKILL_DIR}/bin/afterparty" devclean
 ```
 
-`git`/`artifacts` report; approve removal through `plan`/`apply`.
+`git` and `artifacts` report targets. Approve removal through `plan` and `apply`.
 Devclean requires reviewed `--target` IDs.
 
-Supported `--json` commands emit JSON Lines. `audit --report` saves a snapshot;
-`report-path` locates it. `actions` shows history.
-Plugin hooks remind on start and mark session end. Plain skills have no hooks.
+`--json` emits JSON Lines except for `builds`. `audit --report` saves a report.
+`report-path` shows its path. `actions` shows history.
+Plugin hooks show reminders at session start. They record session end.
+Plain skills have no hooks.
 
-Scripts withhold protected editors, agents, shells and shared MCP servers.
+Scripts keep processes that match protection patterns.

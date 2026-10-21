@@ -96,7 +96,7 @@ for replacement_owner in same other; do
   REGISTERED_TARGET="$(git -C "$TARGET" rev-parse --show-toplevel)"
   OUT="$(run_apply "$T/replacement-plan")"
   [ -d "$TARGET" ] || fail "WI2: $replacement_owner-repo replacement was deleted by an old approval"
-  printf '%s\n' "$OUT" | grep -q 'fingerprint moved' \
+  printf '%s\n' "$OUT" | grep -q 'fingerprint changed' \
     || fail "WI2: $replacement_owner-repo replacement did not reach the identity refusal: $OUT"
   git -C "$OWNER" worktree list --porcelain | grep -Fxq -- "worktree $REGISTERED_TARGET" \
     || fail "WI2: replacement's owning repo lost the worktree registration"

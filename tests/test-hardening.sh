@@ -154,10 +154,10 @@ PATH="$T/cap-shim:$PATH" AFTERPARTY_STYLE=always \
 CAP_JSON_RC=$?
 if [ "$CAP_RC" -ne 0 ] || [ "$CAP_JSON_RC" -ne 0 ]; then
   fail "H5: degraded dry-run should remain reportable ($CAP_RC/$CAP_JSON_RC)"
-elif ! grep -q 'audit incomplete' "$T/cap.out"; then
+elif ! grep -q 'audit is incomplete' "$T/cap.out"; then
   fail "H5: human output did not mark the audit incomplete"
-elif grep -q 'spotless' "$T/cap.out"; then
-  fail "H5: unavailable process scan produced a spotless claim"
+elif grep -q 'No process candidates found' "$T/cap.out"; then
+  fail "H5: unavailable process scan produced a No process candidates found claim"
 elif "$PY" - "$T/cap.jsonl" <<'PY'
 import json
 import sys
@@ -175,7 +175,7 @@ assert any(
 )
 PY
 then
-  pass "H5: unavailable scanners are explicit and never reported spotless"
+  pass "H5: unavailable scanners are explicit and never reported No process candidates found"
 else
   fail "H5: JSON output omitted versioned process capability state"
 fi

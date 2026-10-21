@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# devclean.sh - devclean-style cleanup for agent/dev-machine leaks.
+# afterparty devclean - preview or apply selected machine cleanup.
 #
-# Preview is the default. Copy a target ID from the preview, then select it
-# with --apply --target ID. No mode grants blanket mutation approval.
+# The default is a preview. Copy a target ID from the preview.
+# Select that target with --apply --target ID.
+# Each cleanup requires a target ID from the same modes and scope.
 #
 # Usage:
-#   devclean.sh [--orphans]              # preview orphan process candidates
-#   devclean.sh --deep                   # preview daemon and simulator targets
-#   devclean.sh --optimize               # preview settings, dumps and launch agents
-#   devclean.sh --disk                   # preview rebuildable caches; never signals
-#   devclean.sh --history                # preview stale transcripts/logs/recordings
-#   devclean.sh --disk --apply --target ID # apply one reviewed target
-#   devclean.sh --disk --apply --target ID --target ID # apply multiple disk targets
-#   devclean.sh --dry-run                # force preview
-#   devclean.sh --documents-root DIR    # where --disk scans for project artifacts
-#   devclean.sh --project-maxdepth N    # --disk project scan depth (default 6)
-#   devclean.sh --no-repo-artifacts     # --disk: skip the current-repo artifact pass
-#   devclean.sh --allow-broad-documents-root # permit HOME/root project scans
+#   afterparty devclean [--orphans]          # preview orphan process candidates
+#   afterparty devclean --deep               # preview daemon processes and simulators
+#   afterparty devclean --optimize           # preview settings, dumps, and launch agents
+#   afterparty devclean --disk               # preview rebuildable caches; does not stop processes
+#   afterparty devclean --history            # preview old transcripts, logs, and recordings
+#   afterparty devclean --disk --apply --target ID # apply one reviewed target
+#   afterparty devclean --disk --apply --target ID --target ID # apply multiple disk targets
+#   afterparty devclean --dry-run            # force a preview
+#   afterparty devclean --documents-root DIR # where --disk scans for project artifacts
+#   afterparty devclean --project-maxdepth N # --disk project scan depth (default 6)
+#   afterparty devclean --no-repo-artifacts   # --disk: skip artifacts in the current repository
+#   afterparty devclean --allow-broad-documents-root # permit scans at HOME or a filesystem root
 set -uo pipefail
 
 # Filesystem cleanup paths are composed from $HOME, except the configured pnpm
@@ -63,7 +64,7 @@ RUN_REPO_ARTIFACTS=1
 ALLOW_BROAD_DOCUMENTS_ROOT=0
 
 usage() {
-  sed -n '2,19p' "$0"
+  sed -n '2,/^set -uo pipefail/{ /^set /d; p; }' "$0"
 }
 
 while [ $# -gt 0 ]; do
@@ -93,7 +94,7 @@ if [ "$DRY_RUN" -eq 0 ] && [ "${#REQUESTED_TARGETS[@]}" -eq 0 ]; then
 fi
 
 case "$PROJECT_MAXDEPTH" in
-  ''|*[!0-9]*) echo "--project-maxdepth wants a whole number" >&2; exit 2 ;;
+  ''|*[!0-9]*) echo "--project-maxdepth requires a whole number" >&2; exit 2 ;;
 esac
 if [ "$DISK" -eq 1 ] && [ -d "$DOCUMENTS_ROOT" ]; then
   DOCUMENTS_ROOT="$(cd "$DOCUMENTS_ROOT" && pwd -P)"
@@ -139,7 +140,7 @@ devclean_receipt() {
 # the environment; only wholly stale directories of at least 1 MiB are offered.
 CODEX_SESSION_AGE_DAYS="${CODEX_SESSION_AGE_DAYS:-30}"
 case "$CODEX_SESSION_AGE_DAYS" in
-  ''|0|*[!0-9]*) echo "CODEX_SESSION_AGE_DAYS wants a positive whole number of days" >&2; exit 2 ;;
+  ''|0|*[!0-9]*) echo "CODEX_SESSION_AGE_DAYS requires a positive whole number of days" >&2; exit 2 ;;
 esac
 
 # IDs bind an explicit action to the reviewed object. Hashes keep whitespace
@@ -338,11 +339,15 @@ pids_by_pattern() {
 }
 
 print_process_table() {
-  local pids="$1" pid rss total=0 count=0 hc="" hr="" line
+  local pids="$1" pid rss total=0 count=0 line command_text
   [ -n "$pids" ] || return 1
 
-  if [ "$STYLE_ON" -eq 1 ]; then hc="$C_DIM"; hr="$C_RESET"; fi
-  printf '  %s%-7s %-7s %-7s %-8s %-6s %-10s %s%s\n' "$hc" PID PPID PGID RSS CPU ELAPSED COMMAND "$hr"
+  {
+  if [ "$STYLE_ON" -eq 1 ]; then
+    s_process_header 1
+  else
+    printf '  %-7s %-7s %-7s %-8s %-6s %-10s %s\n' PID PPID PGID RSS CPU ELAPSED COMMAND
+  fi
   for pid in $pids; do
     rss="$(rss_kb_for "$pid")"
     total=$((total + ${rss:-0}))
@@ -356,17 +361,14 @@ print_process_table() {
       # shellcheck disable=SC2086
       set -f; set -- $line; set +f
       [ $# -ge 7 ] || continue
-      printf '  %-7s %-7s %-7s %s %s %-10s ' "$1" "$2" "$3" \
-        "$(s_sevcell "$4" 262144 1048576 "$(printf '%-8s' "$4")")" \
-        "$(s_sevcell "$5" 10 50 "$(printf '%-6s' "$5")")" \
-        "$(s_etime "$6")"
-      shift 6
-      printf '%s\n' "$*"
+      command_text="${*:7}"
+      s_process_row "$1" "$2" "$3" "$5" "$6" "$command_text" "$4"
     else
       printf '%s\n' "$line" | awk '{printf "  %-7s %-7s %-7s %-8s %-6s %-10s ", $1,$2,$3,$4,$5,$6; for(i=7;i<=NF;i++) printf "%s ", $i; print ""}'
     fi
   done
   echo "  count: $count; rss: $(human_mb "$total")"
+  } | s_wrap
 }
 
 terminate_pids() {
@@ -405,7 +407,7 @@ terminate_pids() {
   fi
   pids="$eligible"
 
-  s_heartbeat "waiting up to 2s for PIDs to exit"
+  s_heartbeat "Wait up to 2 seconds for the processes to exit"
   waited=0
   while [ "$waited" -lt 4 ]; do
     remaining=""
@@ -499,7 +501,7 @@ cleanup_pattern() {
     [ -n "$identity" ] && policy="$(process_policy "$pid" "$identity")" || policy='identity unavailable'
     if [ -n "$policy" ]; then withhold "pid $pid" "$policy"; continue; fi
     tid="pid:$pid:$(printf '%s' "$identity" | fp_hash)"
-    target_gate "$tid" "stop reviewed idle PID $pid; restarting its command may be necessary" || continue
+    target_gate "$tid" "Stop reviewed idle PID $pid. You may need to restart its command." || continue
     identities="${identities}${pid}"$'\t'"${identity}"$'\n'
     approved="$approved $pid"
   done
@@ -569,7 +571,7 @@ SIMS
     [ -n "$udid" ] || continue
     N_OPT=$((N_OPT + 1))
     tid="$(target_id simulator "$(id -u):$udid")"
-    target_gate "$tid" "shut down simulator $name ($udid); interrupts apps running on this device" || continue
+    target_gate "$tid" "Shut down simulator $name ($udid). This interrupts apps on that device." || continue
     if [ "$DRY_RUN" -eq 1 ]; then
       s_would "  would run: xcrun simctl shutdown $udid"
     else
@@ -616,7 +618,7 @@ patch_crash_reporters() {
     found=1; N_OPT=$((N_OPT + 1))
     label="$(basename "$dir" | sed 's/^\.//')"
     tid="$(target_id setting "$argv:$digest")"
-    target_gate "$tid" "persistently disable crash reporting in $label; restart the application afterward" || continue
+    target_gate "$tid" "Disable crash reporting in $label until you restore the setting. Restart the application afterward." || continue
     if [ "$DRY_RUN" -eq 1 ]; then
       s_would "  would disable crash reporter in $label ($argv)"
     elif backup="$(python3 "$DIR/devclean-settings.py" disable "$argv" "$digest")"; then
@@ -819,7 +821,7 @@ disable_background_agents() {
     found=1
     N_OPT=$((N_OPT + 1))
     tid="$(target_id launch-agent "$(id -u):$label")"
-    target_gate "$tid" "persistently disable $name ($label), including future logins" || continue
+    target_gate "$tid" "Disable $name ($label). This also prevents it from starting at future logins." || continue
     if [ "$DRY_RUN" -eq 1 ]; then
       s_would "  would disable $name ($label)"
     else
@@ -902,6 +904,7 @@ disk_flush() {
   disk_buffering || return 0
   [ "${#DISK_BUF[@]}" -gt 0 ] || return 0
   local row type kb label detail total=0
+  {
   for row in ${DISK_BUF[@]+"${DISK_BUF[@]}"}; do
     IFS=$'\t' read -r type kb label detail <<< "$row"
     [ "$label" = "-" ] && label=""
@@ -916,20 +919,15 @@ disk_flush() {
     IFS=$'\t' read -r type kb label detail <<< "$row"
     [ "$label" = "-" ] && label=""
     if [ "$type" = meter ]; then
-      if [ -n "$detail" ]; then
-        printf '  %-26.26s %s %s  %s%s%s\n' "$label" \
-          "$(s_sizecell "$kb" "$(s_meter "$kb" "$total")")" \
-          "$(s_sizecell "$kb" "$(printf '%9s' "$(s_kb "$kb")")")" \
-          "$C_DIM" "$detail" "$C_RESET"
-      else
-        printf '  %-26.26s %s %s\n' "$label" \
-          "$(s_sizecell "$kb" "$(s_meter "$kb" "$total")")" \
-          "$(s_sizecell "$kb" "$(printf '%9s' "$(s_kb "$kb")")")"
-      fi
+      printf '  %s\n    %s %s\n' "$label" \
+        "$(s_sizecell "$kb" "$(s_meter "$kb" "$total")")" \
+        "$(s_sizecell "$kb" "$(printf '%9s' "$(s_kb "$kb")")")"
+      [ -z "$detail" ] || s_dim "    $detail"
     else
       s_would "  $detail"
     fi
   done
+  } | s_wrap
   DISK_BUF=()
 }
 
@@ -947,7 +945,7 @@ clean_dir() {
   fi
   target="$canonical"
   [ "$kind" != history ] || operation=history.clean
-  s_heartbeat "sizing up $target"
+  s_heartbeat "Measure disk use: $target"
   kb="$(size_kb "$target")"
   [ "${kb:-0}" -ge 1024 ] || return 0
   DISK_FOUND_KB=$((DISK_FOUND_KB + kb))
@@ -955,9 +953,9 @@ clean_dir() {
   if [ -z "$fp" ]; then withhold "$label" 'filesystem identity unavailable'; return 1; fi
   tid="$kind:$fp"
   if [ "$kind" = history ]; then
-    target_gate "$tid" "permanently delete history under $target; cannot be rebuilt" || return 0
+    target_gate "$tid" "Permanently delete history under $target. You cannot rebuild this history." || return 0
   else
-    target_gate "$tid" "delete rebuildable $label at $target; future runs may rebuild or download it" || return 0
+    target_gate "$tid" "Delete rebuildable $label at $target. Future runs may rebuild or download it." || return 0
   fi
 
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -1011,7 +1009,7 @@ clean_find() {
   parent_files=("$@")
   [ -d "$scan_dir" ] || return 0
 
-  s_heartbeat "scanning $scan_dir for $dir_name dirs"
+  s_heartbeat "Scan $scan_dir for $dir_name directories"
   while IFS= read -r -d '' d; do
     [ -n "$d" ] || continue
     [ -L "$d" ] && continue
@@ -1093,7 +1091,7 @@ clean_pnpm_store() {
   local store kb_before kb_after freed size_known=1
   store="$(pnpm store path 2>/dev/null)"
   [ -n "$store" ] && [ -d "$store" ] || return 0
-  s_heartbeat "sizing up pnpm store"
+  s_heartbeat "Measure disk use in the pnpm store"
   kb_before="$(size_kb "$store")"
   case "$kb_before" in ''|*[!0-9]*) size_known=0 ;; esac
   target_gate "$(target_id package-store "$store")" "run pnpm store prune for shared store $store" || return 0
@@ -1250,9 +1248,9 @@ followup_command() {
 }
 
 if [ "$DRY_RUN" -eq 1 ]; then
-  s_lead "$MODE_C" "Mode: $(mode_label) — look, don't touch" "Mode: $(mode_label)"
+  s_lead "$MODE_C" "Mode: $(mode_label). Preview only. No cleanup actions run." "Mode: $(mode_label)"
 else
-  s_lead "$MODE_C" "Mode: $(mode_label) — closing time" "Mode: $(mode_label)"
+  s_lead "$MODE_C" "Mode: $(mode_label). Apply only selected target IDs." "Mode: $(mode_label)"
 fi
 if [ "$ORPHANS" -eq 1 ] || [ "$DEEP" -eq 1 ]; then refresh_process_context; fi
 [ "$ORPHANS" -eq 1 ] && run_safe_orphans
@@ -1276,7 +1274,7 @@ fi
 
 if [ "$DEEP" -eq 0 ] && [ "$OPTIMIZE" -eq 0 ] && [ "$DISK" -eq 0 ] && [ "$HISTORY" -eq 0 ]; then
   echo
-  s_dim "Other previews: --deep, --optimize, --disk, or --history. Apply requires selected target IDs."
+  s_dim "Other previews: --deep, --optimize, --disk, or --history. Apply requires selected target IDs." | s_wrap 2
 fi
 
 # Finale card (styled runs only; doctor suppresses via AFTERPARTY_CARD=0).
@@ -1284,10 +1282,10 @@ if cards_on; then
   echo
   s_card_open
   if [ "$DRY_RUN" -eq 0 ]; then
-    s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty devclean --apply${C_RESET}"
+    s_card_line "${C_BOLD}${C_CYAN}🧾 Cleanup receipt: afterparty devclean --apply${C_RESET}"
     segs="$(s_segments \
-      "$([ "$N_PROC_STOPPED" -gt 0 ] && echo "$G_OK $(s_n "$N_PROC_STOPPED" 'proc' 'procs')")" \
-      "$([ "$N_OPT_DONE" -gt 0 ] && echo "$G_OK $N_OPT_DONE tidied")" \
+      "$([ "$N_PROC_STOPPED" -gt 0 ] && echo "$G_OK $(s_n "$N_PROC_STOPPED" 'process stopped' 'processes stopped')")" \
+      "$([ "$N_OPT_DONE" -gt 0 ] && echo "$G_OK $(s_n "$N_OPT_DONE" 'additional action completed' 'additional actions completed')")" \
       "$([ "$DISK_TOTAL_KB" -gt 0 ] && echo "$(human_mb "$DISK_TOTAL_KB") freed")" \
       "$([ "$N_WITHHELD" -gt 0 ] && echo "$G_SKIP $N_WITHHELD withheld")" \
       "$([ "$N_FAILED" -gt 0 ] && echo "$G_SKIP $N_FAILED failed")" \
@@ -1295,36 +1293,36 @@ if cards_on; then
     if [ -n "$segs" ]; then s_card_line "   $segs"; fi
     if [ "$N_PROC_STOPPED" -eq 0 ] && [ "$DISK_TOTAL_KB" -eq 0 ] && [ "$N_OPT_DONE" -eq 0 ] && [ "$N_FAILED" -eq 0 ] && [ "$N_RECEIPT_FAILED" -eq 0 ]; then
       if [ "$N_WITHHELD" -gt 0 ] || [ "$N_UNSELECTED" -gt 0 ]; then
-        s_card_line "   no work confirmed — $N_WITHHELD withheld, $N_UNSELECTED unselected"
-      else s_card_line "   nothing needed doing — already spotless ✨"; fi
+        s_card_line "   No process exit or reclaimed space confirmed. $N_WITHHELD withheld, $N_UNSELECTED unselected."
+      else s_card_line "   No process exits or reclaimed space to report."; fi
     else
-      [ "$N_PROC_STOPPED" -gt 0 ] && s_card_line "   $(s_n "$N_PROC_STOPPED" 'process sent home' 'processes sent home')"
-      [ "$N_OPT_DONE" -gt 0 ] && s_card_line "   tidied $(s_n "$N_OPT_DONE" 'optimize target' 'optimize targets')"
-      [ "$DISK_TOTAL_KB" -gt 0 ] && s_card_line "   $(human_mb "$DISK_TOTAL_KB") hauled to the curb"
-      [ "$N_FAILED" -gt 0 ] && s_card_line "   $N_FAILED action(s) could not be confirmed"
-      [ "$N_RECEIPT_FAILED" -gt 0 ] && s_card_line "   $N_RECEIPT_FAILED receipt(s) could not be recorded; action counts above remain confirmed"
-      [ "$N_WITHHELD" -gt 0 ] && s_card_line "   $N_WITHHELD target(s) withheld; see reasons above"
+      [ "$N_PROC_STOPPED" -gt 0 ] && s_card_line "   $(s_n "$N_PROC_STOPPED" 'process stopped' 'processes stopped')"
+      [ "$N_OPT_DONE" -gt 0 ] && s_card_line "   Completed $(s_n "$N_OPT_DONE" 'additional cleanup action' 'additional cleanup actions')."
+      [ "$DISK_TOTAL_KB" -gt 0 ] && s_card_line "   Freed $(human_mb "$DISK_TOTAL_KB")."
+      [ "$N_FAILED" -gt 0 ] && s_card_line "   Afterparty could not confirm $N_FAILED action(s)."
+      [ "$N_RECEIPT_FAILED" -gt 0 ] && s_card_line "   Afterparty could not record $N_RECEIPT_FAILED receipt(s). The action counts above remain confirmed."
+      [ "$N_WITHHELD" -gt 0 ] && s_card_line "   Afterparty withheld $N_WITHHELD target(s). See the reasons above."
       s_card_line
-      s_card_line "   thanks for partying responsibly 🎉"
+      s_card_line "   Review the results above."
     fi
   elif [ "$N_PROC" -gt 0 ] || [ "$DISK_TOTAL_KB" -gt 0 ] || [ "$N_OPT" -gt 0 ]; then
-    s_card_line "${C_BOLD}${C_YEL}🧹 the damage — devclean${C_RESET}"
+    s_card_line "${C_BOLD}${C_YEL}🧹 Machine cleanup preview${C_RESET}"
     segs="$(s_segments \
-      "$([ "$N_PROC" -gt 0 ] && echo "$G_ACT $(s_n "$N_PROC" 'proc' 'procs')")" \
-      "$([ "$N_OPT" -gt 0 ] && echo "$G_ACT $N_OPT to tidy")" \
+      "$([ "$N_PROC" -gt 0 ] && echo "$G_ACT $(s_n "$N_PROC" 'process candidate' 'process candidates')")" \
+      "$([ "$N_OPT" -gt 0 ] && echo "$G_ACT $(s_n "$N_OPT" 'additional target' 'additional targets')")" \
       "$([ "$DISK_TOTAL_KB" -gt 0 ] && echo "$(human_mb "$DISK_TOTAL_KB") reclaimable")")"
     s_card_line "   $segs"
-    [ "$N_PROC" -gt 0 ] && s_card_line "   $(s_n "$N_PROC" 'orphaned process still partying' 'orphaned processes still partying')"
-    [ "$N_OPT" -gt 0 ] && s_card_line "   $(s_n "$N_OPT" 'optimize target to tidy' 'optimize targets to tidy')"
-    [ "$DISK_TOTAL_KB" -gt 0 ] && s_card_line "   $(human_mb "$DISK_TOTAL_KB") of caches to haul out"
+    [ "$N_PROC" -gt 0 ] && s_card_line "   $(s_n "$N_PROC" 'process candidate found' 'process candidates found')"
+    [ "$N_OPT" -gt 0 ] && s_card_line "   $(s_n "$N_OPT" 'additional cleanup target found' 'additional cleanup targets found')"
+    [ "$DISK_TOTAL_KB" -gt 0 ] && s_card_line "   $(human_mb "$DISK_TOTAL_KB") of reclaimable disk space"
     s_card_line
-    s_card_line "   select target IDs from the preview above"
-    s_card_line "   $(followup_command)"
+    s_card_line "   Select target IDs from the preview above."
+    s_card_command "   $(export LC_ALL=C; followup_command)"
   elif [ "$N_WITHHELD" -gt 0 ]; then
-    s_card_line "${C_BOLD}${C_YEL}$N_WITHHELD target(s) withheld — manual review required${C_RESET}"
+    s_card_line "${C_BOLD}${C_YEL}Afterparty withheld $N_WITHHELD target(s). Review the reasons above.${C_RESET}"
   else
-    s_card_line "${C_BOLD}${C_GRN}✨ spotless — the house is quiet${C_RESET}"
-    s_card_line "   see you next session 🎉"
+    s_card_line "${C_BOLD}${C_GRN}✓ No cleanup candidates found in the inspected scope.${C_RESET}"
+    s_card_line "   See you next session."
   fi
   s_card_close
 fi

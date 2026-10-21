@@ -10,3 +10,5 @@ VERSION text eol=lf
 bin/afterparty text eol=lf
 skills/afterparty/bin/afterparty text eol=lf
 *.png binary
+# Whole-frame terminal snapshots retain their cell padding.
+skills/afterparty/ui/testdata/*.ansi whitespace=-blank-at-eol

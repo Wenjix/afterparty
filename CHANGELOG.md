@@ -2,6 +2,88 @@
 
 All notable changes to Afterparty are documented here. Versions follow semantic versioning.
 
+## [0.14.0] - Unreleased
+
+### Added
+
+- `afterparty builds`: a read-only terminal inventory of known generated output
+  across explicit project roots. Rows show repository paths, allocated-size
+  estimates, and growth against the previous complete matching-scope scan.
+  Inspection and filtering retain full paths and scan errors. Enter opens a
+  fresh artifact review for one repository. Plain and versioned JSON reports
+  also work without the optional terminal helper.
+- Shared artifact-name definitions keep inventory discovery, existing artifact
+  proposals, and apply-time name checks consistent.
+- `afterparty review`: compact guided target selection, optional detail with
+  `d`, focused inspection with `i`, filtering, explicit marks, and Enter to
+  advance through separate review/save/finish
+  steps. Confirmed refresh clears marks; a failed refresh disables saving.
+  Review writes a checked Markdown plan and never invokes cleanup.
+- `afterparty plan --json`: one versioned snapshot of target identities,
+  evidence capabilities, availability, canonical Markdown and integrity data.
+  The reviewer and Markdown use the same collected observations.
+- `afterparty apply --json`: versioned per-target outcomes and a completion
+  digest, with confirmed effects, journal failures and delegated invocation
+  failures reported separately. Process results use a private channel from the
+  existing audit handler and an independent parent postcondition check.
+- No-clobber plan publication with private permissions, explicit mark validation,
+  snapshot/row checks and validation through the existing approval parser.
+- A Bubble Tea 2.1.0 and Lip Gloss 2.0.0 terminal frontend over the Python
+  evidence/save backend. An explicit `bin/build-review` inside the skill bundle
+  builds its optional helper with Go 1.26+. Monochrome/ASCII display, fixed scope
+  and controls surround scrolling evidence; a missing helper or unsupported
+  terminal/runtime uses the read-only plain-plan fallback.
+
+### Changed
+
+- CLI and terminal-review text use short sentences, literal status messages, and
+  consistent terms based on STE 100 principles. Help defines required technical
+  terms. Refusals retain uncertainty when a safety check cannot finish.
+- Current user guides and agent instructions use separate procedural steps.
+  Historical records, legal text, parser fields, and command syntax retain their
+  existing purpose and format.
+- Guided review uses one-line targets and a bounded focus strip, backend row
+  ordering, contextual keys and readable withholding reasons. Review choices
+  starts with a three-row summary, retains every process-group member, supports
+  unmarking, and shows evidence on `d`.
+- Review focus uses bold reverse with terminal-default colors; monochrome keeps
+  text attributes, and messages distinguish information, completion and refusal.
+  Observation times use the local clock with live snapshot age.
+- Top-level help groups commands by inspection, review, actions and history and
+  uses the public `afterparty` command name. Bare invocation still prints help.
+- Styled workspace, process, ledger, artifact and cache reports adapt to terminal
+  width. Numeric facts stay aligned; complete commands and paths wrap into
+  detail rows without cutting Unicode characters or losing significant spaces.
+- Shared text geometry uses Python when available and escaped ASCII otherwise.
+  Copyable next-step commands retain their shell quoting and one logical line.
+  Plain tables, JSON fields, and plan metadata retain their existing formats.
+
+### Fixed
+
+- Keys typed during collection or refresh cannot mark unseen targets or advance
+  an older snapshot. Space after paging first reveals an off-screen focus.
+  Cancelling or refreshing with marks requires confirmation; q closes help and
+  inspection, and Ctrl+Z suspends without losing the draft.
+- Existing `review --output` destinations are refused before collection with a
+  recovery action. Small panes open a readable size notice with a tmux zoom hint,
+  and Esc followed by another key is preserved.
+- Saved-review exit output lists the choices and prints the apply command alone,
+  using an absolute CLI path when needed. Copied rows contain no hard tabs and
+  exit output starts cleanly under GNU screen.
+- Review preserves Unicode separators in target paths and process commands
+  when collecting evidence and validating saved choices.
+- Focus navigation scrolls to reveal the target's essential facts, including
+  its consequence and any withholding reason.
+- Compact rows lead with meaningful target names and aligned measurements;
+  full commands and evidence remain available in inspection and expanded views.
+  Missing evidence stays pinned above the list. Enter finishes without saving
+  when no targets are available, retaining a nonzero result for incomplete scans.
+- Finishing a saved review prints a copyable apply command after restoring the
+  terminal, preserving long paths and backslashes. Shrinking the terminal after
+  saving still allows a successful finish.
+- Worktree removal now treats a dangling symlink left at the target path as a
+  surviving target, with a nonzero result and no confirmed-removal receipt.
+
 ## [0.13.0] - 2026-09-20
 
 ### Added
