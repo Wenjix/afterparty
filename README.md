@@ -663,7 +663,8 @@ bash tests/test-release-package.sh
 The command creates separate source/plugin and Agent Skill archives from
 explicit file lists. It includes runtime scripts, optional TUI source, version
 metadata, and licenses. It excludes built executables, tests, development
-records, and local state. Existing archives cause a refusal.
+records, and local state. Existing archives cause a refusal. A refusal names an
+incomplete archive left by an interrupted copy so it can be removed before rerunning.
 See [RELEASING.md](RELEASING.md) for publication steps.
 
 Run the full suite **inside a disposable VM, container, or CI runner**:

@@ -175,12 +175,32 @@ class ReleasePackageTests(unittest.TestCase):
                              hashlib.sha256((second / first.name).read_bytes()).digest())
 
     def test_existing_archive_is_never_replaced(self):
+        reference = self.base / "existing-reference"
+        self.package(output=reference)
         self.output.mkdir()
         existing = self.output / ("afterparty-" + self.version + "-skill.tar.gz")
-        existing.write_bytes(b"existing release")
+        content = (reference / existing.name).read_bytes()
+        shutil.copy2(reference / existing.name, existing)
         result = self.package(expect=1)
         self.assertIn("Archive already exists", result.stderr)
-        self.assertEqual(existing.read_bytes(), b"existing release")
+        self.assertNotIn("incomplete", result.stderr)
+        self.assertEqual(existing.read_bytes(), content)
+        self.assertEqual(list(self.output.iterdir()), [existing])
+
+    def test_truncated_existing_archive_is_reported_incomplete(self):
+        reference = self.base / "truncated-reference"
+        self.package(output=reference)
+        source_name = "afterparty-" + self.version + "-source.tar.gz"
+        source_bytes = (reference / source_name).read_bytes()
+        truncated_bytes = source_bytes[:len(source_bytes) // 2]
+        self.output.mkdir()
+        existing = self.output / source_name
+        existing.write_bytes(truncated_bytes)
+
+        result = self.package(expect=1)
+        self.assertIn("incomplete", result.stderr)
+        self.assertIn(str(existing), result.stderr)
+        self.assertEqual(existing.read_bytes(), truncated_bytes)
         self.assertEqual(list(self.output.iterdir()), [existing])
 
     def test_missing_required_input_refuses_both_archives(self):
@@ -365,22 +385,27 @@ class ReleasePackageTests(unittest.TestCase):
             self.assertEqual((self.output / name).stat().st_mode & 0o777, 0o666 & ~umask)
 
     def test_fallback_does_not_clobber_racing_archive(self):
+        reference = self.base / "fallback-race-reference"
+        self.package(output=reference)
         namespace = runpy.run_path(str(self.source / "bin/package-release"))
         os_module = namespace.get("os", os)
         racing_archive = self.output / ("afterparty-" + self.version + "-source.tar.gz")
+        source_bytes = (reference / racing_archive.name).read_bytes()
+        truncated_bytes = source_bytes[:len(source_bytes) // 2]
         error_output = io.StringIO()
 
         def fail_link(source, destination, *args, **kwargs):
-            Path(destination).write_bytes(b"other process")
+            Path(destination).write_bytes(truncated_bytes)
             raise OSError(errno.EPERM, "Operation not permitted")
 
         with mock.patch.object(os_module, "link", fail_link), \
                 mock.patch.object(sys, "argv", ["package-release", "--output-dir", str(self.output)]), \
                 redirect_stderr(error_output):
             self.assertEqual(namespace["main"](), 1)
-        self.assertIn("Archive already exists", error_output.getvalue())
+        self.assertIn("Archive already exists but is incomplete", error_output.getvalue())
+        self.assertIn(str(racing_archive), error_output.getvalue())
         self.assertEqual({path.name for path in self.output.iterdir()}, {racing_archive.name})
-        self.assertEqual(racing_archive.read_bytes(), b"other process")
+        self.assertEqual(racing_archive.read_bytes(), truncated_bytes)
 
     def test_metadata_and_license_mismatch_refuse_packaging(self):
         for name, content, message in (

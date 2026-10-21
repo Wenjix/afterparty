@@ -14,6 +14,7 @@ import sys
 import tarfile
 import tempfile
 import threading
+import zlib
 
 
 SKILL_FILES = (
@@ -165,7 +166,25 @@ def write_archive(handle, prefix, files):
                 archive.addfile(member, io.BytesIO(content))
 
 
+def archive_is_complete(path):
+    try:
+        with tarfile.open(path, "r:gz") as archive:
+            for member in archive:
+                extracted = archive.extractfile(member)
+                if extracted is not None:
+                    with extracted:
+                        while extracted.read(1024 * 1024):
+                            pass
+        return True
+    except (OSError, EOFError, tarfile.TarError, zlib.error):
+        return False
+
+
 def archive_exists_error(destination):
+    if (destination.is_file() and not destination.is_symlink()
+            and not archive_is_complete(destination)):
+        return ValueError("Archive already exists but is incomplete: " + str(destination)
+                          + ". An interrupted earlier run may have left it; remove it and rerun.")
     return ValueError("Archive already exists: " + str(destination)
                       + ". Select another output directory or move the existing archive.")
 
@@ -212,8 +231,7 @@ def main():
         )
         for destination, _, _ in packages:
             if destination.exists() or destination.is_symlink():
-                raise ValueError("Archive already exists: " + str(destination)
-                                 + ". Select another output directory or move the existing archive.")
+                raise archive_exists_error(destination)
         output_dir.mkdir(parents=True, exist_ok=True)
         umask = os.umask(0)
         os.umask(umask)
