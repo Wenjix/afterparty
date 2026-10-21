@@ -378,7 +378,7 @@ func run() int {
 			fmt.Fprintln(os.Stderr, "builds:", err)
 			return 1
 		}
-		child := inventoryReviewCommand(executable, m.reviewRoot)
+		child := inventoryReviewCommand(executable, m.reviewRoot, m.ascii)
 		child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
 		if err := child.Run(); err != nil {
 			var exitError *exec.ExitError
@@ -398,8 +398,12 @@ func run() int {
 	return m.status
 }
 
-func inventoryReviewCommand(executable, root string) *exec.Cmd {
-	return exec.Command(filepath.Join(filepath.Dir(executable), "../lib/review.sh"), "--artifacts-only", "--root", root)
+func inventoryReviewCommand(executable, root string, ascii bool) *exec.Cmd {
+	args := []string{"--artifacts-only", "--root", root}
+	if ascii {
+		args = append(args, "--ascii")
+	}
+	return exec.Command(filepath.Join(filepath.Dir(executable), "../lib/review.sh"), args...)
 }
 
 func main() { os.Exit(run()) }

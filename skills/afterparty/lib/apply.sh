@@ -488,14 +488,21 @@ if [ -f "$T/artifacts" ]; then
       continue
     fi
     s_would "  deleting artifact: $target"
-    if rm -rf -- "$target" 2>/dev/null && [ ! -e "$target" ] && [ ! -L "$target" ]; then
-      record artifact.clean "$target" succeeded "root=$scope"
-      apply_emit_target artifact "$target" applied postcondition-confirmed 'Artifact path was confirmed absent after deletion.' 1 1 "$AE_RECEIPT"
-    else
+    removal_rc=0
+    rm -rf -- "$target" 2>/dev/null || removal_rc=$?
+    if [ -e "$target" ] || [ -L "$target" ]; then
       s_skip "  $target — failed to delete (target remains or removal failed)"
       record artifact.clean "$target" failed "removal was not confirmed"
       N_FAILED=$((N_FAILED + 1)); N_OK=$((N_OK - 1))
       apply_emit_target artifact "$target" failed removal-unconfirmed 'Artifact deletion was not confirmed.' 1 0 "$AE_RECEIPT"
+    elif [ "$removal_rc" -ne 0 ]; then
+      s_skip "  $target — removal failed after path disappeared (exit $removal_rc)"
+      record artifact.clean "$target" failed "exit_status=$removal_rc; target path confirmed absent; root=$scope"
+      N_FAILED=$((N_FAILED + 1)); N_OK=$((N_OK - 1))
+      apply_emit_target artifact "$target" failed removal-failed "Artifact removal returned exit status $removal_rc after the path disappeared." 1 1 "$AE_RECEIPT"
+    else
+      record artifact.clean "$target" succeeded "root=$scope"
+      apply_emit_target artifact "$target" applied postcondition-confirmed 'Artifact path was confirmed absent after deletion.' 1 1 "$AE_RECEIPT"
     fi
   done < "$T/artifacts"
 fi

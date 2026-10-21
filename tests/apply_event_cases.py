@@ -242,6 +242,40 @@ exec /bin/rm "$@"''')
                 self.assertIn("rm -rf -- " + str(target), self.log.read_text())
                 self.assertTrue(target.exists())
 
+    def test_failed_artifact_command_preserves_confirmed_path_absence(self):
+        self.env["APPLY_REFUSE_RM"] = ""
+        self.tool("rm", '''matched=0
+for arg in "$@"; do
+  [ "$arg" != "$APPLY_REFUSE_RM" ] || matched=1
+done
+/bin/rm "$@"
+rc=$?
+[ "$matched" -eq 0 ] || exit 1
+exit "$rc"''')
+        for mode in (True, False):
+            with self.subTest(json=mode):
+                target, row = self.artifact("failed-removal-" + str(mode) + "/dist")
+                self.env["APPLY_REFUSE_RM"] = str(target)
+                self.log.write_text("")
+                result = self.run_apply(row, json_mode=mode, status=1)
+                self.assertIn("rm -rf -- " + str(target), self.log.read_text())
+                self.assertFalse(target.exists())
+                journal = Path(self.env["XDG_CACHE_HOME"]) / "agent-processes/actions.jsonl"
+                entry, = [record for record in map(json.loads, journal.read_text().splitlines())
+                          if record["operation"] == "artifact.clean" and record["target"] == str(target)]
+                self.assertEqual(entry["status"], "failed")
+                self.assertIn("confirmed absent", entry["detail"])
+                if mode:
+                    item, = self.targets(result)
+                    self.assertEqual((item["outcome"], item["reason_code"], item["mutation_attempted"],
+                                      item["postcondition_confirmed"], item["receipt_status"]),
+                                     ("failed", "removal-failed", True, True, "recorded"))
+                    self.assertIn("exit status 1", item["detail"])
+                    self.assertEqual((result[-2]["counts"]["applied"], result[-2]["counts"]["failed"]), (0, 1))
+                else:
+                    self.assertIn(b"removal failed after path disappeared", result.stdout)
+                    self.assertIn(b"0 applied", result.stdout)
+
     def fail_journal(self):
         # Exercise the real writer's directory refusal after a confirmed effect.
         state = Path(self.env["XDG_CACHE_HOME"]) / "agent-processes"

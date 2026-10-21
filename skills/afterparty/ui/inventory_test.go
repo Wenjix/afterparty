@@ -271,9 +271,13 @@ func TestInventoryBackendAndHandoffUseFixedCommands(t *testing.T) {
 		t.Fatalf("normal review command changed: %q", command.Args)
 	}
 	root := "/work/quoted '$(no-command)' repository"
-	command = inventoryReviewCommand("/bundle/bin/afterparty-review", root)
+	command = inventoryReviewCommand("/bundle/bin/afterparty-review", root, false)
 	if !reflect.DeepEqual(command.Args, []string{"/bundle/lib/review.sh", "--artifacts-only", "--root", root}) {
 		t.Fatalf("handoff lost literal identity or used a shell command: %q", command.Args)
+	}
+	command = inventoryReviewCommand("/bundle/bin/afterparty-review", root, true)
+	if !reflect.DeepEqual(command.Args, []string{"/bundle/lib/review.sh", "--artifacts-only", "--root", root, "--ascii"}) {
+		t.Fatalf("ASCII handoff lost literal identity or used a shell command: %q", command.Args)
 	}
 }
 

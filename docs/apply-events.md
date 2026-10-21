@@ -38,7 +38,7 @@ escape sequences.
 | Result field | Meaning |
 | --- | --- |
 | `outcome` | `applied`, `gone`, `held`, `vetoed`, `drift`, `survived`, or `failed` |
-| `reason_code` | Machine-readable reason such as `identity-changed`, `tracked`, `group-survived`, `postcondition-confirmed`, or `child-evidence-unavailable` |
+| `reason_code` | Machine-readable reason such as `identity-changed`, `tracked`, `group-survived`, `postcondition-confirmed`, `removal-failed`, or `child-evidence-unavailable` |
 | `detail` | Explanatory prose; readers must not parse it for decisions |
 | `mutation_attempted` | True when an operation was attempted, false when it was not, null when child evidence is unavailable |
 | `postcondition_confirmed` | Whether the parent confirmed target absence; signal delivery alone never proves this |
@@ -53,9 +53,11 @@ The outcomes have these meanings:
 - `drift`: the reviewed identity changed.
 - `vetoed`: a fresh policy check refused cleanup.
 - `survived`: the target remains after delegated execution or worktree removal.
-- `failed`: another result is unavailable or unconfirmed.
+- `failed`: the operation failed or another result is unavailable or unconfirmed; path absence may still be confirmed.
 
-A filesystem removal error does not count as successful deletion.
+A filesystem removal command error does not count as an applied result, even
+when the parent confirms that the target path is absent. It is reported as
+`failed` with `reason_code: "removal-failed"` and a confirmed postcondition.
 
 A journal failure does not undo a confirmed effect. That target remains
 `applied`, with `receipt_status: "failed"`. The run fails. With
