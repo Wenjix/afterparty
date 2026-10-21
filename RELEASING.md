@@ -11,7 +11,7 @@ skill metadata, and changelog must agree with it.
 3. Synchronize the `version` field in `.claude-plugin/plugin.json` and the
    version metadata in `skills/afterparty/SKILL.md`.
 4. Add the user-visible changes to `CHANGELOG.md`.
-5. Run the full validation suite:
+5. Run the full validation suite inside a disposable VM, container, or CI runner:
 
    ```bash
    bash tests/run.sh
@@ -36,6 +36,29 @@ skill metadata, and changelog must agree with it.
 
 The test suite includes a metadata synchronization check for the CLI version,
 plugin version, skill metadata, and changelog heading.
+
+## Source release packages
+
+Build both archives from the reviewed checkout:
+
+```bash
+python3 bin/package-release --output-dir /tmp/afterparty-release
+bash tests/test-release-package.sh
+```
+
+The output directory must be explicit. Choose a directory outside the checkout.
+The command refuses existing archive paths. It checks required inputs, version
+agreement, and matching license copies before creating packages.
+
+| Archive | Contents |
+| --- | --- |
+| `afterparty-X.Y.Z-source.tar.gz` | Standalone CLI and Claude Code plugin with required sources and notices |
+| `afterparty-X.Y.Z-skill.tar.gz` | Self-contained `afterparty/` skill folder with required sources and notices |
+
+Both archives use explicit file lists. Tests, fixtures, development records,
+local state, and built executables stay outside them. Each archive has a short
+installation README. Update the file lists when adding runtime modules.
+Package tests inspect archive contents and run the copied CLI without cleanup.
 
 The source bundle includes the optional review helper's Go module, pinned
 dependencies, build script, and dependency license notices. For a source install,
@@ -63,6 +86,9 @@ git push origin vX.Y.Z
 ```
 
 Create the GitHub Release from the tag with the corresponding changelog notes.
+Build the source packages from that tagged checkout. Attach both tested
+archives to the release. GitHub's automatic source downloads remain repository
+snapshots and can include contributor files that the install packages omit.
 Check the release page and reported version. Check the standalone CLI, bundled
 skill, and Claude Code plugin installation path. Pushes and releases require
 explicit maintainer authorization.

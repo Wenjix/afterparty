@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+"""Build source release archives from reviewed file allowlists."""
+
+import argparse
+import gzip
+import io
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import signal
+import sys
+import tarfile
+import tempfile
+import threading
+import zlib
+
+
+SKILL_FILES = (
+    "SKILL.md", "docs-review.md", "VERSION", "LICENSE",
+    "bin/afterparty", "bin/build-review",
+    "lib/agent-hygiene.sh", "lib/apply-events.sh", "lib/apply.sh",
+    "lib/apply_events.py", "lib/artifact-kinds.tsv", "lib/artifact-names.sh",
+    "lib/audit-git.sh", "lib/audit-processes.sh", "lib/build_inventory.py",
+    "lib/builds.sh", "lib/categories.sh", "lib/clean-artifacts.sh",
+    "lib/devclean-settings.py", "lib/devclean.sh", "lib/docs.py", "lib/docs.sh",
+    "lib/eligible.sh", "lib/fingerprint.sh", "lib/glance.sh", "lib/journal.sh",
+    "lib/json.sh", "lib/plan-capture.sh", "lib/plan-collect.sh",
+    "lib/plan-format.sh", "lib/plan-render.sh", "lib/plan.sh", "lib/plan_data.py",
+    "lib/privacy.sh", "lib/process-ledger.sh", "lib/protect.sh", "lib/report.sh",
+    "lib/review.py", "lib/review.sh", "lib/review_data.py", "lib/state.sh",
+    "lib/style.sh", "lib/terminal_text.py", "lib/vetoes.sh",
+    "lib/workspace-index.py", "lib/workspace.sh",
+    "ui/THIRD_PARTY_NOTICES.txt", "ui/go.mod", "ui/go.sum",
+    "ui/inventory.go", "ui/main.go", "ui/sections.go", "ui/state.go",
+    "ui/terminal.go", "ui/text.go", "ui/theme.go", "ui/view.go",
+)
+
+SOURCE_FILES = (
+    "LICENSE", "CHANGELOG.md", "SECURITY.md", "bin/afterparty",
+    ".claude-plugin/plugin.json", ".claude-plugin/marketplace.json",
+    "hooks/hooks.json", "commands/audit.md", "commands/docs.md",
+) + tuple("skills/afterparty/" + name for name in SKILL_FILES)
+
+
+def read_input(root, name):
+    path = root / name
+    for component in (path,) + tuple(path.parents):
+        if component == root:
+            break
+        if component.is_symlink():
+            raise ValueError("Required input is a symlink: " + name)
+    if not path.is_file():
+        raise ValueError("Required input is missing or is not a file: " + name)
+    return path.read_bytes()
+
+
+def load_inputs(root):
+    files = {name: read_input(root, name) for name in SOURCE_FILES}
+    version = files["skills/afterparty/VERSION"].decode("utf-8").strip()
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+        raise ValueError("VERSION must contain a release version such as 1.2.3")
+    manifest = json.loads(files[".claude-plugin/plugin.json"])
+    if manifest.get("version") != version:
+        raise ValueError("Plugin version does not match VERSION")
+    skill = files["skills/afterparty/SKILL.md"].decode("utf-8")
+    frontmatter = skill.split("---", 2)[1] if skill.startswith("---\n") else ""
+    if not re.search(r'^  version: "' + re.escape(version) + r'"$', frontmatter, re.M):
+        raise ValueError("Skill version does not match VERSION")
+    if files["LICENSE"] != files["skills/afterparty/LICENSE"]:
+        raise ValueError("Root and skill licenses differ")
+    return version, files
+
+
+def package_readme(version, skill):
+    guide = "https://github.com/Wenjix/afterparty/blob/v" + version + "/README.md"
+    if skill:
+        install = """Copy this `afterparty` directory into your host's skill directory.
+For Claude Code, use `~/.claude/skills/afterparty`.
+For Codex, use `~/.agents/skills/afterparty`.
+The skill does not install plugin hooks or add the CLI to PATH.
+
+Run the CLI from this directory:
+
+```bash
+./bin/afterparty --help
+./bin/afterparty --version
+```
+"""
+        helper = "./bin/build-review"
+        notices = "ui/THIRD_PARTY_NOTICES.txt"
+        protocol = "docs-review.md"
+    else:
+        install = """Keep the extracted directory together. Run the CLI from this directory:
+
+```bash
+./bin/afterparty --help
+./bin/afterparty --version
+```
+
+Add this directory's absolute `bin` path to PATH to use `afterparty` elsewhere.
+The `.claude-plugin` manifests, commands, hooks, and bundled skill also support
+Claude Code plugin installation. The full guide explains plugin installation.
+Plugin hooks only show reminders and record session end. They never run cleanup.
+"""
+        helper = "./skills/afterparty/bin/build-review"
+        notices = "skills/afterparty/ui/THIRD_PARTY_NOTICES.txt"
+        protocol = "skills/afterparty/docs-review.md"
+    return ("""# Afterparty """ + version + """
+
+Afterparty reports the processes, worktrees, artifacts, and caches left by coding agents.
+This archive includes source for the CLI and optional terminal interface.
+
+## Quick start
+
+""" + install + """
+## Requirements
+
+Use Bash 3.2+, Git, and standard Unix tools on macOS, Linux, or WSL.
+Python 3.8+ supports builds, activity indexing, documentation review, and interactive review.
+Install `lsof` for listener and occupancy evidence. Missing evidence prevents dependent cleanup.
+Git Bash has limited process support.
+
+Build the optional terminal interface explicitly with Go 1.26+:
+
+```bash
+""" + helper + """
+```
+
+The build downloads the dependencies pinned in `ui/go.mod` and `ui/go.sum`
+inside the skill. Go is not required after building. The binary supports its
+build platform. This archive does not include a prebuilt binary.
+
+## Use
+
+Change to the project you want to inspect. Run `afterparty glance` or
+`afterparty audit --strict` to inspect it. Use the absolute CLI path if you
+have not added it to PATH.
+
+`afterparty review` saves a checked plan. It does not run cleanup.
+Run `afterparty apply <saved-plan>` separately after reviewing the plan.
+Replace `<saved-plan>` with the saved path. Approval does not bypass safety checks.
+Direct stop and Devclean commands have separate approval flags.
+
+See the [full guide](""" + guide + """), the
+[documentation review protocol](""" + protocol + """), and `afterparty --help` for all commands.
+
+## License and credits
+
+Afterparty uses the [MIT license](LICENSE), with copyright notices for Kevin Liu
+and Wenjie Fu. Wenjie Fu created Afterparty from an Agent-Broom foundation by
+Kevin Liu. DevClean by ImL1s inspired its Devclean mode structure.
+The optional terminal interface uses Bubble Tea and Lip Gloss by Charmbracelet.
+See the [third-party notices](""" + notices + """), and the full guide for project credits.
+""").encode("utf-8")
+
+
+def write_archive(handle, prefix, files):
+    with gzip.GzipFile(filename="", mode="wb", fileobj=handle, mtime=0) as zipped:
+        with tarfile.open(fileobj=zipped, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+            for name, content in sorted(files.items()):
+                member = tarfile.TarInfo(prefix + "/" + name)
+                member.size = len(content)
+                member.mode = 0o755 if "/bin/" in "/" + name or name.endswith(".sh") else 0o644
+                archive.addfile(member, io.BytesIO(content))
+
+
+def archive_is_complete(path):
+    try:
+        with gzip.open(path, "rb") as stream:
+            while stream.read(1024 * 1024):
+                pass
+        with tarfile.open(path, "r:gz") as archive:
+            for member in archive:
+                extracted = archive.extractfile(member)
+                if extracted is not None:
+                    with extracted:
+                        while extracted.read(1024 * 1024):
+                            pass
+        return True
+    except (OSError, EOFError, tarfile.TarError, zlib.error):
+        return False
+
+
+def archive_exists_error(destination):
+    if (destination.is_file() and not destination.is_symlink()
+            and not archive_is_complete(destination)):
+        return ValueError("Archive already exists but is incomplete: " + str(destination)
+                          + ". An interrupted earlier run may have left it; remove it and rerun.")
+    return ValueError("Archive already exists: " + str(destination)
+                      + ". Select another output directory or move the existing archive.")
+
+
+def publish(temporary_path, destination, mode, created):
+    try:
+        os.link(temporary_path, destination)
+    except FileExistsError as error:
+        raise archive_exists_error(destination) from error
+    except OSError:
+        try:
+            fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                         | getattr(os, "O_BINARY", 0), mode)
+        except FileExistsError as error:
+            raise archive_exists_error(destination) from error
+        created.append(destination)
+        with os.fdopen(fd, "wb") as handle, temporary_path.open("rb") as source:
+            shutil.copyfileobj(source, handle)
+    else:
+        created.append(destination)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-dir", required=True, type=Path,
+                        help="directory for new archives; existing archives are never replaced")
+    args = parser.parse_args()
+    created = []
+    temporary = []
+    pending = None
+    success = False
+    try:
+        root = Path(__file__).resolve().parent.parent
+        version, files = load_inputs(root)
+        source = dict(files)
+        source["README.md"] = package_readme(version, skill=False)
+        skill = {name: files["skills/afterparty/" + name] for name in SKILL_FILES}
+        skill["README.md"] = package_readme(version, skill=True)
+        output_dir = args.output_dir.expanduser().resolve()
+        packages = (
+            (output_dir / ("afterparty-" + version + "-source.tar.gz"),
+             "afterparty-" + version, source),
+            (output_dir / ("afterparty-" + version + "-skill.tar.gz"), "afterparty", skill),
+        )
+        for destination, _, _ in packages:
+            if destination.exists() or destination.is_symlink():
+                raise archive_exists_error(destination)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        umask = os.umask(0)
+        os.umask(umask)
+        mode = 0o666 & ~umask
+        for destination, prefix, content in packages:
+            fd, temporary_name = tempfile.mkstemp(
+                dir=output_dir, prefix="." + destination.name + ".", suffix=".partial")
+            temporary_path = Path(temporary_name)
+            temporary.append(temporary_path)
+            os.chmod(temporary_path, mode)
+            with os.fdopen(fd, "wb") as handle:
+                write_archive(handle, prefix, content)
+
+        def publish_archives():
+            nonlocal pending
+            for (destination, _, _), temporary_path in zip(packages, temporary):
+                pending = (destination, temporary_path)
+                publish(temporary_path, destination, mode, created)
+                pending = None
+
+        if threading.current_thread() is threading.main_thread():
+            sigint_received = False
+            original_sigint_handler = signal.getsignal(signal.SIGINT)
+
+            def defer_sigint(signum, frame):
+                nonlocal sigint_received
+                sigint_received = True
+
+            signal.signal(signal.SIGINT, defer_sigint)
+            try:
+                try:
+                    publish_archives()
+                except BaseException:
+                    if sigint_received:
+                        raise KeyboardInterrupt
+                    raise
+            finally:
+                signal.signal(signal.SIGINT, original_sigint_handler)
+            if sigint_received:
+                raise KeyboardInterrupt
+        else:
+            publish_archives()
+
+        for temporary_path in temporary:
+            temporary_path.unlink(missing_ok=True)
+        for destination in created:
+            print(destination)
+        success = True
+    except (OSError, ValueError, KeyError, UnicodeError, tarfile.TarError) as error:
+        print("package-release: " + str(error), file=sys.stderr)
+        return 1
+    finally:
+        if not success:
+            for destination in created:
+                destination.unlink(missing_ok=True)
+            if pending is not None:
+                destination, temporary_path = pending
+                if destination not in created and destination.exists():
+                    try:
+                        is_pending_archive = os.path.samefile(destination, temporary_path)
+                    except OSError:
+                        is_pending_archive = False
+                    if is_pending_archive:
+                        destination.unlink(missing_ok=True)
+        for temporary_path in temporary:
+            temporary_path.unlink(missing_ok=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

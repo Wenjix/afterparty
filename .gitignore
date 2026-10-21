@@ -3,3 +3,5 @@
 *.tmp
 report.md
 skills/afterparty/bin/afterparty-review
+.impeccable/
+__pycache__/

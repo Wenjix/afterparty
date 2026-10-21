@@ -6,6 +6,11 @@ All notable changes to Afterparty are documented here. Versions follow semantic 
 
 ### Added
 
+- Explicit source/plugin and Agent Skill release archives, with copied-bundle
+  checks for required files, metadata, licenses, and read-only CLI operation.
+- When the output filesystem supports hard links, interruptions leave no partial
+  archives. Without hard links, an exclusive copy is used; a run killed mid-copy
+  can leave a truncated archive that later runs report as incomplete.
 - `afterparty builds`: a read-only terminal inventory of known generated output
   across explicit project roots. Rows show repository paths, allocated-size
   estimates, and growth against the previous complete matching-scope scan.
@@ -36,9 +41,17 @@ All notable changes to Afterparty are documented here. Versions follow semantic 
 
 ### Changed
 
+- Replaced historical design experiments, task plans, and review reports in the
+  public documentation tree with a concise current architecture guide.
+  Public interface contracts remain available. Local critique output stays ignored.
 - Reorganized the README around installation, review, and cleanup workflows.
   Removed repeated guidance and corrected scope/output examples. Added DevClean
   by ImL1s to the credits alongside Wenjie Fu and Kevin Liu's Agent-Broom.
+- Expanded Wenjie Fu's project credit and acknowledged Bubble Tea and Lip Gloss
+  for the terminal interface.
+- Checked README instructions against the implementation and corrected the
+  Python minimum, terminal-helper description, host documentation link, and plan overwrite guidance.
+  Updated agent architecture rules, security reporting instructions, and privacy guidance.
 - Invalid-option and missing-value errors name the command, the option, and a
   recovery step. Documentation distinguishes plan validation, fresh target
   checks, attempted actions, and confirmed outcomes.

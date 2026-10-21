@@ -38,6 +38,9 @@ to your shell configuration to keep it. Check the installed version with
 
 Change to the project you want to inspect. Then choose a workflow:
 
+Use an unused filename for a manual plan. Shell redirection with `>` replaces
+an existing file.
+
 | Goal | Start here |
 | --- | --- |
 | See processes by workspace | `afterparty glance` |
@@ -110,7 +113,7 @@ must locate `SKILL.md` and use that folder's absolute `bin/afterparty` path.
 Installing the skill does not add the command to PATH or install plugin hooks.
 
 See the [Agent Skills standard](https://agentskills.io),
-[Claude skill locations](https://code.claude.com/docs/en/skills#where-skills-live),
+[Claude skill locations](https://code.claude.com/docs/en/skills#choose-where-skills-load),
 and [Codex skill locations](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills).
 A host needs local shell execution to inspect this machine. A hosted session
 can inspect only its own environment.
@@ -239,8 +242,9 @@ Transcript age is not required to remove a checked worktree or artifact.
 
 ### Optional terminal helper
 
-The terminal UI uses Bubble Tea and Lip Gloss with a Python 3 backend.
-Build it explicitly on macOS or Linux with Go 1.26 or newer:
+The optional `afterparty-review` executable provides the terminal UI for
+`review` and interactive `builds`. It uses Bubble Tea and Lip Gloss with a
+Python backend. Build it explicitly on macOS or Linux with Go 1.26 or newer:
 
 ```bash
 ./skills/afterparty/bin/build-review
@@ -292,6 +296,9 @@ If the helper, Python 3, or terminal is unavailable, review prints an unchecked
 plain plan and exits nonzero. That fallback does not save a plan.
 
 ### Manual plans and Apply
+
+Choose an unused filename. Shell redirection with `>` overwrites an existing
+file before Afterparty starts.
 
 ```bash
 afterparty plan > cleanup-plan.md
@@ -593,7 +600,7 @@ Review the target and consequence immediately before applying cleanup.
 | Bash 3.2+, Git, standard Unix tools | Core CLI. Tools include `ps`, `awk`, `find`, `stat`, `du`, and hashing. |
 | `lsof` | Listener reports and occupancy evidence. Worktree/artifact removal requires a successful occupancy scan. |
 | `rg` | Process matching. The audit uses `grep -E` when ripgrep is absent. |
-| Python 3 | Builds, interactive review, plan/apply JSON, activity indexing, documentation collection/review, JSONC edits, and simulator inspection |
+| Python 3.8+ | Builds, interactive review, plan/apply JSON, activity indexing, documentation collection/review, JSONC edits, and simulator inspection |
 | Go 1.26+ | Explicit build of the optional terminal helper. Not required at runtime. |
 
 macOS and Linux are native targets. WSL supplies the Unix process interface
@@ -646,6 +653,20 @@ Review tests build the helper, check frames, and drive the CLI in a
 pseudo-terminal. Build-inventory tests use disposable repositories and private
 state. `pyte` is a test dependency only.
 
+Build source release archives into a directory outside the checkout:
+
+```bash
+python3 bin/package-release --output-dir /tmp/afterparty-release
+bash tests/test-release-package.sh
+```
+
+The command creates separate source/plugin and Agent Skill archives from
+explicit file lists. It includes runtime scripts, optional TUI source, version
+metadata, and licenses. It excludes built executables, tests, development
+records, and local state. Existing archives cause a refusal. A refusal names an
+incomplete archive left by an interrupted copy so it can be removed before rerunning.
+See [RELEASING.md](RELEASING.md) for publication steps.
+
 Run the full suite **inside a disposable VM, container, or CI runner**:
 
 ```bash
@@ -659,6 +680,9 @@ machine tools and signals. CI defines Ubuntu and Windows jobs.
 The canonical version is `skills/afterparty/VERSION`. Keep plugin and skill
 metadata synchronized. Preserve the bundled license and update
 [CHANGELOG.md](./CHANGELOG.md) for user-visible changes.
+Read the [architecture guide](docs/architecture.md) before changing module
+boundaries. Interface contracts remain in `docs/`. Personal working notes and
+completed development records belong outside the public source tree.
 
 ## License
 
@@ -667,14 +691,20 @@ notices for Kevin Liu and Wenjie Fu. The bundled skill includes the same license
 
 ### Credits and lineage
 
-- **Wenjie Fu** contributed the cleanup methods combined with Agent-Broom in
-  Afterparty's first iteration.
+- **Wenjie Fu** created Afterparty and developed its workspace activity model,
+  cleanup approval workflow, and safety checks. He also added build inventories,
+  documentation review, structured reports, the terminal interface, and
+  plugin/skill packaging.
 - **Kevin Liu**, author of [Agent-Broom](https://github.com/Kevin-Liu-01/Agent-Broom),
   provided the original foundation for the process ledger, audit/stop workflow,
   and report-first defaults. Afterparty retains his MIT copyright notice.
 - **DevClean by ImL1s** (`ImL1s/devclean`) inspired the orphan, deep, optimize,
   and disk mode structure. Agent-Broom records that influence in its
   [original acknowledgment](https://github.com/Kevin-Liu-01/Agent-Broom/blob/1bab484c38a3061826cbb93cec591c5d786a48db/README.md#devclean-mode).
+- **[Bubble Tea](https://github.com/charmbracelet/bubbletea)** and
+  **[Lip Gloss](https://github.com/charmbracelet/lipgloss)** are libraries by
+  Charmbracelet. Bubble Tea provides the terminal application framework.
+  Lip Gloss provides terminal layout and styling.
 
 The bundle includes terminal dependency licenses in
 [THIRD_PARTY_NOTICES.txt](skills/afterparty/ui/THIRD_PARTY_NOTICES.txt).
