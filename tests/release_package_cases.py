@@ -265,6 +265,10 @@ class ReleasePackageTests(unittest.TestCase):
                     {path.name for path in output.iterdir()},
                     {"afterparty-" + self.version + "-source.tar.gz",
                      "afterparty-" + self.version + "-skill.tar.gz"})
+                umask = os.umask(0)
+                os.umask(umask)
+                for path in output.iterdir():
+                    self.assertEqual(path.stat().st_mode & 0o777, 0o666 & ~umask, path.name)
 
     def test_second_archive_publish_failure_removes_first_archive(self):
         namespace = runpy.run_path(str(self.source / "bin/package-release"))

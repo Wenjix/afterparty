@@ -188,11 +188,14 @@ def main():
                 raise ValueError("Archive already exists: " + str(destination)
                                  + ". Select another output directory or move the existing archive.")
         output_dir.mkdir(parents=True, exist_ok=True)
+        umask = os.umask(0)
+        os.umask(umask)
         for destination, prefix, content in packages:
             fd, temporary_name = tempfile.mkstemp(
                 dir=output_dir, prefix="." + destination.name + ".", suffix=".partial")
             temporary_path = Path(temporary_name)
             temporary.append(temporary_path)
+            os.chmod(temporary_path, 0o666 & ~umask)
             with os.fdopen(fd, "wb") as handle:
                 write_archive(handle, prefix, content)
 
