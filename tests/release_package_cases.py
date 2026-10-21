@@ -218,19 +218,72 @@ class ReleasePackageTests(unittest.TestCase):
 
     def test_second_archive_failure_removes_first_archive(self):
         namespace = runpy.run_path(str(self.source / "bin/package-release"))
-        original_open = Path.open
+        main_globals = namespace["main"].__globals__
+        original_write_archive = main_globals["write_archive"]
 
-        def fail_second(path, mode="r", *args, **kwargs):
-            if mode == "xb" and path.name.endswith("-skill.tar.gz"):
+        def fail_second(handle, prefix, content):
+            handle.write(b"partial archive")
+            if prefix == "afterparty":
+                self.assertFalse(any(path.name.endswith(("-source.tar.gz", "-skill.tar.gz"))
+                                     for path in self.output.iterdir()))
                 raise OSError("simulated storage failure")
-            return original_open(path, mode, *args, **kwargs)
+            return original_write_archive(handle, prefix, content)
 
         error_output = io.StringIO()
-        with mock.patch.object(Path, "open", fail_second), \
+        with mock.patch.dict(main_globals, {"write_archive": fail_second}), \
                 mock.patch.object(sys, "argv", ["package-release", "--output-dir", str(self.output)]), \
                 redirect_stderr(error_output):
             self.assertEqual(namespace["main"](), 1)
         self.assertIn("simulated storage failure", error_output.getvalue())
+        self.assertEqual(list(self.output.iterdir()), [])
+
+    def test_interrupted_build_leaves_no_archive(self):
+        namespace = runpy.run_path(str(self.source / "bin/package-release"))
+        main_globals = namespace["main"].__globals__
+        original_write_archive = main_globals["write_archive"]
+
+        for target_call, output in ((1, self.output), (2, self.base / "second-output")):
+            with self.subTest(call=target_call):
+                calls = [0]
+
+                def interrupt(handle, prefix, content):
+                    calls[0] += 1
+                    handle.write(b"partial archive")
+                    if calls[0] == target_call:
+                        raise KeyboardInterrupt
+                    return original_write_archive(handle, prefix, content)
+
+                with mock.patch.dict(main_globals, {"write_archive": interrupt}), \
+                        mock.patch.object(sys, "argv",
+                                          ["package-release", "--output-dir", str(output)]):
+                    with self.assertRaises(KeyboardInterrupt):
+                        namespace["main"]()
+                self.assertEqual(list(output.iterdir()), [])
+
+                self.package(output=output)
+                self.assertEqual(
+                    {path.name for path in output.iterdir()},
+                    {"afterparty-" + self.version + "-source.tar.gz",
+                     "afterparty-" + self.version + "-skill.tar.gz"})
+
+    def test_second_archive_publish_failure_removes_first_archive(self):
+        namespace = runpy.run_path(str(self.source / "bin/package-release"))
+        links = [0]
+        os_module = namespace.get("os", os)
+        original_link = os_module.link
+
+        def fail_second_link(source, destination, *args, **kwargs):
+            links[0] += 1
+            if links[0] == 2:
+                raise OSError("simulated publish failure")
+            return original_link(source, destination, *args, **kwargs)
+
+        error_output = io.StringIO()
+        with mock.patch.object(os_module, "link", fail_second_link), \
+                mock.patch.object(sys, "argv", ["package-release", "--output-dir", str(self.output)]), \
+                redirect_stderr(error_output):
+            self.assertEqual(namespace["main"](), 1)
+        self.assertIn("simulated publish failure", error_output.getvalue())
         self.assertEqual(list(self.output.iterdir()), [])
 
     def test_metadata_and_license_mismatch_refuse_packaging(self):

@@ -5,10 +5,12 @@ import argparse
 import gzip
 import io
 import json
+import os
 from pathlib import Path
 import re
 import sys
 import tarfile
+import tempfile
 
 
 SKILL_FILES = (
@@ -166,6 +168,8 @@ def main():
                         help="directory for new archives; existing archives are never replaced")
     args = parser.parse_args()
     created = []
+    temporary = []
+    success = False
     try:
         root = Path(__file__).resolve().parent.parent
         version, files = load_inputs(root)
@@ -185,16 +189,34 @@ def main():
                                  + ". Select another output directory or move the existing archive.")
         output_dir.mkdir(parents=True, exist_ok=True)
         for destination, prefix, content in packages:
-            with destination.open("xb") as handle:
-                created.append(destination)
+            fd, temporary_name = tempfile.mkstemp(
+                dir=output_dir, prefix="." + destination.name + ".", suffix=".partial")
+            temporary_path = Path(temporary_name)
+            temporary.append(temporary_path)
+            with os.fdopen(fd, "wb") as handle:
                 write_archive(handle, prefix, content)
+
+        for (destination, _, _), temporary_path in zip(packages, temporary):
+            try:
+                os.link(temporary_path, destination)
+            except FileExistsError as error:
+                raise ValueError("Archive already exists: " + str(destination)
+                                 + ". Select another output directory or move the existing archive.") from error
+            created.append(destination)
+        for temporary_path in temporary:
+            temporary_path.unlink(missing_ok=True)
         for destination in created:
             print(destination)
+        success = True
     except (OSError, ValueError, KeyError, UnicodeError, tarfile.TarError) as error:
-        for destination in created:
-            destination.unlink()
         print("package-release: " + str(error), file=sys.stderr)
         return 1
+    finally:
+        for temporary_path in temporary:
+            temporary_path.unlink(missing_ok=True)
+        if not success:
+            for destination in created:
+                destination.unlink(missing_ok=True)
     return 0
 
 
