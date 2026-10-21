@@ -69,6 +69,9 @@ All notable changes to Afterparty are documented here. Versions follow semantic 
 - Process plans and apply-time checks withhold groups when any member has
   missing, malformed, or nonfinite CPU evidence. Reports retain unknown CPU
   values instead of converting them to zero.
+- Process-plan CPU capability reflects only groups included in the selected scope.
+- Process eligibility and snapshots retain raw group CPU maxima while displays
+  remain rounded to one decimal place.
 - History cleanup excludes physical aliases of archived Codex sessions and
   directories that contain those archives.
 - Ledger pruning preserves the original file when a replacement-row write

@@ -62,7 +62,7 @@ awk '/^p[0-9]+$/ {pid=substr($0,2)} /^n.*:[0-9]+$/ {port=$0; sub(/^.*:/,"",port)
       mixed[pg] = 1
     }
     procs[pg]++
-    if (cpu > maxcpu[pg]) maxcpu[pg] = cpu
+    if (!(pg in maxraw) || cpu > maxcpu[pg]) { maxcpu[pg] = cpu; maxraw[pg] = $4 }
     # busiest member of the group supplies the command the category comes from
     if (cpu >= topcpu[pg] || !(pg in leader)) { topcpu[pg] = cpu; leader[pg] = cmd }
   }
@@ -74,13 +74,10 @@ awk '/^p[0-9]+$/ {pid=substr($0,2)} /^n.*:[0-9]+$/ {port=$0; sub(/^.*:/,"",port)
     for (pg in procs)
       printf "%s\t%s\t%s\t%d\t%s\t%s\t%s\n", pg, owner[pg],
              (known[pg] == "" ? "-" : known[pg]), procs[pg],
-             (pg in badcpu ? "-" : sprintf("%.1f", maxcpu[pg])),
+             (pg in badcpu ? "-" : maxraw[pg]),
              (pg in mixed ? "mixed" : "-"), leader[pg]
   }
 ' | sort -n > "$T/groups"
-if awk -F'\t' '$5 == "-" {bad=1} END {exit !bad}' "$T/groups"; then
-  plan_capability processes process-group unavailable 'CPU evidence is unavailable for one or more process-group members.'
-fi
 
 printf '# afterparty plan schema: 1\n'
 printf '# afterparty plan — %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
@@ -102,6 +99,7 @@ if [ ! -s "$T/groups" ]; then
 fi
 
 awk -F'\t' '{print $2}' "$T/groups" | ws_unique_labels > "$T/labels" 2>/dev/null || : > "$T/labels"
+cpu_unavailable=0
 while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
   [ -n "$pg" ] || continue
   if [ "$ALL" -eq 0 ]; then
@@ -123,8 +121,11 @@ while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
   else
     age="no transcript"
   fi
-  cpu_label="$cpu"
-  [ "$cpu" != "-" ] || cpu_label=unknown
+  if [ "$cpu" = "-" ]; then
+    cpu_label=unknown
+  else
+    cpu_label="$(LC_ALL=C printf '%.1f' "$cpu")"
+  fi
   detail="$name · $(s_n "$procs" proc procs) · $age · cpu $cpu_label"
   # An approved item is executed by delegating to `audit --kill <category>
   # --pgid`, and that flag narrows WITHIN a category. A group matching no
@@ -134,6 +135,7 @@ while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
   # workspace's staleness, so it is never offered.
   fp="" category=""
   if [ "$cpu" = "-" ]; then
+    cpu_unavailable=1
     plan_process_record withheld cpu-unavailable 'Afterparty could not inspect CPU use for every group member. Refresh to try again.'
     printf -- '- [⊘] cpu-unavailable pgid %s  %s\n' "$pg" "$detail"
     printf -- '      not offered: CPU evidence is unavailable for one or more group members.\n'
@@ -192,11 +194,14 @@ while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
   printf -- '- [⊘] %-8s pgid %s  %s\n' "$verdict" "$pg" "$detail"
   case "$verdict" in
     in-use)  printf -- '      not offered: agent transcript files for this workspace changed recently.\n' ;;
-    working) printf -- '      not offered: CPU use (%s) exceeds the limit.\n' "$cpu" ;;
+    working) printf -- '      not offered: CPU use (%s) exceeds the limit.\n' "$cpu_label" ;;
     unknown) printf -- '      not offered: Afterparty cannot determine the age of recorded agent activity.\n' ;;
     *)       printf -- '      not offered: Afterparty could not check the group identity.\n' ;;
   esac
 done < "$T/groups"
+if [ "$cpu_unavailable" -eq 1 ]; then
+  plan_capability processes process-group unavailable 'CPU evidence is unavailable for one or more process-group members.'
+fi
 }
 
 emit_process_groups
