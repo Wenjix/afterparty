@@ -298,6 +298,25 @@ exit "$rc"''')
         self.assertIn("intercepted-kill -TERM -9001", self.log.read_text())
         self.assertFalse(self.present.exists())
 
+    def test_invalid_member_cpu_refuses_delegation(self):
+        row = self.process_row()
+        ps = self.shim / "ps"
+        original = ps.read_text()
+        lsof = self.shim / "lsof"
+        lsof.write_text(lsof.read_text().replace("p9001\\nfcwd\\nn%s\\n", "p9001\\nfcwd\\nn%s\\np9004\\nfcwd\\nn%s\\n").replace(
+            '"$APPLY_ROOT"\n', '"$APPLY_ROOT" "$APPLY_ROOT"\n', 1))
+        for invalid in ("unavailable", "-1", "NaN", "9" * 400, ""):
+            with self.subTest(cpu=invalid):
+                self.log.write_text("")
+                ps.write_text(original.replace("printf '9001 9001 0.1 npm run dev\n'",
+                    "printf '9001 9001 0.1 npm run dev\n9004 9001 " + invalid + "\n'"))
+                item, = self.targets(self.run_apply(row, status=1))
+                self.assertEqual((item["target"], item["outcome"], item["reason_code"], item["mutation_attempted"]),
+                                 ("9001", "failed", "scan-incomplete", False))
+                self.assertIn("ps -Ao pid,pgid,%cpu", self.log.read_text())
+                self.assertNotIn("intercepted-kill", self.log.read_text())
+                self.assertTrue(self.present.exists())
+
     def test_multiple_groups_and_categories_keep_styled_narration_off_json(self):
         for name in ("group-9002", "group-9003", "protected-second"):
             (self.base / name).touch()

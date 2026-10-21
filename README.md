@@ -372,6 +372,11 @@ process-plan eligibility (default `4`). `AFTERPARTY_BUSY_CPU` sets the per-proce
 CPU threshold (default `20`). These are eligibility inputs, not proof of
 abandonment.
 
+Hour values use decimal notation, including leading zeros. A value that exceeds
+the supported interval withholds process cleanup. Observed CPU values must be zero or
+greater and fit the supported numeric range. Afterparty withholds the group if
+any member has missing or invalid CPU evidence.
+
 ## Approving cleanup with plan/apply
 
 `afterparty plan` writes an editable checklist for the current repository.
@@ -412,7 +417,7 @@ closes that view.
 
 Ctrl+Z suspends the reviewer and keeps choices. A scan shows elapsed time and
 ignores review keys. Keys from an older scan cannot mark targets or advance.
-If refresh fails, saving stays disabled until a valid refresh.
+If a refresh fails, complete another refresh before saving.
 
 Saving requires at least one explicit mark. It never overwrites an existing
 file. Plans use a unique filename in the workspace's private review directory
@@ -482,9 +487,9 @@ mixed-workspace, unsupported, and no-category groups are withheld with a
 reason. Worktrees and artifacts use filesystem, occupancy, nested-repository,
 and identity checks rather than transcript age.
 
-Edit the checkboxes. Then run `afterparty apply <plan>`. Apply checks every
-checked entry before any cleanup. It refuses targets with any of these
-conditions:
+Edit the checkboxes. Then run `afterparty apply <plan>`. Apply validates every
+checked entry before cleanup starts. It checks each target again before acting.
+It refuses targets with any of these conditions:
 
 - malformed metadata, duplicate targets, or unsupported targets;
 - changed fingerprints or mismatched paths;
@@ -561,8 +566,8 @@ Use arrows or `j`/`k` to move, `/` to filter, `i` to inspect, and `d` for
 inline details. Use `r` to refresh and `?` for scope and scan errors.
 Press `q` to exit. Press Enter to open
 `review --artifacts-only` for the focused repository. That review collects
-fresh evidence and starts with no marks. Saving a plan still requires a
-separate Apply command to execute cleanup.
+fresh evidence and starts with no marks. After saving a plan, run
+`afterparty apply <saved-plan>` separately to execute cleanup.
 
 The inventory has no cleanup checkboxes. Size and modification time do not
 prove that files are unused or safe to delete. Unknown measurements and failed
@@ -636,6 +641,11 @@ must be complete. Its newest regular-file mtime must be older than
 `CODEX_SESSION_AGE_DAYS` (default `30` days). A selected directory must occupy
 at least 1024 KiB.
 
+The age limit accepts positive whole numbers in decimal notation, including
+leading zeros. Zero and values beyond the supported range are refused.
+History cleanup excludes physical paths inside archived Codex sessions and
+directories that contain those archives, including paths reached through symlinks.
+
 `--disk` keeps the shared pnpm store intact. It uses `pnpm store prune` to
 remove unreferenced packages. Project scans under `--documents-root DIR` only
 report targets. Repository artifacts still require plan/apply.
@@ -687,8 +697,8 @@ returns nonzero. Some early refusals appear only in console output. Set
 - Ledger and audit cleanup signal process groups. They send `SIGTERM` before
   `SIGKILL` and refuse groups that contain a protected process. Devclean signals
   individual orphan PIDs. An orphan can share a group with unrelated processes.
-- Cleanup requires complete process, protection, occupancy, identity, and
-  nested-repository scans. Missing or unknown evidence cannot authorize cleanup.
+- Each target requires its applicable process, protection, occupancy, identity,
+  and nested-repository checks. Missing or unknown evidence cannot authorize cleanup.
 - Filesystem deletion requires a check that the path disappeared. Signals
   require a check that the process or group disappeared. Native maintenance
   uses the tool's result, such as `pnpm store prune` or a `launchctl` probe.

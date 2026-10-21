@@ -31,7 +31,7 @@ awk '/^p[0-9]+$/ {pid=substr($0,2)} /^n.*:[0-9]+$/ {port=$0; sub(/^.*:/,"",port)
   sed 's/^/W\t/' "$T/ws"
   sed 's/^/C\t/' "$T/cwd"
   sed 's/^/P\t/' "$T/ps"
-} | awk -F'\t' '
+} | LC_ALL=C awk -F'\t' '
     # macOS awk (20200816) compares strings via locale collation, and reports
     # two DIFFERENT multibyte paths as equal: "/w/プロジェクト/web" == "/w/別
     # プロジェクト/web" evaluates TRUE, and so does the substr form. index() is
@@ -42,7 +42,10 @@ awk '/^p[0-9]+$/ {pid=substr($0,2)} /^n.*:[0-9]+$/ {port=$0; sub(/^.*:/,"",port)
   $1 == "W" { wsts[$3] = $2; next }
   $1 == "C" { cwd[$2] = $3; next }
   $1 == "P" {
-    pid = $2; pg = $3; cpu = $4 + 0; cmd = $5
+    pid = $2; pg = $3; cmd = $5
+    cpu = $4 + 0
+    if ($4 !~ /^([0-9]+([.][0-9]*)?|[.][0-9]+)$/ || tolower(sprintf("%g", cpu)) ~ /inf|nan/)
+      badcpu[pg] = 1
     dir = cwd[pid]; if (dir == "") { mixed[pg] = 1; next }
     best = ""
     for (w in wsts) if (samepath(dir, w) || index(dir, w "/") == 1)
@@ -59,7 +62,7 @@ awk '/^p[0-9]+$/ {pid=substr($0,2)} /^n.*:[0-9]+$/ {port=$0; sub(/^.*:/,"",port)
       mixed[pg] = 1
     }
     procs[pg]++
-    if (cpu > maxcpu[pg]) maxcpu[pg] = cpu
+    if (!(pg in maxraw) || cpu > maxcpu[pg]) { maxcpu[pg] = cpu; maxraw[pg] = $4 }
     # busiest member of the group supplies the command the category comes from
     if (cpu >= topcpu[pg] || !(pg in leader)) { topcpu[pg] = cpu; leader[pg] = cmd }
   }
@@ -69,8 +72,9 @@ awk '/^p[0-9]+$/ {pid=substr($0,2)} /^n.*:[0-9]+$/ {port=$0; sub(/^.*:/,"",port)
     # every later column left. That is how a no-transcript workspace ended up
     # parsed as eligible. Same hazard test-review-fixes C6 pins for the ledger.
     for (pg in procs)
-      printf "%s\t%s\t%s\t%d\t%.1f\t%s\t%s\n", pg, owner[pg],
-             (known[pg] == "" ? "-" : known[pg]), procs[pg], maxcpu[pg],
+      printf "%s\t%s\t%s\t%d\t%s\t%s\t%s\n", pg, owner[pg],
+             (known[pg] == "" ? "-" : known[pg]), procs[pg],
+             (pg in badcpu ? "-" : maxraw[pg]),
              (pg in mixed ? "mixed" : "-"), leader[pg]
   }
 ' | sort -n > "$T/groups"
@@ -95,6 +99,7 @@ if [ ! -s "$T/groups" ]; then
 fi
 
 awk -F'\t' '{print $2}' "$T/groups" | ws_unique_labels > "$T/labels" 2>/dev/null || : > "$T/labels"
+cpu_unavailable=0
 while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
   [ -n "$pg" ] || continue
   if [ "$ALL" -eq 0 ]; then
@@ -116,7 +121,12 @@ while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
   else
     age="no transcript"
   fi
-  detail="$name · $(s_n "$procs" proc procs) · $age · cpu $cpu"
+  if [ "$cpu" = "-" ]; then
+    cpu_label=unknown
+  else
+    cpu_label="$(LC_ALL=C printf '%.1f' "$cpu")"
+  fi
+  detail="$name · $(s_n "$procs" proc procs) · $age · cpu $cpu_label"
   # An approved item is executed by delegating to `audit --kill <category>
   # --pgid`, and that flag narrows WITHIN a category. A group matching no
   # category would therefore be approved and then silently not killed, so it is
@@ -124,6 +134,13 @@ while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
   # A group whose members live in different workspaces cannot be judged by one
   # workspace's staleness, so it is never offered.
   fp="" category=""
+  if [ "$cpu" = "-" ]; then
+    cpu_unavailable=1
+    plan_process_record withheld cpu-unavailable 'Afterparty could not inspect CPU use for every group member. Refresh to try again.'
+    printf -- '- [⊘] cpu-unavailable pgid %s  %s\n' "$pg" "$detail"
+    printf -- '      not offered: CPU evidence is unavailable for one or more group members.\n'
+    continue
+  fi
   if [ "$span" = "mixed" ]; then
     plan_process_record withheld mixed "Afterparty cannot attribute all group members to one workspace."
     printf -- '- [⊘] %-8s pgid %s  %s\n' "mixed" "$pg" "$detail"
@@ -177,11 +194,14 @@ while IFS=$'\t' read -r pg owner touched procs cpu span cmd; do
   printf -- '- [⊘] %-8s pgid %s  %s\n' "$verdict" "$pg" "$detail"
   case "$verdict" in
     in-use)  printf -- '      not offered: agent transcript files for this workspace changed recently.\n' ;;
-    working) printf -- '      not offered: CPU use (%s) exceeds the limit.\n' "$cpu" ;;
+    working) printf -- '      not offered: CPU use (%s) exceeds the limit.\n' "$cpu_label" ;;
     unknown) printf -- '      not offered: Afterparty cannot determine the age of recorded agent activity.\n' ;;
     *)       printf -- '      not offered: Afterparty could not check the group identity.\n' ;;
   esac
 done < "$T/groups"
+if [ "$cpu_unavailable" -eq 1 ]; then
+  plan_capability processes process-group unavailable 'CPU evidence is unavailable for one or more process-group members.'
+fi
 }
 
 emit_process_groups

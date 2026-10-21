@@ -130,5 +130,35 @@ got="$(startup_verdict 4 20.5 "$FIVE" 20.6 2> "$T/busy.err")"; rc=$?
   || fail "E6: valid fractional startup CPU threshold did not withhold above its boundary"
 [ "$FAILS" -eq "$_b" ] && pass "E6: startup CPU overrides validate before changing eligibility"
 
+# ---------- E7: an oversized idle interval must never wrap to a short one ----------
+_b=$FAILS
+for huge in 5124095576030432 2562047788015216 18446744073709551620; do
+  got="$(startup_verdict "$huge" 20 "$((NOW - 2 * H))" 0 2> "$T/overflow.err")"; rc=$?
+  [ "$rc" -eq 0 ] && [ "$got" = unknown ] \
+    || fail "E7: overflowing idle '$huge' gave '$got' (exit $rc) instead of withholding"
+  grep -Fq "AFTERPARTY_IDLE_HOURS='$huge'" "$T/overflow.err" && grep -Fq 'cleanup is withheld' "$T/overflow.err" \
+    || fail "E7: overflowing idle '$huge' did not explain the refusal"
+done
+for valid in 2562047788015215 00000000000000000000000008; do
+  got="$(startup_verdict "$valid" 20 "$FIVE" 0 2> "$T/overflow.err")"; rc=$?
+  [ "$rc" -eq 0 ] && [ "$got" = in-use ] && [ ! -s "$T/overflow.err" ] \
+    || fail "E7: representable decimal idle '$valid' was not accepted quietly"
+done
+[ "$FAILS" -eq "$_b" ] && pass "E7: large idle thresholds never shorten the cleanup interval"
+
+# ---------- E8: CPU evidence must be present, numeric and finite ----------
+_b=$FAILS
+for bad in '' unavailable -1 NaN inf 1e309 . 1.2.3 "$(printf '%0400d' 1 | tr 0 9)"; do
+  got="$(elig_verdict "$IDLE" "$bad" "$NOW")"
+  [ "$got" = unknown ] \
+    || fail "E8: unavailable CPU '$bad' gave '$got' instead of withholding"
+done
+[ "$(elig_verdict "$IDLE")" = unknown ] || fail "E8: omitted CPU must never default to zero activity"
+for valid in 0 .5 19.9 20.; do
+  [ "$(elig_verdict "$IDLE" "$valid" "$NOW")" = eligible ] \
+    || fail "E8: valid idle CPU '$valid' should remain eligible"
+done
+[ "$FAILS" -eq "$_b" ] && pass "E8: unavailable CPU evidence never becomes idle activity"
+
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))

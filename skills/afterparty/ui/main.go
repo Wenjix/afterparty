@@ -290,14 +290,17 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 					if m.state.Searching {
 						m.send("ESC")
 					}
+					if m.state.Step == "confirm_refresh" {
+						m.send("ESC")
+					}
 					m.send("q")
+				}
+				if key == "esc" {
+					m.send("ESC")
 				}
 				if m.state.Step == "confirm_quit" {
 					if key == "enter" {
 						m.send("ENTER")
-					}
-					if key == "esc" {
-						m.send("ESC")
 					}
 				}
 			}

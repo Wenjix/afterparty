@@ -156,6 +156,26 @@ esac''')
         save_review(rows, self.selection(rows, [artifacts[0]["item_id"]]), self.base / "independent.md")
         self.assert_no_mutation_tools()
 
+    def test_invalid_member_cpu_withholds_the_entire_group(self):
+        control = next(item for item in self.items(self.snapshot()) if item["target"] == "9001")
+        self.assertEqual((control["availability"], control["evidence"]["cpu_max"]), ("available", 0.1))
+        ps = self.shim / "ps"
+        original = ps.read_text()
+        lsof = self.shim / "lsof"
+        lsof.write_text(lsof.read_text().replace("p9002\\nfcwd", "p9003\\nfcwd\\nn%s\\np9002\\nfcwd").replace(
+            '"$REVIEW_PHYSICAL" "$REVIEW_PHYSICAL"', '"$REVIEW_PHYSICAL" "$REVIEW_PHYSICAL" "$REVIEW_PHYSICAL"'))
+        for invalid in ("unavailable", "-1", "NaN", "9" * 400, ""):
+            with self.subTest(cpu=invalid):
+                ps.write_text(original.replace("9001 9001 0.1 npm run dev --token secret-fixture\n",
+                    "9001 9001 0.1 npm run dev --token secret-fixture\n9003 9001 " + invalid + " npm run dev\n"))
+                rows = self.snapshot(status=1)
+                item = next(item for item in self.items(rows) if item["target"] == "9001")
+                self.assertEqual((item["availability"], item["reason_code"]), ("withheld", "cpu-unavailable"))
+                self.assertIsNone(item["evidence"]["cpu_max"])
+                self.assertEqual([member["pid"] for member in item["evidence"]["members"]], [9001, 9003])
+                self.assertTrue(any(row.get("name") == "processes" and row["status"] == "unavailable" for row in rows))
+                self.assert_no_mutation_tools()
+
     def test_save_exact_checked_bytes_and_preserve_existing_file(self):
         rows = self.snapshot()
         chosen = [item for item in self.items(rows) if item["availability"] == "available"]

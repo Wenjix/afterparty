@@ -32,7 +32,9 @@ plan_process_record() { # availability reason-code reason
   plan_record process-group "$pg" "$owner" "${fp:-}" "$1" "$2" "$3" \
     "Stop every member of PGID $pg. Afterparty sends TERM, then KILL if needed. Restart services manually."
   [ -n "${PLAN_CAPTURE:-}" ] || return 0
-  plan_evidence cpu_max "$cpu" touched "$touched" observed_epoch "$NOW" category "${category:-}" \
+  local observed_cpu="$cpu"
+  [ "$observed_cpu" != "-" ] || observed_cpu=""
+  plan_evidence cpu_max "$observed_cpu" touched "$touched" observed_epoch "$NOW" category "${category:-}" \
     workspace "$owner" \
     sources "$(awk -F'\t' -v w="$owner" 'length($2)==length(w) && index($2,w)==1 {print $3}' "$T/ws-sources")" \
     members "$(awk -F'\t' -v pg="$pg" '$2==pg {print $1 "\t" $4}' "$T/ps" | privacy_redact)" \

@@ -409,7 +409,7 @@ while [ $# -gt 0 ]; do
     --json) JSON=1; shift ;;
     --strict) STRICT=1; shift ;;
     -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
-    *) echo "unknown arg: $1" >&2; exit 2 ;;
+    *) echo "audit: Unknown option: $1. Run afterparty audit --help." >&2; exit 2 ;;
   esac
 done
 

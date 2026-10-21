@@ -18,13 +18,20 @@
 ELIG_IDLE_HOURS=4
 ELIG_BUSY_CPU=20
 
+# Observed CPU must be decimal, nonnegative and finite in awk's number type.
+elig_cpu_valid() {
+  local cpu="${1:-}"
+  [[ "$cpu" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] || return 1
+  LC_ALL=C awk -v c="$cpu" 'BEGIN {exit (tolower(sprintf("%g", c + 0)) ~ /inf|nan/)}'
+}
+
 # elig_verdict <last_touched_epoch|""> <max_cpu> <now> -> verdict on stdout.
 #   eligible | in-use | working | unknown
 # An eligible group has transcript age greater than AFTERPARTY_IDLE_HOURS
 # (default 4) and maximum CPU at or below AFTERPARTY_BUSY_CPU (default 20).
 # Filesystem targets do not require this verdict to permit checked removal.
 elig_verdict() {
-  local touched="${1:-}" cpu="${2:-0}" now="${3:-0}" idle_secs busy
+  local touched="${1:-}" cpu="${2:-}" now="${3:-0}" idle_secs busy decimal_idle
   # Re-read per call so a caller can override the thresholds per invocation.
   # A safety threshold must never be silently zeroed by a malformed value.
   # "0.5" or "08" reaching $(( )) yields an error or an octal misparse, and a
@@ -37,9 +44,19 @@ elig_verdict() {
     ELIG_WARNED_IDLE=1
     raw_idle="$ELIG_IDLE_HOURS"
   fi
+  decimal_idle="${raw_idle#"${raw_idle%%[!0]*}"}"
+  # Multiplication can wrap a huge positive override to a short positive
+  # interval. Withhold instead of silently shortening the requested limit.
+  if [ "${#decimal_idle}" -gt 16 ] || [ "$decimal_idle" -gt 2562047788015215 ]; then
+    [ -n "${ELIG_WARNED_IDLE:-}" ] || \
+      echo "eligible.sh: AFTERPARTY_IDLE_HOURS='$raw_idle' exceeds 2562047788015215 hours. Process cleanup is withheld. Set AFTERPARTY_IDLE_HOURS to a smaller positive whole number." >&2
+    ELIG_WARNED_IDLE=1
+    printf 'unknown'
+    return 0
+  fi
   # 10# forces base 10: bare $((08)) is an invalid-octal error, and stripping a
   # single leading zero still breaks on "008". A user writing 08 means 8 hours.
-  idle_secs=$(( 10#$raw_idle * 3600 ))
+  idle_secs=$(( 10#$decimal_idle * 3600 ))
   [ "$idle_secs" -gt 0 ] || idle_secs=$(( ELIG_IDLE_HOURS * 3600 ))
   busy="${AFTERPARTY_BUSY_CPU:-$ELIG_BUSY_CPU}"
   if ! [[ "$busy" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]]; then
@@ -52,6 +69,12 @@ elig_verdict() {
   case "$touched" in
     ''|*[!0-9]*) printf 'unknown'; return 0 ;;
   esac
+  # Missing or malformed CPU is unavailable evidence, never zero activity.
+  # A syntactically decimal value must also fit the comparison tool's number.
+  if ! elig_cpu_valid "$cpu"; then
+    printf 'unknown'
+    return 0
+  fi
 
   if [ "$((now - touched))" -le "$idle_secs" ]; then
     printf 'in-use'

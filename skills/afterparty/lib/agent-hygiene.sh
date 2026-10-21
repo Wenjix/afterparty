@@ -191,7 +191,7 @@ shift || true
 case "$cmd" in
   --version|-V)
     VERSION_FILE="$DIR/../VERSION"
-    [ -f "$VERSION_FILE" ] || { echo "afterparty version file is missing" >&2; exit 1; }
+    [ -f "$VERSION_FILE" ] || { echo "afterparty: The version file is missing. Reinstall Afterparty." >&2; exit 1; }
     sed -n '1p' "$VERSION_FILE"
     ;;
   list)
@@ -221,7 +221,7 @@ case "$cmd" in
       esac
     done
     if [ "$REPORT" -eq 1 ] && [ -n "$JSON_FLAG" ]; then
-      echo "--report and --json are mutually exclusive" >&2
+      echo "audit: --report and --json cannot be used together. Choose one output format." >&2
       exit 2
     fi
     run_audit() {
@@ -313,7 +313,7 @@ case "$cmd" in
       case "$1" in
         --strict) DOCTOR_STRICT=1; shift ;;
         -h|--help) usage; exit 0 ;;
-        *) echo "unknown doctor arg: $1" >&2; exit 2 ;;
+        *) echo "doctor: Unknown option: $1. Run afterparty doctor --help." >&2; exit 2 ;;
       esac
     done
     export AFTERPARTY_CARD=0
@@ -344,11 +344,11 @@ case "$cmd" in
           cat "$REPORT_FILE"
           [ "$(report_meta "$REPORT_FILE" status)" != incomplete ] || exit 1
         else
-          echo "no afterparty report for this workspace" >&2
+          echo "report: No saved audit exists for this workspace. Run afterparty audit --report to create one." >&2
           exit 1
         fi
         ;;
-      *) echo "unknown report arg: $1" >&2; exit 2 ;;
+      *) echo "report: Unknown option: $1. Use afterparty report --show or afterparty report --remind." >&2; exit 2 ;;
     esac
     ;;
   actions-path)
@@ -361,7 +361,7 @@ case "$cmd" in
     usage
     ;;
   *)
-    echo "unknown command: $cmd" >&2
+    echo "afterparty: Unknown command: $cmd. Run afterparty --help." >&2
     usage
     exit 2
     ;;

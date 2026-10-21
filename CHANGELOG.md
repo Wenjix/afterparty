@@ -36,6 +36,9 @@ All notable changes to Afterparty are documented here. Versions follow semantic 
 
 ### Changed
 
+- Invalid-option and missing-value errors name the command, the option, and a
+  recovery step. Documentation distinguishes plan validation, fresh target
+  checks, attempted actions, and confirmed outcomes.
 - CLI and terminal-review text use short sentences, literal status messages, and
   consistent terms based on STE 100 principles. Help defines required technical
   terms. Refusals retain uncertainty when a safety check cannot finish.
@@ -60,6 +63,22 @@ All notable changes to Afterparty are documented here. Versions follow semantic 
 
 ### Fixed
 
+- Codex history retention treats leading zeros as decimal. Zero-padded zero
+  values and overflowing age limits are refused. Oversized process idle
+  intervals withhold cleanup instead of wrapping to a shorter interval.
+- Process plans and apply-time checks withhold groups when any member has
+  missing, malformed, or nonfinite CPU evidence. Reports retain unknown CPU
+  values instead of converting them to zero.
+- Process-plan CPU capability reflects only groups included in the selected scope.
+- Process eligibility and snapshots retain raw group CPU maxima while displays
+  remain rounded to one decimal place.
+- History cleanup excludes physical aliases of archived Codex sessions and
+  directories that contain those archives.
+- Ledger pruning preserves the original file when a replacement-row write
+  fails, reports failure, and releases its private lock.
+- Small terminal panes allow users to leave refresh confirmation and request
+  quit confirmation while preserving marks. Large review lists compute labels
+  in shared passes instead of scanning all targets for every row.
 - Keys typed during collection or refresh cannot mark unseen targets or advance
   an older snapshot. Space after paging first reveals an off-screen focus.
   Cancelling or refreshing with marks requires confirmation; q closes help and

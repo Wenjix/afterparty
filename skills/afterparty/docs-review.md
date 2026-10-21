@@ -18,8 +18,8 @@ them to the agent.
 
 The CLI collects evidence only. `collection_status: complete` means the scoped
 inspection succeeded. `review_status: not-reviewed` remains until the agent
-records a review. A nonzero collection status means incomplete evidence. It
-does not mean a clean result.
+records a review. A nonzero command exit status means incomplete evidence.
+It does not mean a clean result.
 
 Read each candidate and the relevant code before you judge its claims. Use
 reference reasons and local-link observations to guide the review. Expand the
@@ -56,7 +56,7 @@ Present a numbered decision table with concrete previews. The user can accept
 several items, override a treatment, or defer items in one response. If the
 user selects a different treatment, prepare its concrete preview first. Then
 request any missing authorization. Honor scope already authorized. Invocation
-alone requests review; edit project files only after the user selects treatments.
+alone requests review. Edit project files only after the user selects treatments.
 
 ## Record the review
 

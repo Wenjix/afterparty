@@ -1,13 +1,13 @@
 # Terminal UI implementation specification
 
 Status: original implementation specification, written 2026-10-04 against
-0.13.0. The first guided implementation is in the working tree for 0.14.0.
-It is not committed or released. The original phases below remain the design
-record. [README](../../README.md), the [snapshot contract](../plan-snapshot.md),
+0.13.0. Commit `9210b5e` merged the first guided implementation on 2026-10-21.
+The changelog lists 0.14.0 as Unreleased. The original phases below remain the
+design record. [README](../../README.md), the [snapshot contract](../plan-snapshot.md),
 and the [apply receipt contract](../apply-events.md) describe the implemented
 command interfaces.
 
-The working tree includes top-level help, responsive styled reports, a captured
+The merged implementation includes top-level help, responsive styled reports, a captured
 plan snapshot, and the compact guided reviewer. The 2026-10-12 implementation
 review selects **Bubble Tea 2.1.0 and Lip Gloss 2.0.0**. This replaces the
 initial Python terminal loop. It supersedes unresolved adapter choices in the
@@ -106,7 +106,7 @@ Layout and public-CLI pseudo-terminal (PTY) tests also cover these behaviors:
 
 Filesystem size context retains the existing human-readable artifact estimate.
 The implementation does not add exact byte totals or worktree sizes.
-Structured apply receipts (Phase 4) are also implemented in this working tree.
+The merged implementation also includes structured apply receipts (Phase 4).
 The optional dashboard (Phase 5) remains a separate proposal that requires a
 decision.
 

@@ -407,3 +407,25 @@ func TestActualRowsDisambiguateLabelsWithDifferentMeasurementWidths(t *testing.T
 		t.Fatal("collision was not visibly disambiguated")
 	}
 }
+
+func BenchmarkReviewRenderLargeSnapshot(b *testing.B) {
+	for _, count := range []int{100, 1000, 2000} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			s := fixture()
+			s.Items, s.VisibleIDs = nil, nil
+			for index := 0; index < count; index++ {
+				id := fmt.Sprint(index)
+				s.Items = append(s.Items, item{ID: id, Type: "artifact", Target: "/work/afterparty/packages/" + id + "/dist",
+					Scope: "/work/afterparty", Availability: "available", DisplayLabel: "packages/" + id + "/dist",
+					Consequence: "Delete build output."})
+				s.VisibleIDs = append(s.VisibleIDs, id)
+			}
+			s.Focus = "0"
+			m := fixtureModel(s, 80, 24)
+			b.ResetTimer()
+			for b.Loop() {
+				m.render()
+			}
+		})
+	}
+}
