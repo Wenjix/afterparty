@@ -8,31 +8,65 @@
   Cleanup for the mess coding agents leave behind.
 </p>
 
-Afterparty is a Bash and Python toolkit for cleanup after an agent session.
-It reports development servers, test watchers, automation browsers, worktrees,
-build caches, and stale session history. It also helps agents review
-documentation that no longer describes the code. It runs as a Claude Code
-plugin, a standalone Agent Skill, or a local CLI.
+Afterparty helps you review processes, worktrees, generated files, and caches
+that remain after coding sessions. It also collects evidence for documentation
+review. Use it as a standalone CLI, Claude Code plugin, or Agent Skill.
 
-Afterparty collects evidence first. A scan gathers current information. A
-check evaluates a condition. Cleanup requires an explicit request that the
-user can review. Afterparty checks each target again immediately before
-cleanup.
+Reports describe what Afterparty can inspect. You choose what to stop or
+remove. Cleanup checks each target again before acting. Reports can write
+private state, but they do not authorize cleanup.
 
-Documentation review is a separate workflow. The collector gathers evidence.
-The agent recommends whether to update, retain, archive, or otherwise treat a
-document.
-
-Wenjie Fu maintains Afterparty with coding-agent assistance. A human reviews
-changes before merge or release. Destructive operations require explicit
-approval. See the [contribution guide](./CONTRIBUTING.md),
-[security policy](./SECURITY.md), [code of conduct](./CODE_OF_CONDUCT.md), and
-[release checklist](./RELEASING.md) for project policies. Repository-wide agent
-instructions live in [AGENTS.md](./AGENTS.md).
+[Quick start](#quick-start) · [Commands](#what-it-does) ·
+[Requirements](#requirements-and-platform-support) ·
+[Cleanup review](#approving-cleanup-with-planapply) ·
+[Build inventory](#build-output-across-projects) · [License and credits](#license)
 
 ## Quick start
 
-Choose the installation that matches where you want Afterparty to run.
+Install the [requirements](#requirements-and-platform-support), then clone the
+repository:
+
+```bash
+git clone https://github.com/Wenjix/afterparty.git
+cd afterparty
+export PATH="$PWD/bin:$PATH"
+```
+
+The PATH setting lasts for this shell. Add the checkout's absolute `bin` path
+to your shell configuration to keep it. Check the installed version with
+`afterparty --version`.
+
+Change to the project you want to inspect. Then choose a workflow:
+
+| Goal | Start here |
+| --- | --- |
+| See processes by workspace | `afterparty glance` |
+| Report processes, listeners, and Git findings | `afterparty audit --strict` |
+| Find build output across projects | `afterparty builds --projects-root "$HOME/projects" --plain` |
+| Review cleanup interactively | `afterparty review` after the [optional helper build](#optional-terminal-helper) |
+| Review cleanup without the helper | `afterparty plan > cleanup-plan.md` |
+| Collect documentation evidence | `afterparty docs --report --json` |
+
+Replace example paths with your own. Values such as `<PID>` and `<saved-plan>`
+are placeholders. Do not enter the angle brackets in a shell command.
+
+For cleanup, inspect the proposals and mark only the targets you approve.
+Interactive review prints a saved plan path. For a manual plan, edit the
+checkboxes in `cleanup-plan.md`. Then run Apply with that file:
+
+```bash
+afterparty apply cleanup-plan.md
+```
+
+Use the saved path instead when you used interactive review. Plan and review
+never execute cleanup. Apply acts only on checked items.
+
+To leave a report for the next session:
+
+```bash
+afterparty audit --report
+afterparty report --show
+```
 
 ### Claude Code plugin
 
@@ -41,50 +75,25 @@ Choose the installation that matches where you want Afterparty to run.
 /plugin install afterparty@afterparty
 ```
 
-Then, from a repository:
+From a project, use `/afterparty:audit` for cleanup reports or
+`/afterparty:docs` for agent-led documentation review. The plugin also provides
+the general `/afterparty:afterparty` skill.
 
-```text
-/afterparty:audit
-/afterparty:docs
-```
+Plugin hooks perform only small bookkeeping tasks:
 
-`/afterparty:audit` reports processes, listeners, ledger entries, and Git
-leftovers. `/afterparty:docs` reviews documentation affected by the current
-changes. Both are report-first; neither silently deletes project data.
+- `SessionStart` shows the last explicit audit, session-end marker, and saved
+  documentation-review summaries.
+- `SessionEnd` records the session ID and end time.
 
-The plugin also provides the general `/afterparty:afterparty` skill. Its
-lifecycle hooks are deliberately small:
-
-- `SessionStart` shows the last explicit audit, the bounded session-end marker,
-  and saved documentation-review summaries. It does not run a machine-wide
-  audit.
-- `SessionEnd` records the session ID and end time. It does not run an audit or
-  cleanup after the agent exits.
-
-### Standalone CLI
-
-```bash
-git clone https://github.com/Wenjix/afterparty.git
-cd afterparty
-./bin/afterparty audit
-```
-
-To invoke it from any directory in the current shell:
-
-```bash
-export PATH="$PWD/bin:$PATH"
-afterparty audit
-```
-
-The standalone CLI has no plugin hooks. Use `afterparty audit --report` when
-you want a durable snapshot for the next session.
+Hooks do not scan the machine, run cleanup, build the helper, or open the
+terminal UI. Run `audit --report` explicitly to save an audit. Plugin
+installation does not put the CLI on your shell's PATH.
 
 ### Agent Skill
 
-The `skills/afterparty` directory follows the [Agent Skills](https://agentskills.io)
-standard. It contains the skill instructions, version, license, executable,
-and all required library files. Copy the directory into your host's skill
-location:
+The self-contained `skills/afterparty` folder includes instructions, scripts,
+version metadata, and the license. Copy it from the checkout to your host's
+skill directory:
 
 ```bash
 # Claude Code
@@ -96,645 +105,521 @@ mkdir -p ~/.agents/skills
 cp -r skills/afterparty ~/.agents/skills/
 ```
 
-Claude substitutes `${CLAUDE_SKILL_DIR}` when it runs a skill. Other agents
-must find the absolute directory that contains `SKILL.md`. They must invoke
-`bin/afterparty` in that directory. `${CLAUDE_SKILL_DIR}` is not a universal
-environment variable. Installing a skill does not put `afterparty` on your
-terminal `PATH`.
+Claude substitutes `${CLAUDE_SKILL_DIR}` in skill instructions. Other hosts
+must locate `SKILL.md` and use that folder's absolute `bin/afterparty` path.
+Installing the skill does not add the command to PATH or install plugin hooks.
 
-See the host instructions for [Claude skills](https://code.claude.com/docs/en/skills#where-skills-live)
-and [Codex skill discovery](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills)
-for host-specific loading behavior.
-
-Other hosts that support Agent Skills and local shell execution can use the
-same folder. Hosted environments such as Claude.ai run scripts in their own
-environment. They cannot inspect or clean processes on your local machine.
+See the [Agent Skills standard](https://agentskills.io),
+[Claude skill locations](https://code.claude.com/docs/en/skills#where-skills-live),
+and [Codex skill locations](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills).
+A host needs local shell execution to inspect this machine. A hosted session
+can inspect only its own environment.
 
 ## What it does
 
-| Surface | Purpose | Default behavior |
-| --- | --- | --- |
-| `afterparty glance` | Show visible processes grouped by workspace, with unknown attribution kept visible | Read-only |
-| `afterparty docs` | Collect documentation evidence and local-link observations for agent review | No project-file edits |
-| `afterparty audit` | Report recorded processes, listeners, test/watch runners, dev servers, automation browsers, and Git litter | Report-only; `--kill` acts on a requested category |
-| `afterparty list`, `add`, `prune`, `stop` | Record and inspect long-running process groups | `add`/`prune` write the private ledger; `stop` needs `--kill` |
-| `afterparty plan` and `apply` | Propose and execute a checked process, worktree, or artifact checklist | `plan` proposes; `apply` acts only on checked items |
-| `afterparty review` | Choose targets interactively and save a checked plan | Saves choices only; execution remains separate |
-| `afterparty git` | Find stale worktrees, agent branches, lock files, conflict litter, and stashes | Report-only; worktree removal uses `plan`/`apply` |
-| `afterparty artifacts` | Find rebuildable build, cache, and test output | Report-only; removal uses `plan`/`apply` |
-| `afterparty builds` | Compare generated output across project directories | Read-only inventory; Enter opens a separate repository review |
-| `afterparty devclean` | Review orphan processes, machine caches, settings, and old agent history | Preview; mutation needs exact target IDs |
-| `afterparty doctor` | Run the main diagnostics together | Reports by default; `--strict` fails on unavailable process/listener evidence |
-| `afterparty report` and `actions` | Read the latest audit and confirmed mutation history | Read-only except for report/session bookkeeping |
+| Command | Purpose and scope |
+| --- | --- |
+| `glance` | Read-only workspace view of visible processes and recorded activity |
+| `audit` | Ledger, machine process/listener, and current-repository Git reports |
+| `list` | Recorded process groups for the current workspace |
+| `add` | Record an existing process in the private ledger |
+| `stop` | Preview recorded groups. `--kill` stops matching groups. |
+| `prune` | Remove ledger records for groups confirmed absent |
+| `git` | Report worktrees, agent branches, locks, conflict files, and stashes |
+| `artifacts` | Report known build, cache, and test output |
+| `builds` | Read-only project inventory with sizes and growth history |
+| `plan` | Create an unchecked cleanup checklist |
+| `review` | Mark targets interactively and save a checked plan |
+| `apply` | Check targets again and execute checked plan items |
+| `devclean` | Preview machine cleanup. Changes require selected target IDs. |
+| `docs` | Collect documentation evidence and store agent-authored reviews |
+| `doctor` | Combine ledger, process, Git, artifact, and default orphan diagnostics |
+| `report`, `report-path` | Read or locate the saved workspace audit |
+| `actions`, `actions-path` | Read or locate cleanup receipts |
+| `--version` | Print the installed version |
 
-A target is one process group, worktree, or artifact proposed for cleanup.
-A process group contains related processes. Its process group ID is the PGID.
-A worktree is a Git working directory. An artifact is rebuildable output,
-such as a cache or test report.
+A **target** is one proposed process group, worktree, or artifact. A process
+group contains related processes and has a process group ID (**PGID**).
+A worktree is a Git working directory. An artifact is generated output, such
+as a build directory or test report. A **mark** selects a target for a plan.
 
-A mark selects a target in interactive review. A plan is a Markdown checklist
-of reviewed cleanup choices. Approval for a process group does not authorize
-worktree deletion. Documentation review does not authorize cleanup.
-
-## The first post-session workflow
-
-1. **See what is left.** Run `afterparty audit` for a snapshot of the repository
-   and machine. Use `afterparty glance` for visible processes grouped by
-   workspace.
-2. **Review documentation.** Run `afterparty docs --report --json` or
-   `/afterparty:docs` before the next agent takes over. Use `--since REF` when
-   you know the starting commit. Use `--full` to review all repository
-   documentation.
-3. **Choose cleanup targets.** Run `afterparty review` in a terminal. Keep the
-   saved path it prints. Alternatively, run `afterparty plan > cleanup-plan.md`
-   to create a manual checklist. Inspect every proposed target. Mark only the
-   targets you approve.
-
-   For a specific process action, review the reported
-   process group. Use its exact PGID.
-4. **Apply the reviewed choices.** Run `afterparty apply <saved-plan>` with the
-   saved path or manual checklist. Alternatively, use a command for a specific
-   target, such as `afterparty audit --kill dev --pgid <reviewed-pgid>` or
-   `afterparty devclean --disk --apply --target <reviewed-id>`.
-5. **Save a report for the next session.** Run `afterparty audit --report` to
-   save the current snapshot. The next session can read it with
-   `afterparty report --show`. Use `afterparty report-path` to locate it.
-
-Angle-bracket values in examples are placeholders. Replace them before
-running a command. A dry run, report, or review is not an approval to mutate
-anything.
-
-## Command examples
-
-```bash
-# Inspect the current machine and repository.
-afterparty audit
-afterparty glance --oneline
-
-# Save a durable audit and read it later.
-afterparty audit --report
-afterparty report --show
-
-afterparty report-path
-
-# Collect documentation evidence for agent review.
-afterparty docs --report --json
-afterparty docs --since <git-ref> --report
-
-afterparty docs --full --report
-
-# Track an existing process; the text after -- is a display label.
-afterparty add --pid <PID> --kind dev --port <PORT> \
-  --purpose "verify the local app" -- pnpm dev
-
-afterparty list --json
-afterparty stop --kill
-
-afterparty prune
-
-# Propose, review, and save typed cleanup targets.
-afterparty review
-# Run the apply command printed after review.
-# Or use the manual workflow:
-afterparty plan > cleanup-plan.md
-# Edit cleanup-plan.md and check only approved items.
-afterparty apply cleanup-plan.md
-
-afterparty plan --artifacts-only > artifact-plan.md
-
-# Review explicit devclean targets before applying them.
-afterparty devclean --disk
-afterparty devclean --disk --apply --target <reviewed-id>
-
-# Machine-readable output and action history.
-afterparty audit --json
-afterparty list --json
-afterparty git --json
-afterparty docs --report --json
-afterparty actions --all --since 2026-09-01
-afterparty --version
-```
-
-`afterparty add` records a process that already exists. It does not launch
-the command after `--`. It assigns the record to the caller's current
-workspace. It does not read the target process's working directory. Run it
-from the repository that owns the process.
-
-`afterparty stop --kill` stops matching groups already in the ledger. It does
-not check idle time or CPU use. Review the list and scope first.
-`afterparty audit --kill tests|dev|browser` handles unrecorded groups across the
-machine. Add reviewed `--pgid` values to restrict the action.
-`--keep <pgid>` preserves a known group.
-
-`list`, `stop`, and `prune` default to the current Git repository. Pass
-`--all` to include every recorded repository. Pass `--root DIR` to select
-another repository. Use `--kind KIND` to filter `list` or `stop`.
-
-Human reports use styled layouts in a terminal. Below 80 columns, workspace
-and process views stack their fields. Wider views align numbers and wrap
-complete paths and commands into detail rows. Afterparty reads the output
-terminal's width first. Otherwise, it uses a valid `COLUMNS` value or defaults
-to 80.
-
-Quoted next-step commands and target IDs stay on one logical line for copying.
-Python 3 supplies Unicode width handling. Without Python 3, wrapped detail
-uses escaped ASCII bytes.
-
-Piped reports keep their plain format, and JSON is always free of styling.
-`NO_COLOR` or `TERM=dumb` selects plain output in automatic mode. Explicit
-`AFTERPARTY_STYLE=always` or `never` overrides automatic selection;
-`AFTERPARTY_CARD=0` suppresses finale cards.
-
-## Documentation review
-
-The documentation pass has two responsibilities:
-
-1. The deterministic collector (`afterparty docs`) gathers evidence from the
-   diff and local Markdown links. Evidence includes changed paths, related
-   documents, purpose hints, symbols, and flags. Its link checks are conservative.
-2. The invoking agent reads the implementation and documents. It checks which
-   claims remain true and prepares concrete previews. It applies only the
-   treatments the user selects.
-
-The collector never edits project documents or executes commands copied from
-them. It does not fetch remote links or infer staleness from age alone.
-A finding supplies evidence for review. It does not authorize deletion.
-
-### Scope and reports
-
-```bash
-afterparty docs                           # HEAD versus staged/unstaged/untracked files
-afterparty docs --since <git-ref> --report --json
-                                           # include changes since a known ref
-afterparty docs --full --report            # all documentation in the repository
-afterparty docs --template <scan-id>      # review JSON template
-afterparty docs --save-review <file.json> # save an agent-authored review
-afterparty docs --check <scan-id>         # verify evidence before editing
-afterparty docs --show                    # latest review, or evidence if none
-afterparty docs --report-path             # path to the latest docs report
-```
-
-The default scope compares `HEAD` with staged, unstaged, and untracked files.
-It includes pre-existing local changes. It does not infer a baseline for the
-session start. `--since REF` selects an explicit baseline. `--full` includes
-all recognized documentation in the selected repository. `--root DIR` selects
-a different repository.
-
-Afterparty stores evidence and agent reviews separately in private workspace
-state. A new scan does not overwrite the last review. `--show` prefers the
-latest review. It returns nonzero for partial coverage. The invoking agent
-carries unresolved findings into later reviews.
-
-Collection and review have separate completion statuses. A complete review can
-still contain unresolved findings.
-
-### Treatments
-
-A review can recommend **update**, **mark historical**, **consolidate**,
-**archive**, **delete**, **flag for review**, or **keep**. Before requesting a
-selection, the agent shows evidence, reasons, alternatives, and an exact preview.
-The preview shows the patch, move, or deletion. Uncertain findings remain
-flagged or kept. Historical status preserves a document's release or decision
-context. It does not mean the document is wrong.
-
-Run `afterparty docs --check <scan-id>` immediately before the selected edits.
-Changed or incomplete evidence requires a fresh scan and revised proposal.
-Saving a review records the agent's decisions. It does not apply or
-independently check the edits. See the bundled
-[review protocol and JSON format](skills/afterparty/docs-review.md).
-
-Discovery covers these tracked or untracked documents unless Git ignores them:
-
-- Markdown/MDX, reStructuredText, AsciiDoc, and text documents;
-- known extensionless README and changelog files.
-
-Common dependency/build directories, symlinks, submodules, and nested repositories
-produce explicit exclusions or gaps. So do unreadable files, non-UTF-8 files,
-relevant files over 2 MiB, and oversized diffs.
-
-Local-link checks cover simple Markdown inline and reference destinations with
-file extensions. They do not fetch remote links, resolve anchors or website
-routes, or parse every Markdown construct. Incomplete collection cannot support
-a complete review.
+Use `afterparty --help` for the command overview. Most operational commands
+also accept `--help` for their options.
 
 ## Auditing processes and listeners
 
-`afterparty audit` combines three reports:
+`afterparty audit` reports recorded groups, likely development processes and
+listeners, and Git findings. Process classification uses executable and
+subcommand evidence. A match does not prove agent ownership or permission to
+stop a process. Listener reports include likely development listeners on
+loopback or wildcard bindings and exclude protected matches.
 
-- ledger entries for groups Afterparty knows about;
-- likely development listeners on loopback or wildcard bindings, test/watch
-  runners, frontend/backend dev servers, and automation browsers; and
-- Git session litter such as stale worktrees, agent branches, lock files,
-  conflict files, and stashes.
+Use `audit --strict` when unavailable process or listener evidence must cause
+a nonzero exit. `doctor --strict` adds that requirement to combined diagnostics.
+Doctor does not run every devclean mode.
 
-The process classifier uses executable and subcommand evidence. Its heuristic
-report does not prove that a process belongs to an agent or is safe to stop.
-Listener reports exclude other bindings and protected command matches.
-Use `afterparty audit --strict` to fail when process or listener evidence is
-unavailable. `doctor` runs the normal ledger, process, Git, artifact, and default
-orphan reports. It does not run every devclean mode.
+### Process ledger and direct stopping
 
-### Returning to a machine
+```bash
+afterparty add --pid <PID> --kind dev --port <PORT> \
+  --purpose "verify the local app" -- pnpm dev
+afterparty list
+afterparty stop
+```
 
-`afterparty glance` is a read-only view of the machine, grouped by workspace.
-It keeps processes with unknown workspaces visible. Use `--oneline` for a
-status-line form or `--json` for JSON Lines. It has no kill or apply flag.
+`add` records a process that already exists. The text after `--` is a display
+label, not a command to launch. Attribution uses the caller's workspace, not
+the target process's working directory. Run it from the owning project.
 
-Activity comes from existing agent transcripts:
+`list`, `stop`, and `prune` default to the current Git repository or directory.
+Use `--root DIR` for another workspace or `--all` for all recorded workspaces.
+`list` and `stop` also support `--kind KIND`.
 
-| Provider | Files inspected |
+After reviewing all matching groups, choose the appropriate action:
+
+```bash
+# Stop matching groups already recorded in this workspace.
+afterparty stop --kill
+
+# Stop one reviewed development group, including an unrecorded group.
+afterparty audit --kill dev --pgid <reviewed-pgid>
+
+# Remove records for groups confirmed absent.
+afterparty prune
+```
+
+Direct stop commands do not require old activity or low CPU use. Unrestricted
+`audit --kill` searches the machine. Use `--pgid` to narrow it to reviewed groups.
+Categories are `tests`, `dev`, and `browser`, or a comma-separated combination.
+`--keep <pgid>` preserves a specified group.
+
+Signals affect every current member of the selected process group, including
+members outside the matched category. Descendants in other process groups
+remain. Review the full group and consequence before stopping it.
+
+### Workspace activity
+
+`afterparty glance` groups visible processes by workspace. It keeps unknown
+attributions visible and accepts `--oneline` or `--json`. It has no cleanup flag.
+
+Activity indexing reads existing Claude and Codex transcripts:
+
+| Provider | Default source |
 | --- | --- |
-| Claude | Every `*.jsonl` file in immediate project directories under `${AFTERPARTY_TRANSCRIPT_ROOT:-$HOME/.claude/projects}` |
-| Codex | JSONL files below `sessions` and `archived_sessions` in `${AFTERPARTY_CODEX_ROOT:-${CODEX_HOME:-$HOME/.codex}}` |
+| Claude | Immediate project directories under `~/.claude/projects` |
+| Codex | `sessions` and `archived_sessions` under `${CODEX_HOME:-$HOME/.codex}` |
 
-Workspace identity comes from recorded working-directory (`cwd`) paths,
-normalized across providers. The activity timestamp uses the newest modification
-time (`mtime`) among contributing transcript files. It does not prove human
-presence or give an exact visit time. Codex session and turn records can name
-multiple workspaces. A changed transcript conservatively refreshes every
-workspace it names.
+Identity comes from normalized recorded working directories, not directory
+names. Activity uses the newest contributing transcript modification time.
+It does not prove human presence or an exact visit time. Activity from a newer
+or equally recent indexed ancestor can contribute to descendants. Codex files
+that name several workspaces conservatively refresh all of them when the file
+changes.
 
-Activity from an indexed ancestor also contributes to a descendant. The
-workspaces keep distinct rows.
-
-Indexing is read-only and requires no registration or lifecycle hook. Missing
-optional directories count as empty sources. A corrupt, unreadable, incomplete,
-or oversized record makes the entire activity index unavailable. Missing
-Python 3 has the same effect. Partial timestamps cannot authorize process
-cleanup.
-
-A workspace without indexed activity has no last-touched time. Afterparty treats
-it as “cannot tell,” never as “forgotten.” A running process alone does not
-indicate staleness.
-
-`AFTERPARTY_IDLE_HOURS` sets the positive whole-hour activity threshold for
-process-plan eligibility (default `4`). `AFTERPARTY_BUSY_CPU` sets the per-process
-CPU threshold (default `20`). These are eligibility inputs, not proof of
-abandonment.
-
-Hour values use decimal notation, including leading zeros. A value that exceeds
-the supported interval withholds process cleanup. Observed CPU values must be zero or
-greater and fit the supported numeric range. Afterparty withholds the group if
-any member has missing or invalid CPU evidence.
+Missing optional directories count as empty sources. Corrupt, incomplete,
+unreadable, or oversized records make the whole index unavailable. A workspace
+without usable activity stays unknown. Process liveness alone does not prove
+that work is abandoned. See [configuration](#configuration) for source overrides.
 
 ## Approving cleanup with plan/apply
 
-`afterparty plan` writes an editable checklist for the current repository.
-Every actionable item starts unchecked. Use `--root DIR` for another
-repository. `--all` also scans other visible Git workspaces and repositories
-in the transcript index for processes and worktrees. Artifact scope remains
-the selected repository. `--artifacts-only` and `--caches-only` restrict the
-proposal.
+Plan defaults to the selected repository. `--root DIR` selects another one.
+`--all` includes other visible Git workspaces for process discovery and indexed
+repositories for worktree discovery. Artifact scope stays within the selected
+repository. `--artifacts-only` excludes processes and worktrees. Add
+`--caches-only` to limit artifact proposals to caches.
 
-For a guided terminal review, run:
+Process proposals require old recorded activity and low observed CPU use.
+The default limits are four hours and 20 percent per member. Every member
+needs usable CPU evidence. Unknown activity, invalid CPU, mixed workspaces,
+protected groups, and unsupported categories withhold the group.
 
-```bash
-afterparty review
-```
+Filesystem targets use separate identity, occupancy, and scope checks.
+Transcript age is not required to remove a checked worktree or artifact.
 
-The reviewer starts in **Choose**, with compact evidence and one row per
-target. A fixed strip previews the consequence for the focused target.
-Arrow keys or `j`/`k` move focus. `Space` marks an available target.
-`i` inspects the target.
+### Optional terminal helper
 
-If you page away from the focused target, Space reveals it before you can
-mark it. The position line and mark message name the target. `d` expands or
-compacts evidence. `/` filters targets. Hidden marks still count. You can
-inspect withheld targets.
-
-The strip uses at most four rows. Press `i` for full details when a
-consequence needs more space.
-
-`Enter` advances through **Review choices → Save plan → Finish**. The legend
-shows the active keys for each mode. `s` also opens Review choices. Review
-starts with a three-row summary. It shows the full identity and consequence
-of each selected target. Every process-group member remains listed.
-
-In Review, Space unmarks a target. `d` adds evidence checks. `Esc` goes back
-and keeps choices. With marks set, `r` requests confirmation before a refresh.
-`q` requests confirmation before cancellation. In help or inspection, `q`
-closes that view.
-
-Ctrl+Z suspends the reviewer and keeps choices. A scan shows elapsed time and
-ignores review keys. Keys from an older scan cannot mark targets or advance.
-If a refresh fails, complete another refresh before saving.
-
-Saving requires at least one explicit mark. It never overwrites an existing
-file. Plans use a unique filename in the workspace's private review directory
-under the cache root. Pass `--output NEW-PATH` to choose a destination. If that
-path exists, review refuses before the scan. Choose another filename or omit
-`--output` to use the private directory.
-
-After you save the plan, press `Enter` or `q` to finish. Review restores the
-terminal and lists your choices and saved path. It prints an exact apply
-command, with shell quoting, alone on one logical line. If `afterparty` is
-absent from PATH, the command uses the bundled CLI's absolute path.
-
-Opening, inspecting, and marking targets do not execute cleanup. Resizing,
-filtering, and toggling details do not start a new scan.
-
-If the snapshot has no available targets, `Enter` finishes without saving a
-plan. Incomplete evidence stays visible and produces a nonzero result. When
-targets are available, mark a choice before you advance or save. Focus alone
-does not select a target.
-
-Interactive review uses **Bubble Tea 2.1.0 and Lip Gloss 2.0.0**. Its Python 3
-backend uses the standard library to manage evidence, choices, and saved plans.
-Build the optional helper from the source checkout on macOS/Linux. The build
-requires Go 1.26+:
+The terminal UI uses Bubble Tea and Lip Gloss with a Python 3 backend.
+Build it explicitly on macOS or Linux with Go 1.26 or newer:
 
 ```bash
 ./skills/afterparty/bin/build-review
 ```
 
-This explicit build downloads the pinned Go dependencies. It puts
-`afterparty-review` beside the bundled CLI. An installed skill copy can run its
-own `bin/build-review`. A copied built bundle includes the helper for that OS
-and architecture. Go is not needed at runtime. Ordinary commands and plugin
-hooks never build or download the helper.
+Run this from the source checkout. An installed skill can run its own
+`bin/build-review`. The build downloads pinned Go dependencies and places
+`afterparty-review` beside the bundled CLI. The binary is specific to its OS
+and architecture. Go is not needed at runtime. Ordinary commands never build
+or download the helper. Rebuild after updating the UI source.
+[Dependency notices](skills/afterparty/ui/THIRD_PARTY_NOTICES.txt)
+ship with the source bundle.
 
-Dependency licenses ship in
-[THIRD_PARTY_NOTICES.txt](skills/afterparty/ui/THIRD_PARTY_NOTICES.txt).
+### Interactive review
 
-The reviewer needs a supported input/output terminal. Below 60 columns by
-20 rows, it shows a size notice and keeps marks. You must enlarge the pane
-before you can mark targets or save. In tmux, use `prefix z` to zoom.
-`--ascii` escapes non-ASCII display text.
+Run `afterparty review` from the project. The steps are **Choose**, **Review
+choices**, **Save plan**, and **Finish**. Choose uses compact rows and a bounded
+focus strip. Inspection shows full identities, consequences, and group members.
 
-`NO_COLOR` removes hues but keeps bold and reverse focus. `AFTERPARTY_STYLE`
-follows the shared CLI styling rules. If the helper, supported terminal, or
-Python 3 is unavailable, review prints an unchecked plain plan. It reports that
-no plan was saved and exits nonzero. Use the manual plan workflow for pipes,
-Git Bash, or a stable linear text view.
+| Key | Action |
+| --- | --- |
+| Arrows or `j`/`k` | Move focus |
+| PgUp/PgDn | Scroll without changing target focus |
+| Space | Mark or unmark an available target. In Review, unmark it. |
+| `i` | Inspect the focused target from Choose |
+| `d` | Show or hide inline details where available |
+| `/` | Filter in Choose. Hidden marks still count. |
+| Enter | Advance to review or save. Finish after saving. |
+| Esc | Return while keeping choices |
+| `r` | Refresh. Confirm before clearing marks. |
+| `q` | Quit. Confirm before discarding marks. Close help or inspection first. |
+| `?` | Show mode-specific keys, scope, and scan status |
+| Ctrl+Z | Suspend. Use `fg` to resume. |
+| Ctrl+C | Exit immediately. A previously saved plan remains saved. |
 
-Plugin hooks never launch the reviewer. A human must explicitly invoke this
-CLI command from the bundle.
+The on-screen legend lists the controls for the current mode. Space first
+reveals a focused target hidden by paging. Keys typed during collection cannot
+mark an older snapshot or advance it. A failed refresh disables saving until
+another refresh succeeds.
 
-`afterparty plan --json` emits a versioned JSON Lines snapshot. It includes
-exact target identities, evidence capabilities, unchecked items, canonical
-Markdown, and integrity/completion records. It requires Python 3. Ordinary
-Markdown planning does not.
+Saving needs at least one explicit mark. `--output FILE` selects a destination
+and refuses an existing path before scanning. Without it, review uses a unique
+filename in private workspace state. Finish the review to print the saved path,
+choices, and a shell-quoted apply command. Run that command separately.
 
-Exit `0` means complete inspection. Exit `1` means inspection gaps. Exit `2`
-means a usage or snapshot-format refusal. A complete stream can describe
-incomplete evidence. Targets that need missing evidence remain withheld.
-See the [snapshot contract](docs/plan-snapshot.md) for reader and writer
-requirements.
+Below 60 columns by 20 rows, review shows a size notice and keeps marks.
+Resize to continue marking or saving. In tmux, use `prefix z` to zoom.
+If the helper, Python 3, or terminal is unavailable, review prints an unchecked
+plain plan and exits nonzero. That fallback does not save a plan.
 
-Process rows include members, purpose, workspace, listener ports, activity
-evidence, and group-wide consequences. Busy, in-use, unknown, protected,
-mixed-workspace, unsupported, and no-category groups are withheld with a
-reason. Worktrees and artifacts use filesystem, occupancy, nested-repository,
-and identity checks rather than transcript age.
+### Manual plans and Apply
 
-Edit the checkboxes. Then run `afterparty apply <plan>`. Apply validates every
-checked entry before cleanup starts. It checks each target again before acting.
-It refuses targets with any of these conditions:
+```bash
+afterparty plan > cleanup-plan.md
+# Edit the file. Check only the targets you approve.
+afterparty apply cleanup-plan.md
+```
 
-- malformed metadata, duplicate targets, or unsupported targets;
-- changed fingerprints or mismatched paths;
-- unsafe scope, tracked data, or symlink escapes;
-- repository roots, nested repositories, or occupied paths;
-- incomplete scans.
+An unchecked item never authorizes cleanup. Apply validates the plan before
+actions start and checks each target again immediately before acting.
+It refuses changed identities, unsafe scopes, tracked data, nested repositories,
+occupied paths, and unavailable required evidence.
 
-The checkbox authorizes the target. An unchecked item stays inactive even if
-another field says it is eligible.
+Apply delegates process signals to the existing audit handler. It removes
+worktrees with `git worktree remove` without `--force`. Main, current, dirty,
+occupied, or uninspectable worktrees remain withheld. Unknown ignored data
+also prevents removal. Apply confirms target absence after filesystem removal
+or process stopping. A failed removal command still returns failure even if
+the target is absent.
 
-`apply` never signals a process directly. It delegates approved process groups
-to the same `audit --kill` handler. This handler shares group behavior,
-protection checks, identity checks, and receipts based on confirmed results.
-Process and filesystem observations do not guarantee atomic operating-system
-ownership. Review the actual target and consequence immediately before you
-apply the plan.
-
-Use `afterparty apply --json cleanup-plan.md` for versioned JSON Lines receipts.
-This requires Python 3. It applies the same checked targets with fresh safety
-checks. Each target reports its outcome, attempted action, confirmed absence,
-and journal receipt status. A confirmed cleanup remains applied if the journal
-write fails. The command returns nonzero in that case.
-
-Missing delegated evidence appears as unavailable. Afterparty never infers it
-from prose. Malformed plans exit `2` before cleanup. Incomplete results exit
-`1`. Consumers must check the final completion record and exit status before
-they display a finished result. See the [apply receipt contract](docs/apply-events.md).
-
-## Git cleanup
-
-`afterparty git` reports worktrees, agent-named branches, old index locks,
-conflict files, and stashes. `--age <days>` changes the discovery threshold.
-`--root DIR` selects a repository. `--json` emits JSON Lines. `git --clean`
-is a report-only compatibility flag and exits 2. The command does not delete
-branches, locks, conflict files, or stashes.
-
-Worktree removal requires a checked `plan` item and `afterparty apply`.
-Before removal, Afterparty checks current occupancy, the physical path, and
-Git administrative identity. It scans for nested repositories, including
-ignored ones. It withholds targets with any of these conditions:
-
-- dirty or occupied worktrees;
-- symlinks or unknown ignored data;
-- the current or main worktree;
-- failed scans or unavailable identity.
-
-Removal uses `git worktree remove` without `--force`. Afterparty then checks
-that the target disappeared.
+These checks are observations, not atomic operating-system ownership guarantees.
+A later refusal does not reverse earlier completed cleanup.
 
 ## Build output across projects
 
-Use `builds` to find known build output, caches, and test reports across Git
-repositories and worktrees:
-
 ```bash
-afterparty builds --projects-root "$HOME/orca"
-afterparty builds --projects-root "$HOME/orca" --projects-root "$HOME/Documents/projects"
-afterparty builds --projects-root "$HOME/orca" --json
+afterparty builds --projects-root "$HOME/projects"
+afterparty builds --projects-root "$HOME/projects" --projects-root "$HOME/work"
+afterparty builds --projects-root "$HOME/projects" --json
 ```
 
-Repeat `--projects-root` to select more directories. Without it, Afterparty
-inspects the current repository or directory. Repository discovery stops at
-six directory levels by default. Use `--max-depth N` to choose 1 through 64.
-The scan stays within the selected roots. It does not follow directory
-symlinks or add linked worktrees outside those roots. Worktrees within the
-roots retain separate output inventories.
+Builds inventories known generated output across Git repositories and worktrees.
+It changes no project files and writes only private inventory history.
+Repeat `--projects-root` for more roots. Without it, discovery uses the current
+repository or directory. `--max-depth N` limits repository discovery to 1–64
+levels, with a default of 6. That depth does not limit artifact measurement
+inside each repository.
 
-In a supported terminal, the command uses the existing Bubble Tea helper.
-The list sorts paths by measured size. Each row names the repository and
-output path. The header shows scan coverage, estimated allocated bytes, and
-growth since the previous complete scan of the same scope.
+Discovery stays within the selected physical roots and skips directory symlinks.
+Linked worktrees outside those roots are not added. Worktrees inside the roots
+keep separate inventories. Overlapping roots do not duplicate repositories.
 
-Use arrows or `j`/`k` to move, `/` to filter, `i` to inspect, and `d` for
-inline details. Use `r` to refresh and `?` for scope and scan errors.
-Press `q` to exit. Press Enter to open
-`review --artifacts-only` for the focused repository. That review collects
-fresh evidence and starts with no marks. After saving a plan, run
-`afterparty apply <saved-plan>` separately to execute cleanup.
+Rows sort by measured allocated size. Growth compares the previous complete
+scan with matching roots, discovery depth, and artifact definitions. The first
+complete scan establishes a baseline. New paths have no comparison yet.
+Incomplete scans do not replace that baseline.
 
-The inventory has no cleanup checkboxes. Size and modification time do not
-prove that files are unused or safe to delete. Unknown measurements and failed
-inspections remain visible. Incomplete scans do not replace the previous
-complete baseline. New paths have no growth comparison until the next scan.
+Size estimates do not promise freed space. File modification times do not show
+last use. Unknown sizes and scan failures remain visible. Rust `target/`, Go
+build caches, Docker caches, and entire dependency installations are outside
+this inventory.
 
-`--plain` prints the report without the terminal interface. Piped output also
-uses plain text. `--json` prints one versioned JSON report. These modes require
-Python 3 but do not require the terminal helper or Go. The command falls back
-to plain output when the helper or a supported terminal is unavailable.
-`NO_COLOR` and `--ascii` retain the reviewer's existing display behavior.
+In the terminal, use arrows or `j`/`k`, `/`, `i`, `d`, `r`, and `?` to navigate
+and inspect. Enter leaves the inventory and opens a fresh artifact review for
+one repository. That review starts without marks. Saving and Apply remain
+separate actions.
+
+`--plain` prints a readable report. Piped output also uses plain text.
+`--json` emits one report object. These modes require Python 3 but not the
+terminal helper. Missing terminal support falls back to plain output.
 Native Windows can lack allocated-size evidence and private history locking.
-In that case, reports show unknown measurements and return a nonzero status.
+Unknown measurements and unavailable history produce a nonzero result.
+See the [inventory contract](docs/build-inventory.md) for details.
 
-This inventory covers the artifact names listed below. It does not include
-Rust `target/`, Go build caches, Docker caches, or whole dependency installations.
-It does not widen artifact scope for `plan --all` or `review --all`.
-See [the inventory contract](docs/build-inventory.md) for scope, measurements,
-history, and failure semantics.
+## Git cleanup and artifacts
 
-## Artifacts
+`afterparty git` reports worktrees, agent-named branches, old index locks,
+conflict files, and stashes. Use `--age DAYS`, `--root DIR`, or `--json` to
+adjust the report. It does not delete those findings.
 
-`afterparty artifacts` reports known rebuildable output:
+`afterparty artifacts` reports these known output families:
 
-- **Caches:** `.turbo`, `.vite`, `.cache`, `.parcel-cache`, `.rollup.cache`,
-  `node_modules/.cache`, `*.tsbuildinfo`, and `.eslintcache`.
-- **Build output:** `.next`, `dist`, `build`, `out`, `.output`, `.svelte-kit`,
-  `.astro`, and `storybook-static`.
-- **Test output:** `coverage`, `.nyc_output`, `test-results`,
-  `playwright-report`, `.playwright-mcp`, and `.vitest`.
+| Kind | Names and patterns |
+| --- | --- |
+| Cache | `.turbo`, `.vite`, `.cache`, `.parcel-cache`, `.rollup.cache`, `node_modules/.cache`, `*.tsbuildinfo`, `.eslintcache` |
+| Build | `.next`, `dist`, `build`, `out`, `.output`, `.svelte-kit`, `.astro`, `storybook-static` |
+| Test | `coverage`, `.nyc_output`, `test-results`, `playwright-report`, `.playwright-mcp`, `.vitest` |
 
-Use `afterparty plan --artifacts-only --root <repo>` to create an unchecked
-proposal. Review it before you run `afterparty apply`. `artifacts --clean`
-is report-only and exits 2. Afterparty withholds deletion for tracked paths,
-symlinks, nested repositories, and occupied targets. Failed inspections, scope
-escapes, and unavailable identity also prevent deletion. It does not select
-entire dependency installations such as `node_modules`, but can select their
-cache directories.
+Use `artifacts --caches-only` to report caches. Use
+`plan --artifacts-only --caches-only` for a cache-only plan. Afterparty does not
+select entire `node_modules` installations.
+Git-tracked paths, repository roots, nested repositories, symlinks, scope
+escapes, occupied targets, and failed inspections prevent artifact deletion.
+
+Both `git --clean` and `artifacts --clean` are report-only compatibility flags
+and exit `2`. Worktree and artifact removal require a checked plan and Apply.
 
 ## Devclean
 
-Devclean has separate modes for orphan processes, caches, persistent settings,
-and old agent history. These targets have different consequences. Preview the
-targets first. Devclean refuses `--apply` alone. Every change needs a target ID
-from a preview with the same mode and scope.
+Devclean uses preview target IDs, separate from repository plan checkboxes.
+Preview the modes you need:
+
+| Command | Preview |
+| --- | --- |
+| `afterparty devclean` | Orphan process candidates |
+| `afterparty devclean --deep` | Daemon processes and simulator shutdowns |
+| `afterparty devclean --optimize` | Dumps, crash-reporter settings, and launch agents |
+| `afterparty devclean --disk` | Named caches and native store maintenance. No process stopping. |
+| `afterparty devclean --history` | Old Codex sessions/logs and Gemini browser recordings |
+
+After reviewing a target, repeat the mode and scope with its exact ID:
 
 ```bash
-afterparty devclean            # orphan-process candidates
-afterparty devclean --deep     # daemon and simulator candidates
-afterparty devclean --optimize # dumps, settings, and launch-agent targets
-afterparty devclean --disk     # rebuildable caches; never signals processes
-afterparty devclean --history  # stale Codex/Gemini history targets
-
 afterparty devclean --disk --apply --target <reviewed-id>
 ```
 
-Repeat `--target` to approve multiple targets explicitly. Afterparty checks
-each target's identity again immediately before the action. A changed or
-uninspectable target remains visible and fails the command. A directory ID
-identifies the reviewed directory. It does not freeze the directory's future
-contents.
+Repeat `--target` for several choices. Afterparty refuses `--apply` alone. It
+checks identity again before each action. An ID identifies the reviewed target
+and action. It does not freeze future directory contents.
 
-`--optimize` separates deletion from persistent settings and launch-agent
-changes. Settings edits use effective JSONC values. Afterparty retains a
-backup and shows restoration instructions. JSONC parsing requires Python 3.
+Named cache cleanup stays physically under HOME. The pnpm store is a separate
+native-tool target and can be elsewhere. Afterparty uses only `pnpm store prune`
+for that shared store. Roaming project scans under `--documents-root DIR`
+remain report-only. Repository artifacts require plan/apply.
 
-`--history` considers Codex session day directories, `~/.codex/log`, and
-`~/.gemini/antigravity/browser_recordings`. It does not clean Claude transcripts.
-These paths stay under `HOME` and exclude archived Codex sessions. The scan
-must be complete. Its newest regular-file mtime must be older than
-`CODEX_SESSION_AGE_DAYS` (default `30` days). A selected directory must occupy
-at least 1024 KiB.
+Optimize can change persistent settings or disable launch agents. Effective
+JSONC settings checks require Python 3. Afterparty keeps a settings backup and
+prints restoration instructions.
 
-The age limit accepts positive whole numbers in decimal notation, including
-leading zeros. Zero and values beyond the supported range are refused.
-History cleanup excludes physical paths inside archived Codex sessions and
-directories that contain those archives, including paths reached through symlinks.
+History targets are Codex session day directories, `~/.codex/log`, and
+`~/.gemini/antigravity/browser_recordings`. Each selected directory must occupy
+at least 1024 KiB. A complete scan must show every regular file older than
+`CODEX_SESSION_AGE_DAYS`, which defaults to 30 days.
 
-`--disk` keeps the shared pnpm store intact. It uses `pnpm store prune` to
-remove unreferenced packages. Project scans under `--documents-root DIR` only
-report targets. Repository artifacts still require plan/apply.
+Recent or uninspectable history stays withheld. Cleanup excludes Claude
+transcripts, archived Codex sessions, physical aliases of those archives, and
+directories that contain them. Activity-source overrides do not redirect these
+deletion paths. Removing history can remove resume information and records of
+agent work.
+
+## Documentation review
+
+`afterparty docs` collects evidence. The invoking agent reads that evidence,
+checks document claims against the implementation, and proposes treatments.
+The collector never calls an LLM, edits project files, or executes document text.
+
+```bash
+afterparty docs --report --json
+afterparty docs --since <git-ref> --report --json
+afterparty docs --full --report
+```
+
+The default compares HEAD with staged, unstaged, and untracked files, including
+pre-existing changes. It does not infer the session's starting commit.
+`--since REF` selects a known baseline. `--full` includes all recognized
+repository documentation. `--root DIR` selects another repository.
+
+Discovery includes tracked documents and nonignored untracked documents.
+It recognizes Markdown/MDX, reStructuredText, AsciiDoc, text, and known
+extensionless README/changelog files. Discovery excludes dependency and generated
+directories, submodules, and nested repositories. Relevant symlinks, unreadable
+files, non-UTF-8 files, oversized files, or diffs can make collection incomplete.
+Local-link checks cover simple file destinations. They do not validate remote
+links, anchors, website routes, or every Markdown construct.
+
+The agent can recommend update, mark historical, consolidate, archive, delete,
+flag, or keep. It shows evidence, reasons, and concrete previews before edits.
+Only approved treatments proceed. Age alone does not make a document wrong.
+Historical records retain their original purpose.
+
+| Command | Use |
+| --- | --- |
+| `docs --template <scan-id>` | Create a JSON template for the agent's review |
+| `docs --save-review <file.json>` | Store the completed review record |
+| `docs --check <scan-id>` | Refuse changed or incomplete evidence before approved edits |
+| `docs --show` | Read the latest review, or evidence when no review exists |
+| `docs --report-path` | Locate that report |
+
+Evidence and agent reviews have separate private storage. A new scan preserves
+the previous review. Collection completion, review coverage, and unresolved
+findings are separate facts. A complete review can have unresolved findings.
+`--show` returns nonzero for partial coverage.
+
+Run `docs --check` immediately before approved edits. Changed evidence requires
+a new scan and revised proposals. Saving a review records the agent's judgments.
+It does not apply or independently validate the edits.
+See the [review protocol and record format](skills/afterparty/docs-review.md).
+
+## Structured output and exit status
+
+| Interface | Output |
+| --- | --- |
+| `audit --json`, `list --json`, `git --json`, `glance --json` | JSON Lines reports |
+| `plan --json` | Versioned JSON Lines snapshot with canonical Markdown and integrity records |
+| `apply --json PLAN` | Versioned JSON Lines execution receipts |
+| `builds --json` | One versioned JSON report object |
+| `docs --json` | Versioned JSON Lines evidence |
+| `docs --template <scan-id>` | One formatted JSON review template |
+| `actions` | JSON Lines from the action journal |
+
+JSON Lines means one JSON object per line. Output has no terminal styling.
+`audit --json` is report-only and refuses `--kill`. Audit cannot combine
+`--json` with `--report`. Documentation collection can combine both flags.
+Documentation read/check modes emit the requested evidence, review, or check
+record with `--json`. `docs --report-path` always prints a plain path.
+
+Check each command's status fields as well as its exit code. Ordinary audit
+or glance can return `0` with unavailable capabilities. Use strict audit when
+that must fail. For plan, `0` means complete collection, `1` means inspection
+gaps, and `2` means a usage or snapshot refusal. Builds returns `1` for
+incomplete collection or unavailable comparison history.
+
+Apply JSON reports each target's outcome, attempted action, confirmed absence,
+and receipt status. A malformed plan exits `2` before cleanup. Incomplete
+results exit `1`. Earlier cleanup can succeed even when the run fails later.
+A journal failure does not reverse a confirmed action and makes the run fail.
+
+Consumers must check schema versions, capability/status fields, and the
+command's exit rules. Plan/apply streams also require valid completion records.
+Missing completion in those streams never means success. Full contracts:
+[plan snapshots](docs/plan-snapshot.md), [apply receipts](docs/apply-events.md),
+and [build inventory](docs/build-inventory.md).
 
 ## Reports, state, and history
 
-Private state normally lives under
-`${XDG_CACHE_HOME:-$HOME/.cache}/agent-processes/`:
+Private state normally uses `${XDG_CACHE_HOME:-$HOME/.cache}/agent-processes/`:
 
-- `ledger.tsv` records process ownership and observed member identities;
-- workspace-keyed reports store the latest audit and documentation evidence;
-- session archives preserve concurrent audit snapshots and bounded session-end
-  markers;
-- `builds/` stores complete inventory baselines for each selected scope; and
-- `actions.jsonl` records confirmed mutation outcomes.
+| State | Contents |
+| --- | --- |
+| `ledger.tsv` | Recorded processes and reviewed member identities |
+| Workspace reports | Explicit audits and separate documentation evidence/reviews |
+| Session archives | Audit snapshots and bounded session-end markers |
+| `reviews/` | Saved cleanup plans keyed by workspace |
+| `builds/` | Complete inventory baselines keyed by scope |
+| `actions.jsonl` | Cleanup outcomes |
 
-`AGENT_PROCESS_LEDGER` overrides only the ledger path and its adjacent lock.
-`afterparty report-path` and `afterparty actions-path` print canonical paths.
-Use `afterparty actions --all --workspace DIR --since YYYY-MM-DD` to filter
-history. A positive `AFTERPARTY_RETENTION_DAYS` enables removal of old action
-receipts during writes. `0` preserves them. Afterparty retains session report
-archives.
+Directories use mode `0700` and files use `0600` where POSIX permissions apply.
+Afterparty writes repository `report.md` only when Git ignores it and no
+unrelated file owns the path. Otherwise, it uses workspace-keyed cache storage.
+`report --show` returns nonzero for an incomplete report.
 
-State directories use private mode `0700`. State files use private mode `0600`.
-These modes apply where the platform supports POSIX permissions.
+```bash
+afterparty report-path
+afterparty actions-path
+afterparty actions --workspace /path/to/project --since 2026-10-01
+afterparty actions --all --since 2026-10-01
+```
 
-Afterparty writes an audit to repository `report.md` only if Git already
-ignores that path and no unrelated file owns it. Otherwise, it uses a cache
-path keyed by workspace. `report --show` returns nonzero for an incomplete
-report. `builds --json` returns one versioned JSON object. Other JSON commands
-use versioned JSON Lines. JSON output never authorizes cleanup.
-`audit --json` and `audit --report` are mutually exclusive. `docs` can combine
-`--json` and `--report` to collect evidence.
+Actions defaults to the current workspace. `--all` disables workspace filtering.
+Saved output attempts to redact common credential arguments, assignments, and
+URL credentials. Paths and hashes remain visible. Redaction is incomplete.
+Keep secrets out of command labels and arguments.
 
-Afterparty attempts to redact common credentials from saved report bodies,
-ledger labels, and journal target/detail fields. This covers common credential
-arguments, assignments, and URL credentials. Paths and hashes remain visible.
-Redaction does not cover all secret formats. Keep secrets out of free-form
-command arguments.
+### Configuration
 
-Afterparty reports a confirmed cleanup with a failed receipt separately and
-returns nonzero. Some early refusals appear only in console output. Set
-`AFTERPARTY_JOURNAL=0` to disable the action journal.
+| Variable | Purpose and default |
+| --- | --- |
+| `AFTERPARTY_TRANSCRIPT_ROOT` | Claude transcript source. Default: `~/.claude/projects`. |
+| `AFTERPARTY_CODEX_ROOT` | Codex activity source. Default: `${CODEX_HOME:-$HOME/.codex}`. |
+| `AFTERPARTY_IDLE_HOURS` | Positive whole-hour process-plan threshold. Default: `4`. |
+| `AFTERPARTY_BUSY_CPU` | Maximum observed CPU per member for process-plan eligibility. Default: `20`. |
+| `CODEX_SESSION_AGE_DAYS` | Positive whole-day history threshold. Default: `30`. |
+| `XDG_CACHE_HOME` | Parent of private state. Default: `$HOME/.cache`. |
+| `AGENT_PROCESS_LEDGER` | Custom ledger path and adjacent lock |
+| `AFTERPARTY_JOURNAL` | Set to `0` to disable action receipts. Default: enabled. |
+| `AFTERPARTY_RETENTION_DAYS` | Positive values age out journal entries during writes. Default: `0` retains them. |
+| `AFTERPARTY_STYLE` | `auto`, `always`, or `never`. Default: `auto`. |
+| `AFTERPARTY_CARD` | Set to `0` to suppress terminal summary cards |
+
+Hour and day limits use decimal notation, including leading zeros. Afterparty
+refuses zero or invalid day limits. An idle limit beyond the supported interval
+withholds process cleanup. Observed CPU values must be finite numbers zero or
+greater. One member with missing or invalid CPU evidence withholds the group.
+Invalid `AFTERPARTY_IDLE_HOURS` or `AFTERPARTY_BUSY_CPU` syntax uses the default
+and prints a warning.
+
+### Terminal display
+
+Terminal reports adapt to width. Narrow reports stack fields. Paths and
+commands retain copyable detail lines. Piped reports keep their plain format.
+`NO_COLOR` and `TERM=dumb` disable automatic color. `AFTERPARTY_STYLE=always`
+or `never` overrides automatic selection. The review UI keeps bold and reverse
+focus under `NO_COLOR`. `--ascii` escapes non-ASCII display text in review/builds.
+Without Python 3, wrapped CLI details use escaped ASCII bytes.
 
 ## Safety model
 
-- Discovery is read-only by default. Explicit `--kill`, checked `apply`, and
-  selected devclean target IDs are the mutation surfaces.
-- Ledger and audit cleanup signal process groups. They send `SIGTERM` before
-  `SIGKILL` and refuse groups that contain a protected process. Devclean signals
-  individual orphan PIDs. An orphan can share a group with unrelated processes.
-- Each target requires its applicable process, protection, occupancy, identity,
-  and nested-repository checks. Missing or unknown evidence cannot authorize cleanup.
-- Filesystem deletion requires a check that the path disappeared. Signals
-  require a check that the process or group disappeared. Native maintenance
-  uses the tool's result, such as `pnpm store prune` or a `launchctl` probe.
-- Afterparty checks physical Git, artifact, and home-cache scopes. Symlink
-  parents cannot redirect named home-cache actions outside `HOME`. The
-  configured pnpm store is a separate native-tool target. It can be outside
-  `HOME`.
-- Protection patterns cover selected editors, shells, Claude/Codex agents, and
-  MCP servers such as `playwright-mcp` and `chrome-devtools-mcp`. They are
-  heuristics, not exhaustive process identification.
+- Discovery suggests candidates. A report, fingerprint, focus, or mark alone
+  never executes cleanup.
+- Ledger/audit stop whole process groups. They send SIGTERM, then SIGKILL if
+  needed. Devclean stops individual orphan PIDs because their groups can contain
+  unrelated processes.
+- Shared protection patterns cover selected editors, shells, agents, and MCP
+  servers. These patterns are heuristics and cannot identify every application.
+- Required identity, protection, activity, occupancy, scope, and nested-repository
+  checks remain authoritative after approval. Unknown required evidence withholds
+  the action.
+- Filesystem boundaries use physical paths. Symlink parents cannot redirect
+  named home-cache deletion outside HOME.
+- Process and filesystem actions require confirmed absence. Native maintenance
+  uses the tool's result. Receipt failures remain visible and return nonzero.
 
-Afterparty reports observations, not an atomic guarantee about what another
-process will do after a check. Review the actual target and consequences.
+No check guarantees that another process cannot change the target afterward.
+Review the target and consequence immediately before applying cleanup.
 
 ## Requirements and platform support
 
-- Bash 3.2 or newer, Git, and standard Unix tools including `ps`, `awk`,
-  `find`, `stat`, `du`, and a hashing utility.
-- `rg` for process matching; audit falls back to `grep -E` when it is absent.
-- `lsof` for listener and filesystem-occupancy reports. Worktree and artifact
-  removal require a successful occupancy scan.
-- Python 3 for guided review, plan/apply JSON, documentation evidence and review
-  storage, activity indexing, effective JSONC edits, and macOS simulator
-  inspection. Missing Python makes activity unavailable. It withholds cleanup
-  that requires activity evidence and Python-backed optimize/simulator targets.
-- The compiled Bubble Tea/Lip Gloss helper for interactive review. The source
-  build requires Go 1.26+; other CLI commands do not require Go or this helper.
-- macOS or Linux is the native target. WSL provides the Unix process interface
-  on Windows. Git Bash supports Git/filesystem commands with limited process
-  reports. Live-kill tests skip platforms without the required tools.
-- macOS-only `launchctl`, Xcode-cache, and iOS-simulator checks are skipped on
-  other platforms.
+| Requirement | Used for |
+| --- | --- |
+| Bash 3.2+, Git, standard Unix tools | Core CLI. Tools include `ps`, `awk`, `find`, `stat`, `du`, and hashing. |
+| `lsof` | Listener reports and occupancy evidence. Worktree/artifact removal requires a successful occupancy scan. |
+| `rg` | Process matching. The audit uses `grep -E` when ripgrep is absent. |
+| Python 3 | Builds, interactive review, plan/apply JSON, activity indexing, documentation collection/review, JSONC edits, and simulator inspection |
+| Go 1.26+ | Explicit build of the optional terminal helper. Not required at runtime. |
+
+macOS and Linux are native targets. WSL supplies the Unix process interface
+on Windows. Git Bash has limited process support. Missing tools produce
+unavailable evidence and prevent cleanup that needs those checks. Native
+Windows can lack build-size evidence and history locking. The optional
+terminal helper targets macOS and Linux.
+
+Launch-agent, Xcode-cache, and iOS-simulator checks are macOS-specific.
+Missing Python makes activity unavailable and withholds Python-backed settings
+and simulator targets. Plain reports and manual Markdown plans do not need
+the terminal helper.
+
+## Troubleshooting
+
+| Symptom | Next step |
+| --- | --- |
+| The shell cannot find `afterparty` | Add the checkout's `bin` directory to PATH, or use the bundle's absolute CLI path. |
+| Review prints a plain plan | Check Python 3 and terminal support. Build the optional helper. |
+| The pane shows a size notice | Resize to at least 60×20. In tmux, press `prefix z`. |
+| A required scan is unavailable | Read the reported reason. Check the required tools with `afterparty doctor --strict`. |
+| Apply refuses an old plan | Review the refusal. Collect a fresh plan after the underlying condition changes. |
 
 ## Development and validation
 
-Check shell syntax and blocking lint errors:
+Run syntax, blocking lint, and packaging checks:
 
 ```bash
 for script in bin/afterparty skills/afterparty/bin/afterparty skills/afterparty/bin/build-review skills/afterparty/lib/*.sh tests/*.sh; do
@@ -747,13 +632,9 @@ claude plugin validate --strict skills
 claude plugin validate --strict commands
 ```
 
-Marketplace validation does not inspect every skill, command, or hook file.
-Validate those directories explicitly. The root `AGENTS.md` supplies context
-for agents in this repository. The bundled `SKILL.md` supplies context for the
-installed skill.
-
-On macOS/Linux, install Go 1.26+ and the terminal test dependency in a Python
-environment before running the reviewer tests:
+Marketplace validation alone does not inspect skill, command, and hook contents.
+Validate them explicitly. For terminal tests on macOS/Linux, install Go and the
+Python test dependency in an isolated environment:
 
 ```bash
 python3 -m venv /tmp/afterparty-tests
@@ -761,33 +642,39 @@ python3 -m venv /tmp/afterparty-tests
 PATH="/tmp/afterparty-tests/bin:$PATH" bash tests/test-review.sh
 ```
 
-The review suite builds the helper explicitly. It runs Go layout and
-whole-frame snapshot tests. It also drives the public CLI in a
-pseudo-terminal. Fixtures cover 60×20 and 80×24 layouts in color and monochrome.
-They test input during collection and refresh, paging before marking, and
-confirmation before choices are discarded. `pyte` is a test dependency only.
+Review tests build the helper, check frames, and drive the CLI in a
+pseudo-terminal. Build-inventory tests use disposable repositories and private
+state. `pyte` is a test dependency only.
 
-Run `bash tests/run.sh` with that environment in a disposable VM, container, or
-CI runner. Linux live-stop tests discover processes across the machine and
-send real signals. Changing `HOME` alone does not isolate them. Other mutation
-fixtures intercept machine tools and signals. CI runs the suite on Ubuntu and
-Windows. ShellCheck uses `--severity=error`.
+Run the full suite **inside a disposable VM, container, or CI runner**:
 
-The [documentation accuracy audit](docs/reviews/documentation-audit.md) records
-an earlier contract review and its implementation limits. Historical plans in
-`docs/plans/` describe the releases that introduced the current safety model.
-This README and command help define the current command contract.
+```bash
+PATH="/tmp/afterparty-tests/bin:$PATH" bash tests/run.sh
+```
 
-The CLI reads its version from `skills/afterparty/VERSION`. Keep the plugin
-manifest and skill metadata synchronized with it. Bundle the root license.
-Record user-visible changes in [CHANGELOG.md](./CHANGELOG.md).
+Linux live-stop tests discover machine processes and send real signals.
+Changing HOME alone does not isolate them. Other mutation fixtures intercept
+machine tools and signals. CI defines Ubuntu and Windows jobs.
 
-## Lineage
-
-The first iteration of Afterparty combined my own agent cleanup skills and
-methods with [Agent-Broom](https://github.com/Kevin-Liu-01/Agent-Broom) by Kevin
-Liu. The LICENSE retains Kevin Liu's copyright line.
+The canonical version is `skills/afterparty/VERSION`. Keep plugin and skill
+metadata synchronized. Preserve the bundled license and update
+[CHANGELOG.md](./CHANGELOG.md) for user-visible changes.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+Afterparty uses the [MIT license](./LICENSE). The license retains copyright
+notices for Kevin Liu and Wenjie Fu. The bundled skill includes the same license.
+
+### Credits and lineage
+
+- **Wenjie Fu** contributed the cleanup methods combined with Agent-Broom in
+  Afterparty's first iteration.
+- **Kevin Liu**, author of [Agent-Broom](https://github.com/Kevin-Liu-01/Agent-Broom),
+  provided the original foundation for the process ledger, audit/stop workflow,
+  and report-first defaults. Afterparty retains his MIT copyright notice.
+- **DevClean by ImL1s** (`ImL1s/devclean`) inspired the orphan, deep, optimize,
+  and disk mode structure. Agent-Broom records that influence in its
+  [original acknowledgment](https://github.com/Kevin-Liu-01/Agent-Broom/blob/1bab484c38a3061826cbb93cec591c5d786a48db/README.md#devclean-mode).
+
+The bundle includes terminal dependency licenses in
+[THIRD_PARTY_NOTICES.txt](skills/afterparty/ui/THIRD_PARTY_NOTICES.txt).
