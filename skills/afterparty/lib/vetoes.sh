@@ -18,6 +18,7 @@
 # withheld by an earlier rule than the one under test looks exactly like the
 # rule working, which is how five assertions in this suite were once found
 # unable to fail.
+. "${BASH_SOURCE[0]%/*}/artifact-names.sh" || ARTIFACT_NAMES_AVAILABLE=0
 
 # Physical path of $1: symlinks resolved, no trailing slash. Fails (nonzero,
 # empty) when the path cannot be reached, which callers treat as a veto rather
@@ -144,10 +145,8 @@ veto_has_local_data() (
 
 # The typed artifact path must be one of the bundled collector's target kinds.
 veto_artifact_name() {
-  case "${1##*/}" in
-    .turbo|.vite|.cache|.parcel-cache|.rollup.cache|.next|dist|build|out|.output|.svelte-kit|.astro|storybook-static|coverage|.nyc_output|test-results|playwright-report|.playwright-mcp|.vitest|*.tsbuildinfo|.eslintcache) return 0 ;;
-    *) return 1 ;;
-  esac
+  [ "${ARTIFACT_NAMES_AVAILABLE:-0}" -eq 1 ] || return 1
+  artifact_name_supported "$1"
 }
 
 # True when any live process in the pid->cwd map on stdin ($1 = map file) has

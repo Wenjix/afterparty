@@ -1,0 +1,20 @@
+ [1mafterparty[m [1mREVIEW / Review choices[m  [2m09:23 UTC · 2m 5s ago[m
+ Scope: /work/afterparty                                  
+ Scan: complete | 3 available | 1 withheld                
+ [1m1 process group · 2 members[m                              
+ [1m0 worktrees[m                                              
+ [1m1 artifact[m                                               
+                                                          
+ [1;7m> [x] PGID 4821[m[7m                                          [m
+ If applied: Stop every group member. Restart the service 
+ manually.                                                
+ Member 4821: npm run dev --token [REDACTED]              
+ Member 4822: node vite --host 127.0.0.1                  
+                                                          
+ [1m[x] /work/afterparty/.next[m                               
+ If applied: Delete build output. Run a build to recreate 
+ it.                                                      
+ [2m2 marked | Lines 1-13 of 14[m                              
+ Mark targets to include in the plan.                     
+ Enter Continue to Save plan | Space unmark               
+ Up/Down focus | d details | Esc Choose | q quit | ? help 

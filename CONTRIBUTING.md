@@ -1,23 +1,23 @@
 # Contributing to Afterparty
 
-Thanks for helping improve Afterparty. The project is maintainer-led by Wenjie
-Fu and welcomes focused fixes, tests, documentation, platform improvements,
-and carefully scoped features.
+Thanks for helping improve Afterparty. Wenjie Fu maintains Afterparty.
+Contributions can include focused fixes,
+tests, documentation, platform improvements, and carefully scoped features.
 
 ## Project model
 
-Coding agents may assist with implementation, testing, reviews, and
-documentation. The human maintainer reviews every change before it is merged
-or released. Agents do not receive merge or release authority and must not
-perform destructive cleanup without explicit approval.
+Coding agents can assist with implementation, tests, reviews, and
+documentation. The human maintainer reviews every change before merge or
+release. Agents do not receive merge or release authority. Destructive cleanup
+requires explicit approval.
 
 Afterparty follows an evidence-before-action model:
 
-1. deterministic collectors gather observations;
-2. an agent or contributor explains what the evidence supports;
-3. the maintainer selects the intended treatment;
-4. the implementation checks the target again at the action boundary; and
-5. the tool records the result.
+1. Deterministic collectors gather observations.
+2. An agent or contributor explains what the evidence supports.
+3. The maintainer selects the intended treatment.
+4. The implementation checks the target again immediately before the action.
+5. The tool records the result.
 
 ## Before you start
 
@@ -33,14 +33,30 @@ Afterparty follows an evidence-before-action model:
 
 ## Development requirements
 
-Afterparty targets Bash 3.2+, Git, standard Unix tools, and Python 3 for its
-documentation and activity workflows. Native process inspection targets macOS
-and Linux; WSL provides the Unix process interface on Windows. Git Bash has
-explicitly degraded process-audit support.
+Afterparty targets Bash 3.2+, Git, and standard Unix tools. Documentation and
+activity workflows require Python 3. Native process inspection targets macOS
+and Linux. WSL provides the Unix process interface on Windows. Git Bash has
+limited support for process audits.
+
+The optional macOS/Linux reviewer uses Bubble Tea and Lip Gloss. Its build
+requires Go 1.26+. `skills/afterparty/bin/build-review` creates the bundled helper.
+The pseudo-terminal (PTY) tests also need Python packages. Install them in a
+Python environment with `python3 -m pip install -r tests/requirements.txt`.
+
+`tests/test-review.sh` builds the helper explicitly and runs the Go and Python
+tests. Ordinary CLI commands do not require these packages. See the
+[README setup commands](README.md#development-and-validation).
+
+`tests/test-builds.sh` checks cross-project discovery, inventory history,
+read-only CLI behavior, and the terminal inventory. It uses disposable
+repositories and private state. It builds the helper on macOS/Linux when Go
+is available.
+Inventory fixtures must prove that supported output was found as well as
+asserting that no cleanup occurred.
 
 Run the full test suite in a disposable VM, container, or CI runner before
-submitting a change. Linux live-stop coverage uses real machine-wide process
-discovery and signals:
+submitting a change. Linux live-stop tests discover real processes across the
+machine and send real signals:
 
 ```bash
 bash tests/run.sh
@@ -49,14 +65,14 @@ bash tests/run.sh
 For shell-only changes, also run syntax and blocking lint checks:
 
 ```bash
-for script in bin/afterparty skills/afterparty/bin/afterparty skills/afterparty/lib/*.sh tests/*.sh; do
+for script in bin/afterparty skills/afterparty/bin/afterparty skills/afterparty/bin/build-review skills/afterparty/lib/*.sh tests/*.sh; do
   bash -n "$script" || exit 1
 done
 shellcheck --severity=error skills/afterparty/lib/*.sh
 ```
 
 When documentation or command behavior changes, run the relevant documentation
-review and update user-facing examples. Before a release, follow
+review. Update user-facing examples. Before a release, follow
 [RELEASING.md](./RELEASING.md).
 
 ## Workflow
@@ -67,7 +83,7 @@ review and update user-facing examples. Before a release, follow
    paths.
 4. Update documentation, changelog entries, and metadata when the user-visible
    contract changes.
-5. Run the validation commands above and inspect the final diff.
+5. Run the validation commands above. Inspect the final diff.
 6. Open a pull request with the completed checklist below.
 
 Use lowercase conventional commit prefixes such as `feat:`, `fix:`, `docs:`,
@@ -80,8 +96,8 @@ human remains responsible for understanding the diff and its consequences.
 
 - Review every agent-generated change before merging it.
 - Do not give an agent credentials, merge authority, or release authority.
-- Do not let an agent kill processes, remove worktrees or artifacts, delete
-  documents, or rewrite history without an explicit, reviewable approval.
+- Require explicit approval that names the targets before an agent stops
+  processes, removes worktrees/artifacts, deletes documents, or rewrites history.
 - If an agent made substantial changes, summarize the assistance and the
   validation performed in the pull request.
 
@@ -102,7 +118,7 @@ documentation, tests, examples, or platform support are valuable.
 ## Support and decisions
 
 Support is best effort. Use a GitHub issue for ordinary questions, bugs, and
-feature proposals. Keep substantive design decisions in public issues or pull
-requests so future contributors can find the reasoning. Security concerns and
-conduct reports use the private channels described in [SECURITY.md](./SECURITY.md)
-and [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
+feature proposals. Record substantive design decisions in public issues or
+pull requests. This lets future contributors find the reasoning. For security
+concerns and conduct reports, use the private channels in
+[SECURITY.md](./SECURITY.md) and [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).

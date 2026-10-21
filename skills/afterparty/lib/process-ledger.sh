@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# process-ledger.sh - record existing processes and review their process groups.
+# afterparty list/add/stop/prune - record processes and review their process groups.
 # add and prune update the ledger immediately; stop signals only with --kill.
 # add attributes a record to the caller's workspace, not the target PID's cwd.
-# Text after -- is an optional display label; it does not launch a command or
-# verify the target's argv. With no label, add reads the target's command.
+# Text after -- is an optional display label. It does not launch a command.
+# It does not check the target's arguments. Without a label, add reads the target's command.
 #
 # Usage:
-#   process-ledger.sh add --pid 123 --kind dev --port 3000 --purpose "verify UI" -- pnpm dev website
-#   process-ledger.sh list [--json] [--root DIR | --all] [--kind KIND]
-#   process-ledger.sh stop [--kill] [--root DIR | --all] [--kind KIND] [--keep PGID]
-#   process-ledger.sh prune [--root DIR | --all]
-# list, stop and prune default to the caller's Git root (or exact cwd outside
-# Git). stop --kill acts on matching recorded groups; it has no idle/CPU gate.
-# --keep (alias --keep-pgid) spares one group. Prune drops only verified absent
-# groups and retains records whose group is live or cannot be inspected.
+#   afterparty add --pid 123 --kind dev --port 3000 --purpose "verify UI" -- pnpm dev website
+#   afterparty list [--json] [--root DIR | --all] [--kind KIND]
+#   afterparty stop [--kill] [--root DIR | --all] [--kind KIND] [--keep PGID]
+#   afterparty prune [--root DIR | --all]
+# list, stop, and prune use the caller's Git root, or the current directory outside Git.
+# stop --kill stops matching recorded groups. It does not require low CPU use or old activity.
+# --keep (alias --keep-pgid) keeps one group.
+# prune deletes records only after it confirms that the group is absent.
+# prune keeps records for live groups and groups it cannot inspect.
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,7 +36,7 @@ LEDGER_LOCK="${LEDGER}.lock"
 SELF_PGID="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')"
 
 usage() {
-  sed -n '2,16p' "$0"
+  sed -n '2,/^set -uo pipefail/{ /^set /d; p; }' "$0"
 }
 
 ensure_ledger() {
@@ -102,9 +103,11 @@ is_protected_pid() {
 pgid_exists() { fp_group_state "$1"; }
 
 print_header() {
-  local hc="" hr=""
-  if [ "$STYLE_ON" -eq 1 ]; then hc="$C_DIM"; hr="$C_RESET"; fi
-  printf '%s%-10s %-7s %-7s %-8s %-6s %-6s %-24s %s%s\n' "$hc" STATUS PID PGID KIND PORT CPU PURPOSE 'COMMAND / WORKSPACE' "$hr"
+  if [ "$STYLE_ON" -eq 1 ]; then
+    s_dim 'STATUS         PID    PGID   PORT    CPU%  KIND'
+  else
+    printf '%-10s %-7s %-7s %-8s %-6s %-6s %-24s %s\n' STATUS PID PGID KIND PORT CPU PURPOSE 'COMMAND / WORKSPACE'
+  fi
 }
 
 row_matches() {
@@ -222,6 +225,7 @@ list_entries() {
   done
 
   ensure_ledger || { echo "ledger unavailable: $LEDGER" >&2; return 1; }
+  {
   if [ "$json" -eq 0 ]; then
     s_dim "Ledger: $LEDGER"
     s_dim "Scope: $([ "$all_roots" -eq 1 ] && printf 'all workspaces' || printf '%s' "$want_root")"
@@ -248,9 +252,14 @@ list_entries() {
         "$(json_kvn pid "$pid")" "$(json_kvn pgid "${pgid:-}")" "$(json_kv kind "$kind")" \
         "$(json_kvn port "${port:-}")" "$(json_kvz cpu "$jcpu")" "$(json_kv purpose "${purpose:-}")" \
         "$(json_kv command "${command_label:-}")" "$(json_kv root "$root")" "$(json_kv ts "$ts")"
+    elif [ "$STYLE_ON" -eq 1 ]; then
+      rc=""; rr=""
+      if [ "$status" = dead ]; then rc="$C_DIM"; rr="$C_RESET"; fi
+      printf '%s%-10s %7s %7s %6s %7s  %s%s\n' \
+        "$rc" "$status" "$pid" "${pgid:-?}" "${port:-?}" "${cpu:-?}" "$kind" "$rr"
+      printf '    Purpose: %s\n    Command: %s\n    Workspace: %s\n' "${purpose:-not recorded}" "${command_label:-not recorded}" "$root"
     else
       rc=""; rr=""
-      if [ "$STYLE_ON" -eq 1 ] && [ "$status" = "dead" ]; then rc="$C_DIM"; rr="$C_RESET"; fi
       printf '%s%-10s %-7s %-7s %-8s %-6s %-6s %-24s %.80s  %s%s\n' \
         "$rc" "$status" "$pid" "${pgid:-?}" "$kind" "${port:-?}" "${cpu:-?}" "${purpose:-}" "${command_label:-}" "$root" "$rr"
     fi
@@ -258,6 +267,7 @@ list_entries() {
   if [ "$json" -eq 0 ]; then
     tally_add ledger.live "$N_LIVE"
   fi
+  } | if [ "$json" -eq 0 ]; then s_wrap; else cat; fi
 }
 
 stop_entries() {
@@ -278,10 +288,10 @@ stop_entries() {
 
   ensure_ledger || { echo "ledger unavailable: $LEDGER" >&2; return 1; }
   if [ "$do_kill" -eq 1 ]; then
-    s_mode "$C_RED" "STOP" " - settling the tab, stopping recorded groups" \
+    s_mode "$C_RED" "STOP" ": Stop selected recorded process groups." \
       "STOP - recorded live process groups"
   else
-    s_mode "$C_YEL" "DRY RUN" " - the tab is open; nothing stopped yet (--kill to settle up)" \
+    s_mode "$C_YEL" "DRY RUN" ": Preview recorded process groups. Use --kill to stop them." \
       "DRY RUN - recorded live process groups"
   fi
   s_dim "Scope: $([ "$all_roots" -eq 1 ] && printf 'all workspaces' || printf '%s' "$want_root")"
@@ -357,11 +367,11 @@ stop_entries() {
       echo
       s_card_open
       if [ "$n_failed" -gt 0 ]; then
-        s_card_line "${C_BOLD}${C_YEL}ledger incomplete — no group selected${C_RESET}"
+        s_card_line "${C_BOLD}${C_YEL}Ledger inspection is incomplete. No process group selected.${C_RESET}"
       elif [ "$((n_prot + n_keep + n_skip))" -gt 0 ]; then
-        s_card_line "${C_BOLD}${C_YEL}ledger checked — no group selected${C_RESET}"
+        s_card_line "${C_BOLD}${C_YEL}Ledger inspection complete. No process group selected.${C_RESET}"
       else
-        s_card_line "${C_BOLD}${C_GRN}ledger checked — no group selected${C_RESET}"
+        s_card_line "${C_BOLD}${C_GRN}Ledger inspection complete. No process group selected.${C_RESET}"
       fi
       segs="$(s_segments \
         "$([ "$n_prot" -gt 0 ] && echo "$G_SKIP $n_prot protected")" \
@@ -370,9 +380,9 @@ stop_entries() {
         "$([ "$n_failed" -gt 0 ] && echo "$n_failed failed")")"
       if [ -n "$segs" ]; then s_card_line "   $segs"; fi
       if [ "$n_failed" -gt 0 ]; then
-        s_card_line "   no action taken — identity or protection could not be verified"
+        s_card_line "   Afterparty took no action. It could not check identity or protection."
       else
-        s_card_line "   see you next session 🎉"
+        s_card_line "   See you next session."
       fi
       s_card_close
     fi
@@ -386,16 +396,16 @@ stop_entries() {
     if cards_on; then
       echo
       s_card_open
-      s_card_line "${C_BOLD}${C_YEL}🧹 the damage — ledger${C_RESET}"
+      s_card_line "${C_BOLD}${C_YEL}🧹 Recorded process groups${C_RESET}"
       segs="$(s_segments \
         "$G_ACT $N_GROUPS would-kill" \
         "$([ "$n_prot" -gt 0 ] && echo "$G_SKIP $n_prot protected")" \
         "$([ "$n_keep" -gt 0 ] && echo "$n_keep kept")" \
         "$([ "$n_skip" -gt 0 ] && echo "$n_skip skipped")")"
       s_card_line "   $segs"
-      s_card_line "   $(s_n "$N_GROUPS" 'recorded process group still on the tab' 'recorded process groups still on the tab')"
+      s_card_line "   $(s_n "$N_GROUPS" 'recorded process group selected' 'recorded process groups selected')"
       s_card_line
-      s_card_line "   closing time: ${C_CYAN}afterparty stop --kill${C_RESET}"
+      s_card_command "   Stop recorded groups: ${C_CYAN}afterparty stop --kill${C_RESET}"
       s_card_close
     fi
     if [ "$n_failed" -gt 0 ]; then return 1; fi
@@ -444,7 +454,7 @@ stop_entries() {
   done
   groups="$signaled_groups"
   if [ -n "$groups" ]; then
-    s_heartbeat "waiting 2s for stragglers"
+    s_heartbeat "Wait 2 seconds for the process groups to exit"
     sleep 2
   fi
   for group in $groups; do
@@ -529,19 +539,19 @@ stop_entries() {
   if cards_on; then
     echo
     s_card_open
-    s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty stop --kill${C_RESET}"
+    s_card_line "${C_BOLD}${C_CYAN}🧾 Cleanup receipt: afterparty stop --kill${C_RESET}"
     segs="$(s_segments \
-      "$([ "$N_STOPPED" -gt 0 ] && echo "$G_OK $N_STOPPED sent home")" \
+      "$([ "$N_STOPPED" -gt 0 ] && echo "$G_OK $N_STOPPED stopped")" \
       "$([ "$n_prot" -gt 0 ] && echo "$G_SKIP $n_prot protected")" \
       "$([ "$n_failed" -gt 0 ] && echo "$G_SKIP $n_failed failed")")"
     if [ -n "$segs" ]; then s_card_line "   $segs"; fi
     if [ "$N_STOPPED" -gt 0 ]; then
-      s_card_line "   $(s_n "$N_STOPPED" 'process group sent home' 'process groups sent home')"
+      s_card_line "   $(s_n "$N_STOPPED" 'process group stopped' 'process groups stopped')"
     else
-      s_card_line "   no process-group exit was confirmed"
+      s_card_line "   Afterparty did not confirm any process group exit."
     fi
     s_card_line
-    s_card_line "   thanks for partying responsibly 🎉"
+    s_card_line "   Review the results above."
     s_card_close
   fi
   printf '%s stopped · %s protected · %s failed\n' "$N_STOPPED" "$n_prot" "$n_failed"

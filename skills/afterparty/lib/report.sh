@@ -54,7 +54,7 @@ report_remind() {
     status="$(report_meta "$path" status)"; session="$(report_meta "$path" session_id)"
     now="$(date +%s)"; age=unknown
     case "$epoch" in ''|*[!0-9]*) ;; *) age="$(( (now - epoch) / 60 )) minutes" ;; esac
-    printf 'Afterparty: last explicit audit is %s (%s old; session %s): %s. Review its scope before starting duplicate services.\n' \
+    printf 'Afterparty: last explicit audit is %s (%s old; session %s): %s. Check its scope before you start another service.\n' \
       "${status:-unknown}" "$age" "${session:-unknown}" "$path"
   fi
   marker="$(report_cache_dir)/session-ended.md"
@@ -77,7 +77,7 @@ report_session_end() {
   cache="$(report_cache_dir)" || return 1
   state_secure_dir "$cache/sessions" || return 1
   tmp="$(mktemp "$cache/.session-ended.XXXXXX")" || return 1
-  printf 'Afterparty: session %s ended at %s. No exit-time audit was run; use afterparty audit --report for a current snapshot.\n' "$session" "$stamp" > "$tmp"
+  printf 'Afterparty: session %s ended at %s. Afterparty did not run an audit at session end. Run afterparty audit --report for current information.\n' "$session" "$stamp" > "$tmp"
   chmod 600 "$tmp" 2>/dev/null || true
   archive="$cache/sessions/$session-ended-$(date +%s)-$$.md"
   if ! cp "$tmp" "$archive" || ! chmod 600 "$archive" || ! mv -f "$tmp" "$cache/session-ended.md"; then

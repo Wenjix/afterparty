@@ -190,7 +190,8 @@ try:
     if chosen:
         result=run(t,env,'--history','--apply','--target',chosen[0])
         check(not old.exists() and recent.exists() and result.returncode!=0, 'D4: selected stale history removed; fresh history retained and disclosed')
-        check('withheld' in result.stdout and 'already spotless' not in result.stdout, 'D4: retention must not yield a spotless receipt')
+        check('withheld' in result.stdout and 'No process exits or reclaimed space to report.' not in result.stdout,
+              'D4: retention must not produce an empty-success receipt')
     blob(old,True); preview=run(t,env,'--history'); chosen=targets(preview.stdout,'2000/01/02')
     if chosen:
         put(old,'recently resumed\n'*180000)
@@ -277,7 +278,7 @@ try:
               'D13: successful simctl exit cannot replace the Shutdown postcondition')
 
     t,home,env=fixture('agents'); env['REVIEW_AGENTS']='1'
-    chosen=targets(run(t,env,'--optimize').stdout,'disable FigmaAgent')
+    chosen=targets(run(t,env,'--optimize').stdout,'Disable FigmaAgent')
     check(len(chosen)==1,'D14: persistent launch-agent changes must have individual targets')
     if chosen:
         result=run(t,env,'--optimize','--apply','--target',chosen[0])
@@ -360,11 +361,11 @@ esac
             check(('pgrep discovery' if backend=='pgrep' else 'ps fallback discovery') in calls,
                   'D18: '+backend+' '+outcome+' discovery path must actually run: '+result.stdout)
             if outcome == 'empty':
-                check(result.returncode==0 and '(none)' in result.stdout and 'spotless' in result.stdout,
+                check(result.returncode==0 and '(none)' in result.stdout and 'No cleanup candidates found in the inspected scope.' in result.stdout,
                       'D18: completed '+backend+' scan with no matches must remain a successful empty report: '+result.stdout)
             else:
-                check(result.returncode!=0 and 'process discovery unavailable' in result.stdout and 'spotless' not in result.stdout,
-                      'D18: failed '+backend+' discovery must return nonzero and withhold a spotless claim: '+result.stdout)
+                check(result.returncode!=0 and 'process discovery unavailable' in result.stdout and 'No cleanup candidates found in the inspected scope.' not in result.stdout,
+                      'D18: failed '+backend+' discovery must return nonzero without claiming an empty scan: '+result.stdout)
             check(not (t/'signals').exists(),'D18: discovery fixtures must never signal')
 finally:
     shutil.rmtree(root)

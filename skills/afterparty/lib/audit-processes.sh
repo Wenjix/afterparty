@@ -1,24 +1,27 @@
 #!/usr/bin/env bash
-# audit-processes.sh — report visible test/watch runners, dev servers and
-# automation browsers. Classification does not prove an agent spawned them or
-# that they are idle. --kill CATEGORY authorizes all matching visible groups;
-# --pgid narrows that set. Signals affect every current member of a process
-# group, including unclassified siblings; descendants in other groups remain.
-# Identity checks and the bundled protection patterns can withhold signals.
+# afterparty audit - report visible test/watch runners, dev servers, and
+# automation browsers. A match does not prove that an agent started a process.
+# A match does not prove that the process is idle.
+# --kill CATEGORY selects all matching visible process groups.
+# --pgid limits that selection to the listed group IDs.
+# Signals affect every current group member, including members outside the category.
+# Descendants in other groups remain. Identity and protection checks can refuse signals.
 #
 # Usage:
-#   audit-processes.sh                      # report all categories (dry run)
-#   audit-processes.sh --kill tests         # all detected test/watch groups
-#   audit-processes.sh --kill dev --keep 87239   # all detected dev groups except 87239
-#   audit-processes.sh --kill browser       # all detected automation-browser groups
-#   audit-processes.sh --kill tests,dev     # multiple machine-wide categories
-#   audit-processes.sh --kill dev --pgid 123,456  # only reviewed groups
-#   audit-processes.sh --kill dev --pgid 123 --expect 123:9f3ac1b2c3d4  # and only if unchanged
-#   audit-processes.sh --json               # JSON Lines report (no --kill)
-#   audit-processes.sh --strict             # nonzero for unavailable process/listener scans
+#   afterparty audit                           # report all categories (dry run)
+#   afterparty audit --kill tests               # all detected test/watch groups
+#   afterparty audit --kill dev --keep 87239     # all detected dev groups except 87239
+#   afterparty audit --kill browser             # all detected automation-browser groups
+#   afterparty audit --kill tests,dev           # multiple categories across the machine
+#   afterparty audit --kill dev --pgid 123,456   # only the listed groups
+#   afterparty audit --kill dev --pgid 123 --expect 123:9f3ac1b2c3d4  # only if unchanged
+#   afterparty audit --json                     # JSON Lines report (no --kill)
+#   afterparty audit --strict                   # exit 1 if a process or listener scan is unavailable
 #
-# Exit codes: 0 report/no failed cleanup (may include protected or absent groups);
-# 1 failed cleanup or unavailable scans with --strict; 2 usage error.
+# Exit codes:
+# 0: Report completed or no cleanup failed. Groups can remain protected or absent.
+# 1: Cleanup failed, or a scan was unavailable with --strict.
+# 2: Usage error.
 set -uo pipefail
 
 # --- constants ---------------------------------------------------------------
@@ -31,6 +34,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/style.sh"
 # Private local record of confirmed mutation outcomes.
 . "$DIR/journal.sh"
+. "$DIR/apply-events.sh"
 
 # Category patterns live in categories.sh so plan.sh matches on exactly the
 # same definitions this script kills by; duplicating them is how the two drift.
@@ -86,7 +90,7 @@ list_matches() {
 # Print a human report for a category. Sets LAST_N to the row count so the
 # caller can tally findings.
 report() {
-  local label="$1" re="$2" rows hc="" hr="" line pid ppid pgid cpu et
+  local label="$1" re="$2" rows line pid ppid pgid cpu et
   LAST_N=0
   if [ "$PS_STATUS" != "ok" ]; then
     s_hdr "$label"
@@ -100,12 +104,10 @@ report() {
     s_dim "  (none)"
     return
   fi
-  if [ "$STYLE_ON" -eq 1 ]; then hc="$C_DIM"; hr="$C_RESET"; fi
-  printf '  %s%-7s %-7s %-7s %-6s %-10s %s%s\n' "$hc" PID PPID PGID %CPU ELAPSED COMMAND "$hr"
   if [ "$STYLE_ON" -eq 1 ]; then
-    # Styled rows render in bash so %CPU can carry a severity tint and
-    # ELAPSED reads as "1d 2h"; the plain awk path below stays byte-exact.
-    echo "$rows" | while IFS= read -r line; do
+    {
+    s_process_header
+    while IFS= read -r line; do
       [ -n "$line" ] || continue
       # set -f: a COMMAND field containing * must never glob against cwd.
       # shellcheck disable=SC2086
@@ -113,11 +115,11 @@ report() {
       [ $# -ge 6 ] || continue
       pid="$1" ppid="$2" pgid="$3" cpu="$4" et="$5"
       shift 5
-      printf '  %-7s %-7s %-7s %s %-10s %s\n' "$pid" "$ppid" "$pgid" \
-        "$(s_sevcell "$cpu" 10 50 "$(printf '%-6s' "$cpu")")" \
-        "$(s_etime "$et")" "${*:1:9}"
-    done
+      s_process_row "$pid" "$ppid" "$pgid" "$cpu" "$et" "$*"
+    done <<< "$rows"
+    } | s_wrap
   else
+    printf '  %-7s %-7s %-7s %-6s %-10s %s\n' PID PPID PGID %CPU ELAPSED COMMAND
     echo "$rows" | while IFS= read -r line; do
       echo "$line" | awk '{printf "  %-7s %-7s %-7s %-6s %-10s ", $1,$2,$3,$4,$5; for(i=6;i<=NF && i<=14;i++) printf "%s ", $i; print ""}'
     done
@@ -137,8 +139,15 @@ report_localhost() {
     return
   fi
   LAST_N=$(printf '%s\n' "$rows" | grep -c .)
-  s_dim "  COMMAND     PID     USER   FD   TYPE DEVICE SIZE/OFF NODE NAME"
-  echo "$rows" | awk '{print "  " $0}'
+  if [ "$STYLE_ON" -eq 1 ]; then
+    {
+      s_dim '      PID  COMMAND / LISTEN ADDRESS'
+      printf '%s\n' "$rows" | awk '{printf "  %7s  %s\n    %s\n", $2, $1, $($NF == "(LISTEN)" ? NF-1 : NF)}'
+    } | s_wrap
+  else
+    s_dim "  COMMAND     PID     USER   FD   TYPE DEVICE SIZE/OFF NODE NAME"
+    echo "$rows" | awk '{print "  " $0}'
+  fi
 }
 
 # Distinct candidate pgids for a category. The caller applies --keep so styled
@@ -199,7 +208,14 @@ identity_moved() {
 }
 
 record_process_outcome() {
-  journal_action "$@" || { s_skip "  process outcome occurred but its receipt could not be recorded"; return 1; }
+  AE_RECEIPT=not-attempted
+  if journal_action "$@"; then
+    [ "${AFTERPARTY_JOURNAL:-1}" = 0 ] || AE_RECEIPT=recorded
+  else
+    AE_RECEIPT=failed
+    s_skip "  process outcome occurred but its receipt could not be recorded"
+    return 1
+  fi
 }
 
 kill_group() {
@@ -220,6 +236,7 @@ kill_group() {
   # draining the group.
   if pgid_has_protected "$pg"; then
     s_skip "  protect pgid $pg: shares its group with a protected process"
+    ae_process_decision vetoed protected 'Group contains a protected process.'
     return 3
   else
     protection_rc=$?
@@ -229,6 +246,8 @@ kill_group() {
       # failure. It was counted as one because "no members" and "ps failed"
       # shared a return code.
       s_skip "  pgid $pg had already exited — nothing to signal"
+      ae_process_decision gone already-absent 'Group was absent before signalling.'
+      AE_CONFIRMED=1
       return 6
     fi
     if [ "$protection_rc" -eq 2 ]; then
@@ -238,21 +257,25 @@ kill_group() {
   fi
   if ! member_proof="$(fp_members_for_pgid "$pg")"; then
     s_skip "  pgid $pg: identity unavailable before SIGTERM — not signalled"
+    ae_process_decision failed identity-unavailable 'Group identity was unavailable before SIGTERM.'
     return 1
   fi
   if identity_moved "$pg"; then
     s_skip "  pgid $pg: identity changed or unavailable since approval — not signalled"
+    ae_process_decision drift identity-changed 'Group identity changed or became unavailable before SIGTERM.'
     record_process_outcome process_group.stop "pgid:$pg" failed "identity changed before SIGTERM"
     return 5
   fi
+  AE_ATTEMPTED=1
   if kill -TERM -"$pg" 2>/dev/null; then
     s_kill "  SIGTERM -> pgid $pg"
   fi
-  s_heartbeat "waiting 2s for stragglers"
+  s_heartbeat "Wait 2 seconds for the process group to exit"
   sleep 2
   if pgid_exists "$pg"; then
     if pgid_has_protected "$pg"; then
       s_skip "  pgid $pg became protected before SIGKILL — skipped"
+      ae_process_decision vetoed protected 'Group became protected before SIGKILL.'
       record_process_outcome process_group.stop "pgid:$pg" failed "protected member detected before SIGKILL"
       return 4
     else
@@ -265,6 +288,8 @@ kill_group() {
         # that actually happened, which is the mirror image of claiming work
         # that did not. "Already gone" is only ever a PRE-signal verdict.
         s_ok "  pgid $pg exited after SIGTERM"
+        ae_process_decision applied postcondition-confirmed 'Group was confirmed absent after SIGTERM.'
+        AE_CONFIRMED=1
         record_process_outcome process_group.stop "pgid:$pg" succeeded "exited after SIGTERM" || return 7
         return 0
       fi
@@ -277,10 +302,13 @@ kill_group() {
     if fp_group_matches "$pg" "$member_proof"; then :; else
       state_rc=$?
       if [ "$state_rc" -eq 1 ]; then
+        ae_process_decision applied postcondition-confirmed 'Group was confirmed absent after signalling.'
+        AE_CONFIRMED=1
         record_process_outcome process_group.stop "pgid:$pg" succeeded "group confirmed absent" || return 7
         return 0
       fi
       s_skip "  pgid $pg: identity changed or unavailable before SIGKILL — not signalled"
+      ae_process_decision drift identity-changed 'Group identity changed or became unavailable before SIGKILL.'
       record_process_outcome process_group.stop "pgid:$pg" failed "identity changed before SIGKILL"
       return 5
     fi
@@ -290,12 +318,14 @@ kill_group() {
     sleep 0.1
     if pgid_exists "$pg"; then
       s_skip "  failed to stop pgid $pg"
+      ae_process_decision survived group-survived 'Group still has members after signalling.'
       record_process_outcome process_group.stop "pgid:$pg" failed "group still has members"
       return 1
     else
       state_rc=$?
       if [ "$state_rc" -eq 2 ]; then
         s_skip "  could not confirm pgid $pg exited"
+        ae_process_decision failed postcondition-unavailable 'Group absence could not be checked after signalling.'
         record_process_outcome process_group.stop "pgid:$pg" failed "exit could not be confirmed"
         return 1
       fi
@@ -304,10 +334,13 @@ kill_group() {
     state_rc=$?
     if [ "$state_rc" -eq 2 ]; then
       s_skip "  could not confirm pgid $pg exited"
+      ae_process_decision failed postcondition-unavailable 'Group absence could not be checked after signalling.'
       record_process_outcome process_group.stop "pgid:$pg" failed "exit could not be confirmed"
       return 1
     fi
   fi
+  ae_process_decision applied postcondition-confirmed 'Group was confirmed absent after signalling.'
+  AE_CONFIRMED=1
   record_process_outcome process_group.stop "pgid:$pg" succeeded "group confirmed absent" || return 7
   return 0
 }
@@ -391,7 +424,7 @@ if [ "${PGID_SUPPLIED:-0}" -eq 1 ] && [ -z "$PGID_FILTER" ]; then
 fi
 if [ -n "$PGID_FILTER" ]; then
   case "$PGID_FILTER" in
-    ,*|*,|*,,*|*[!0-9,]*) echo "--pgid wants comma-separated positive process-group IDs" >&2; exit 2 ;;
+    ,*|*,|*,,*|*[!0-9,]*) echo "--pgid requires comma-separated positive process-group IDs" >&2; exit 2 ;;
   esac
   OLD_IFS="$IFS" IFS=','
   for requested_pgid in $PGID_FILTER; do
@@ -435,6 +468,8 @@ for requested_category in $KILL_CATS; do
   case "$requested_category" in tests|dev|browser) : ;; *) echo "unknown category: $requested_category" >&2; exit 2 ;; esac
 done
 IFS="$validate_ifs"
+EXPECT_MAP="${EXPECT_MAP:-}"
+ae_child_setup || exit 1
 
 if [ "$JSON" -eq 1 ]; then
   json_capability processes "$PS_STATUS" "$PS_REASON"
@@ -457,27 +492,27 @@ print_procs_card() {
     [ "$N_TESTS" -gt 0 ] && cats="tests"
     [ "$N_DEV" -gt 0 ] && cats="${cats:+$cats,}dev"
     [ "$N_BROWSER" -gt 0 ] && cats="${cats:+$cats,}browser"
-    s_card_line "${C_BOLD}${C_YEL}🧹 the damage — processes${C_RESET}"
+    s_card_line "${C_BOLD}${C_YEL}🧹 Process scan results${C_RESET}"
     segs="$(s_segments \
       "$([ "$N_TESTS" -gt 0 ] && echo "$G_ACT $N_TESTS tests")" \
       "$([ "$N_DEV" -gt 0 ] && echo "$G_ACT $N_DEV dev")" \
       "$([ "$N_BROWSER" -gt 0 ] && echo "$G_ACT $N_BROWSER browser")" \
       "$([ "$N_LISTEN" -gt 0 ] && echo "$(s_n "$N_LISTEN" 'listener' 'listeners')")")"
     s_card_line "   $segs"
-    [ "$N_TESTS" -gt 0 ] && s_card_line "   $(s_n "$N_TESTS" 'test runner still running laps' 'test runners still running laps')"
-    [ "$N_DEV" -gt 0 ] && s_card_line "   $(s_n "$N_DEV" 'dev server still serving' 'dev servers still serving')"
-    [ "$N_BROWSER" -gt 0 ] && s_card_line "   $(s_n "$N_BROWSER" 'automation browser nobody closed' 'automation browsers nobody closed')"
-    [ "$N_LISTEN" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_LISTEN" 'localhost listener up — likely yours' 'localhost listeners up — likely yours'))${C_RESET}"
+    [ "$N_TESTS" -gt 0 ] && s_card_line "   $(s_n "$N_TESTS" 'test or watch process found' 'test or watch processes found')"
+    [ "$N_DEV" -gt 0 ] && s_card_line "   $(s_n "$N_DEV" 'dev server process found' 'dev server processes found')"
+    [ "$N_BROWSER" -gt 0 ] && s_card_line "   $(s_n "$N_BROWSER" 'automation browser process found' 'automation browser processes found')"
+    [ "$N_LISTEN" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_LISTEN" 'localhost listener detected' 'localhost listeners detected'))${C_RESET}"
     s_card_line
-    s_card_line "   closing time: ${C_CYAN}afterparty audit --kill $cats --pgid <reviewed-pgids>${C_RESET}"
+    s_card_command "   Stop reviewed groups: ${C_CYAN}afterparty audit --kill $cats --pgid <reviewed-pgids>${C_RESET}"
   elif [ "$N_UNAVAILABLE" -gt 0 ]; then
-    s_card_line "${C_BOLD}${C_YEL}⚠ audit incomplete — some scanners were unavailable${C_RESET}"
-    s_card_line "   $N_UNAVAILABLE unavailable scanner(s); no clean bill of health issued"
-    s_card_line "   run ${C_CYAN}afterparty doctor${C_RESET} after installing the missing tools"
+    s_card_line "${C_BOLD}${C_YEL}⚠ The audit is incomplete.${C_RESET}"
+    s_card_line "   $N_UNAVAILABLE scan(s) unavailable. Results may be missing."
+    s_card_line "   Install the missing tools. Then run ${C_CYAN}afterparty doctor${C_RESET}."
   else
-    s_card_line "${C_BOLD}${C_GRN}✨ spotless — no stragglers, nobody hiding in the bathroom${C_RESET}"
-    [ "$N_LISTEN" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_LISTEN" 'localhost listener up — likely yours' 'localhost listeners up — likely yours'))${C_RESET}"
-    s_card_line "   see you next session 🎉"
+    s_card_line "${C_BOLD}${C_GRN}✓ No process candidates found in the inspected scope.${C_RESET}"
+    [ "$N_LISTEN" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_LISTEN" 'localhost listener detected' 'localhost listeners detected'))${C_RESET}"
+    s_card_line "   See you next session."
   fi
   s_card_close
 }
@@ -486,32 +521,32 @@ print_procs_receipt() {
   local segs
   echo
   s_card_open
-  s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty audit --kill $KILL_CATS${C_RESET}"
+  s_card_line "${C_BOLD}${C_CYAN}🧾 Cleanup receipt: afterparty audit --kill $KILL_CATS${C_RESET}"
   segs="$(s_segments \
-    "$([ "$N_KILLED" -gt 0 ] && echo "$G_OK $N_KILLED killed")" \
+    "$([ "$N_KILLED" -gt 0 ] && echo "$G_OK $N_KILLED stopped")" \
     "$([ "$N_PROT" -gt 0 ] && echo "$G_SKIP $N_PROT protected")" \
     "$([ "$N_IDENT" -gt 0 ] && echo "$G_SKIP $N_IDENT identity changed")" \
     "$([ "$N_GONE" -gt 0 ] && echo "$G_SKIP $N_GONE already gone")" \
     "$([ "$N_FAILED" -gt 0 ] && echo "$G_SKIP $N_FAILED failed")")"
   if [ -n "$segs" ]; then s_card_line "   $segs"; fi
   if [ "$N_KILLED" -gt 0 ]; then
-    s_card_line "   $(s_n "$N_KILLED" 'process group shown the door' 'process groups shown the door')"
+    s_card_line "   $(s_n "$N_KILLED" 'process group stopped' 'process groups stopped')"
   elif [ "$N_FAILED" -gt 0 ]; then
-    s_card_line "   nothing stopped — $N_FAILED group(s) could not be safely handled"
+    s_card_line "   No process group stopped. $N_FAILED group(s) failed the cleanup checks."
   elif [ "$N_PROT" -gt 0 ]; then
-    s_card_line "   no group stopped — protected groups remain running"
+    s_card_line "   No process group stopped. Protected groups remain."
   else
-    s_card_line "   no matching group remained to stop"
+    s_card_line "   No matching process group remained to stop."
   fi
   s_card_line
-  s_card_line "   thanks for partying responsibly 🎉"
+  s_card_line "   Review the results above."
   s_card_close
 }
 
 if [ -z "$KILL_CATS" ]; then
-  s_mode "$C_YEL" "DRY RUN" " — headcount only, nobody gets kicked out yet (use --kill <tests|dev|browser> to act)" \
+  s_mode "$C_YEL" "DRY RUN" ": Report process candidates. Use --kill <tests|dev|browser> to stop selected groups." \
     "DRY RUN — reporting stray processes (use --kill <tests|dev|browser> to act)"
-  s_dim "Scope: all visible workspaces; detected processes are not necessarily idle"
+  s_dim "Scope: all visible workspaces; detected processes are not necessarily idle" | s_wrap 2
   report_localhost;                                                N_LISTEN=$LAST_N
   report "Test / watch runners (review current work before stopping)" tests;  N_TESTS=$LAST_N
   report "Dev servers (keep the one you are actively using)" dev; N_DEV=$LAST_N
@@ -520,7 +555,12 @@ if [ -z "$KILL_CATS" ]; then
   [ "$PS_STATUS" = "ok" ] || N_UNAVAILABLE=$((N_UNAVAILABLE + 1))
   [ "$LSOF_STATUS" = "ok" ] || N_UNAVAILABLE=$((N_UNAVAILABLE + 1))
   echo
-  s_dim "Protected (never killed): $PROTECT_RE"
+  if [ "$STYLE_ON" -eq 1 ]; then
+    s_dim 'Afterparty checks group protection before it sends signals.' | s_wrap 2
+    s_dim 'Next: run afterparty review to inspect targets and save your choices.' | s_wrap 2
+  else
+    s_dim "Protected (never killed): $PROTECT_RE"
+  fi
   tally_add procs.found "$((N_TESTS + N_DEV + N_BROWSER))"
   tally_add procs.listeners "$N_LISTEN"
   tally_add procs.unavailable "$N_UNAVAILABLE"
@@ -534,6 +574,7 @@ fi
 if [ "$PS_STATUS" != "ok" ]; then
   s_skip "  cannot kill process groups: $PS_REASON"
   tally_add procs.failed 1
+  ae_child_finish || exit 1
   exit 1
 fi
 
@@ -545,7 +586,7 @@ IFS=','
 for cat in $KILL_CATS; do
   re=$(category_re "$cat")
   if [ -z "$re" ]; then echo "unknown category: $cat (use tests|dev|browser)" >&2; exit 2; fi
-  s_lead "$C_RED" "Killing category '$cat' — last call (keep: ${KEEP:-none})" \
+  s_lead "$C_RED" "Stop process groups in category '$cat' (keep: ${KEEP:-none})" \
     "Killing category '$cat' (keep: ${KEEP:-none})"
   pgs=$(pgids_for "$re")
   if [ -n "$PGID_FILTER" ] && [ -n "$pgs" ]; then
@@ -575,6 +616,7 @@ for cat in $KILL_CATS; do
   actionable=0
   while IFS= read -r pg; do
     [ -n "$pg" ] || continue
+    ae_process_reset
     case ",$KEEP," in
       *",$pg,"*)
         # Plain output historically collapsed an all-kept category to
@@ -582,6 +624,8 @@ for cat in $KILL_CATS; do
         if [ "$STYLE_ON" -eq 1 ]; then
           s_skip "  keep pgid $pg: requested via --keep"
         fi
+        ae_process_decision vetoed kept 'Group was explicitly kept.'
+        ae_child_emit "$pg" || exit 1
         continue
         ;;
     esac
@@ -609,12 +653,14 @@ for cat in $KILL_CATS; do
         *) N_FAILED=$((N_FAILED + 1)) ;;
       esac
     fi
+    ae_child_emit "$pg" || exit 1
   done <<< "$pgs"
   if [ "$actionable" -eq 0 ] && [ "$STYLE_ON" -eq 0 ]; then
     s_dim "  nothing to kill"
   fi
 done
 unset IFS
+ae_child_finish || exit 1
 printf '%s stopped · %s protected · %s already gone · %s failed\n' "$N_KILLED" "$N_PROT" "$N_GONE" "$N_FAILED"
 s_ok "done"
 tally_add procs.killed "$N_KILLED"

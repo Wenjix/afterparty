@@ -20,9 +20,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: install tools
         run: sudo apt-get update -q && sudo apt-get install -y -q ripgrep shellcheck
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: skills/afterparty/ui/go.mod
+          cache-dependency-path: skills/afterparty/ui/go.sum
+      - name: terminal test dependencies
+        run: python3 -m pip install -r tests/requirements.txt
       - name: syntax
         run: |
-          for f in skills/afterparty/lib/*.sh bin/afterparty skills/afterparty/bin/afterparty tests/*.sh; do
+          for f in skills/afterparty/lib/*.sh bin/afterparty skills/afterparty/bin/afterparty skills/afterparty/bin/build-review tests/*.sh; do
             bash -n "$f"
           done
       - name: shellcheck (errors block)

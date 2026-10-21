@@ -182,11 +182,16 @@ for r in caps:
     assert r["status"] in ("ok", "unavailable"), r
     assert r["name"], r
 for r in ws:
+    assert set(r) == {"schema_version", "section", "path", "attribution", "last_touched", "idle_seconds", "activity_source", "procs", "cpu_max", "ports"}, r
     assert isinstance(r["idle_seconds"], int), "idle_seconds must be a number: %r" % r
     assert r["path"].startswith("/"), "path must be absolute: %r" % r
     assert isinstance(r["procs"], int), r
 stale = [r for r in ws if r["path"] == "/w/forgot"]
 assert stale and stale[0]["idle_seconds"] > 3600, "forgot should be deeply idle: %r" % stale
+fresh = next(r for r in ws if r["path"] == "/w/fresh")
+assert {k: v for k, v in fresh.items() if k not in ("last_touched", "idle_seconds")} == {
+    "schema_version": 1, "section": "workspace", "path": "/w/fresh", "attribution": "transcript-workspace",
+    "activity_source": "claude-transcript", "procs": 1, "cpu_max": "87.3", "ports": None}
 ' || fail "G8: json rows malformed"
 fi
 [ "$FAILS" -eq "$_b" ] && pass "G8: --json parses with numeric idle_seconds and absolute paths"
@@ -336,6 +341,36 @@ O16="$(PATH="$ONCE:$PATH" AFTERPARTY_GLANCE_CALLS="$T/calls" AFTERPARTY_TRANSCRI
 printf '%s\n' "$O16" | grep -q '"name":"listeners".*"status":"unavailable"' || fail "G16: failed actual listener scan marked healthy"
 printf '%s\n' "$O16" | grep -q '"name":"attribution".*"status":"ok"' || fail "G16: successful attribution capability lost"
 [ "$FAILS" -eq "$_b" ] && pass "G16: one actual scan per capability and listener failures are separate"
+
+# ---------- G17: responsive styled rows retain full scope and unknown evidence ----------
+_b=$FAILS
+for cols in 60 80 120; do
+  COLUMNS="$cols" STYLE=always run > "$T/styled-$cols" 2>/dev/null
+  COLUMNS="$cols" AFTERPARTY_STYLE=always PATH="$NOLSOF:$PATH" \
+    AFTERPARTY_TRANSCRIPT_ROOT="$R" bash "$LIB/glance.sh" > "$T/incomplete-$cols" 2>/dev/null
+  COLUMNS="$cols" AFTERPARTY_STYLE=always PATH="$EMPTY:$PATH" \
+    AFTERPARTY_TRANSCRIPT_ROOT="$T/none" bash "$LIB/glance.sh" > "$T/empty-$cols" 2>/dev/null
+  "$PY_BIN" - "$T" "$cols" <<'PYTEST' || fail "G17: $cols-column rendering"
+import re, sys, unicodedata
+from pathlib import Path
+root, cols = Path(sys.argv[1]), int(sys.argv[2])
+outputs = {}
+for mode in ('styled', 'incomplete', 'empty'):
+    text = re.sub(r'\x1b\[[0-9;]*m', '', (root / (mode + '-' + str(cols))).read_text(encoding='utf-8'))
+    outputs[mode] = text
+    for line in text.splitlines():
+        width = sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in line)
+        assert width < cols, (mode, width, line)
+joined = ''.join(outputs['styled'].split())
+for path in ('/w/aaaaaaaaaaaaaaaaaaaaaaaaaaaaX/web', '/w/aaaaaaaaaaaaaaaaaaaaaaaaaaaaY/web', '/w/プロジェクト/web', '/w/別プロジェクト/web'):
+    assert path in joined, path
+assert 'Path:' in outputs['styled'] and '3001' in outputs['styled']
+assert 'unknown' in outputs['incomplete'] and 'unattributed' in outputs['incomplete']
+assert 'lsof' in outputs['empty'] or 'ps' in outputs['empty']
+assert ('CPU max' if cols < 80 else 'FILE ACTIVITY') in outputs['styled']
+PYTEST
+done
+[ "$FAILS" -eq "$_b" ] && pass 'G17: 60/80/120-column full identities, incomplete and empty observations'
 
 [ "$FAILS" -eq 0 ] || echo "$FAILS check(s) failed" >&2
 exit $((FAILS > 0))

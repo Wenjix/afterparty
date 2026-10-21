@@ -59,7 +59,7 @@ SPAWNED_GROUPS="$SPAWNED_GROUPS $P1"
 AGENT_PROCESS_LEDGER="$LEDGER" bash "$LIB/process-ledger.sh" add --pid "$P1" --kind dev --purpose "kill test" -- sleep 300 >/dev/null
 OUT="$(AFTERPARTY_STYLE=always AGENT_PROCESS_LEDGER="$LEDGER" bash "$LIB/process-ledger.sh" stop --kill 2>/dev/null)"
 printf '%s\n' "$OUT" | grep -q "SIGTERM -> pgid $P1" || fail "ledger kill: SIGTERM line missing"
-printf '%s\n' "$OUT" | grep -q '1 process group sent home' || fail "ledger kill: receipt count wrong"
+printf '%s\n' "$OUT" | grep -q '1 process group stopped' || fail "ledger kill: receipt count wrong"
 wait_dead "$P1" || fail "ledger kill: process survived"
 [ "$FAILS" -eq "$B1" ] && pass "ledger stop --kill kills the recorded group and counts it"
 
@@ -72,7 +72,7 @@ OUT="$(bash "$LIB/audit-processes.sh" 2>/dev/null)"
 printf '%s\n' "$OUT" | grep -q 'nodemon' || fail "category kill: dry run did not list nodemon"
 OUT="$(AFTERPARTY_STYLE=always bash "$LIB/audit-processes.sh" --kill dev 2>/dev/null)"
 printf '%s\n' "$OUT" | grep -q "SIGTERM -> pgid $P2" || fail "category kill: SIGTERM line missing"
-printf '%s\n' "$OUT" | grep -q '1 process group shown the door' || fail "category kill: receipt count wrong"
+printf '%s\n' "$OUT" | grep -q '1 process group stopped' || fail "category kill: receipt count wrong"
 wait_dead "$P2" || fail "category kill: process survived"
 [ "$FAILS" -eq "$B2" ] && pass "audit --kill dev kills the matching group and counts real kills"
 

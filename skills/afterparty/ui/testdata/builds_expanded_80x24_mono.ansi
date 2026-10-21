@@ -1,0 +1,24 @@
+ [1mafterparty[m [1mBUILD OUTPUT[m                                 [2m09:23 UTC · 2m 5s ago[m
+ Roots (2): /work | /side-projects                                            
+ Scan: complete | 2 repos | depth 3                                           
+ Known total: 1.2 GB (estimated)                                              
+ Growth: +124.0 MB since previous complete scan                               
+ [2m  Repository / path                                           Size     Growth[m
+ [1;7m> afterparty/.next                                        840.0 MB  +120.0 MB[m
+ [2m    Repository: /work/afterparty[m                                             
+ [2m    Path: /work/afterparty/.next[m                                             
+ [2m    Kind: build | Scan: complete[m                                             
+ [2m    Modified: 2026-10-12 08:15 UTC (file time)[m                               
+   notes/node_modules/.cache                               204.0 MB   -16.0 MB
+ [2m    Repository: /side-projects/notes[m                                         
+ [2m    Path: /side-projects/notes/node_modules/.cache[m                           
+ [2m    Kind: cache | Scan: complete[m                                             
+ [2m    Modified: 2026-10-11 18:15 UTC (file time)[m                               
+   afterparty/playwright-report                            120.0 MB   +20.0 MB
+ [2mPath 1 of 3: afterparty/.next[m                                                
+ [1mafterparty/.next[m                                                             
+ [2mKind: build | Modified: 2026-10-12 08:15 UTC (file time)[m                     
+ Enter opens repository review. No cleanup runs here.                         
+ Size and file time do not prove that output is unused.                       
+ Enter review | Up/Down focus (j/k) | / filter | i inspect | d details        
+ ? help | r refresh | q finish                                                

@@ -1,0 +1,24 @@
+ [1;35mafterparty[m [1mREVIEW / Choose[m                              [2m09:23 UTC · 2m 5s ago[m
+ Scope: /work/afterparty                                                      
+ Scan: complete | 3 available | 1 withheld                                    
+ [36mProcess groups[m                                                               
+ [1;7m> [x] vite | PGID 4821                                               CPU 0.2%[m
+ [36mWorktrees[m                                                                    
+    ⊘  /work/afterparty-wt/auth                 A live process uses this wo...
+ [36mArtifacts[m                                                                    
+ [1m  [x] .next                                                            840 MB[m
+   [ ] playwright-report                                                120 MB
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+ [2m2 marked | Target 1 of 4: vite | PGID 4821[m                                   
+ [1mvite | PGID 4821                                                   [x] marked[m
+ If applied: Stop every group member. Restart the service manually.           
+ Mark targets to include in the plan.                                         
+ Space mark/unmark | Enter Review choices | Up/Down focus | i inspect         
+ d details | / filter | r refresh | q quit | ? help                           

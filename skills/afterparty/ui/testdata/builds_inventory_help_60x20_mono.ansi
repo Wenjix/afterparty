@@ -1,0 +1,20 @@
+ [1mafterparty[m [1mBUILD OUTPUT[m             [2m09:23 UTC · 2m 5s ago[m
+ Roots (2): /work | /side-projects                        
+ Scan: complete | 2 repos | depth 3                       
+ Known total: 1.2 GB (estimated)                          
+ Growth: +124.0 MB since previous complete scan           
+ [1mKeys[m                                                     
+ Enter      Review this repository                        
+ Up/Down    Move focus (j/k)                              
+ /          Filter paths                                  
+ i          Inspect the path                              
+ d          Show or hide details                          
+ r          Refresh the scan                              
+ q          Finish                                        
+ Ctrl+Z     Suspend; use fg to resume                     
+                                                          
+ [1mScan status[m                                              
+ Collection: complete                                     
+ [2mLines 1-12 of 31[m                                         
+ Size and file time do not prove that output is unused.   
+ q/Esc/? back | PgUp/PgDn scroll                          

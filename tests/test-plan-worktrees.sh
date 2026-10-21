@@ -131,7 +131,7 @@ printf '%s\n' "$WT" | grep 'wt-halfdone' | grep -q '^- \[⊘\]' \
 # test should not depend on a fixture name to stay honest.
 printf '%s\n' "$WT" | grep -q '^- \[⊘\] dirty .*wt-halfdone' \
   || fail "PW3: the verdict column does not read dirty: $(printf '%s\n' "$WT" | grep wt-halfdone)"
-printf '%s\n' "$WT" | grep -A1 'wt-halfdone' | grep -q '^ *not offered: dirty' \
+printf '%s\n' "$WT" | grep -A1 'wt-halfdone' | grep -q '^ *not offered: Afterparty cannot confirm that this worktree has no uncommitted changes' \
   || fail "PW3: the reason line does not name dirty: $(printf '%s\n' "$WT" | grep -A1 wt-halfdone | tr '\n' '|')"
 printf '%s\n' "$WT" | grep -A1 'wt-halfdone' | grep -q 'fingerprint:' \
   && fail "PW3: a withheld item carries a fingerprint, which apply could act on"

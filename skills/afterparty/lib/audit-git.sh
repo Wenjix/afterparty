@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# audit-git.sh — report Git session leftovers without deleting anything:
-# worktrees, agent-named branches, old index locks, conflict files and stashes.
-# Age and naming are discovery heuristics, not authorization to remove data.
+# afterparty git - report worktrees, agent-named branches, old index locks,
+# conflict files, and stashes. This command does not delete anything.
+# Age and names help identify candidates. They do not authorize deletion.
 # Worktree removal requires a checked afterparty plan and afterparty apply.
 # Branches, locks, conflict files and stashes remain report-only.
 #
 # Usage:
-#   audit-git.sh                    # dry-run report for the repo at cwd
-#   audit-git.sh --clean            # report-only compatibility flag; exits 2
-#   audit-git.sh --age 14           # staleness threshold in days (default 7)
-#   audit-git.sh --root DIR         # operate on the repo containing DIR
-#   audit-git.sh --json             # JSON Lines output (one object per finding)
+#   afterparty git                 # dry-run report for the current repository
+#   afterparty git --clean         # report-only compatibility flag; exits 2
+#   afterparty git --age 14         # age threshold in days (default 7)
+#   afterparty git --root DIR       # report on the repository that contains DIR
+#   afterparty git --json           # JSON Lines output (one object per finding)
 #
 # Not a Git repo: reports no repository and exits 0, or 2 for --clean.
-# Exit codes: 0 report completed · 1 reported inspection failure · 2 usage/refusal.
+# Exit codes: 0 report completed; 1 inspection failed; 2 usage error or refusal.
 set -uo pipefail
 
 # --- constants ---------------------------------------------------------------
@@ -42,7 +42,7 @@ while [ $# -gt 0 ]; do
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
-case "$AGE_DAYS" in ''|*[!0-9]*) echo "--age wants a whole number of days" >&2; exit 2 ;; esac
+case "$AGE_DAYS" in ''|*[!0-9]*) echo "--age requires a whole number of days" >&2; exit 2 ;; esac
 
 # --- repo gate + facts ---------------------------------------------------------
 if ! git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
@@ -512,43 +512,43 @@ print_git_card() {
   echo
   s_card_open
   if [ "$DO_CLEAN" -eq 1 ]; then
-    s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty git --clean${C_RESET}"
+    s_card_line "${C_BOLD}${C_CYAN}🧾 Cleanup receipt: afterparty git --clean${C_RESET}"
     segs="$(s_segments \
       "$([ "$total" -gt 0 ] && echo "$G_OK $total cleaned")" \
       "$([ "$N_STASH" -gt 0 ] && echo "$(s_n "$N_STASH" 'stash' 'stashes')")" \
       "$([ "$N_FAILED" -gt 0 ] && echo "$G_SKIP $N_FAILED failed")")"
     if [ -n "$segs" ]; then s_card_line "   $segs"; fi
     if [ "$total" -eq 0 ] && [ "$N_FAILED" -eq 0 ]; then
-      s_card_line "   nothing needed doing — already spotless ✨"
+      s_card_line "   No cleanup action was necessary."
     else
       [ "$N_PRUNABLE" -gt 0 ] && s_card_line "   pruned $(s_n "$N_PRUNABLE" 'worktree entry' 'worktree entries')"
       [ "$N_WT" -gt 0 ] && s_card_line "   removed $(s_n "$N_WT" 'worktree' 'worktrees')"
       [ "$N_BRANCH" -gt 0 ] && s_card_line "   deleted $(s_n "$N_BRANCH" 'branch' 'branches')"
       [ "$N_LOCK" -gt 0 ] && s_card_line "   removed $(s_n "$N_LOCK" 'index.lock' 'index.locks')"
-      [ "$N_LITTER" -gt 0 ] && s_card_line "   swept $(s_n "$N_LITTER" 'litter file' 'litter files') (${LITTER_BYTES} B)"
-      [ "$N_FAILED" -gt 0 ] && s_card_line "   $N_FAILED cleanup action(s) could not be confirmed"
+      [ "$N_LITTER" -gt 0 ] && s_card_line "   deleted $(s_n "$N_LITTER" 'conflict file' 'conflict files') (${LITTER_BYTES} B)"
+      [ "$N_FAILED" -gt 0 ] && s_card_line "   Afterparty could not confirm $N_FAILED cleanup action(s)."
       s_card_line
-      s_card_line "   thanks for partying responsibly 🎉"
+      s_card_line "   Review the results above."
     fi
   elif [ "$total" -gt 0 ]; then
-    s_card_line "${C_BOLD}${C_YEL}🧹 the damage — git${C_RESET}"
+    s_card_line "${C_BOLD}${C_YEL}🧹 Git scan results${C_RESET}"
     segs="$(s_segments \
-      "$G_ACT $total would-clean" \
+      "$G_ACT $(s_n "$total" finding findings)" \
       "$([ "$N_STASH" -gt 0 ] && echo "$(s_n "$N_STASH" 'stash' 'stashes')")")"
     s_card_line "   $segs"
-    [ "$N_PRUNABLE" -gt 0 ] && s_card_line "   $(s_n "$N_PRUNABLE" 'prunable worktree entry' 'prunable worktree entries')"
-    [ "$N_WT" -gt 0 ] && s_card_line "   $(s_n "$N_WT" 'stale worktree ready to go' 'stale worktrees ready to go')"
-    [ "$N_BRANCH" -gt 0 ] && s_card_line "   $(s_n "$N_BRANCH" 'merged agent branch to delete' 'merged agent branches to delete')"
+    [ "$N_PRUNABLE" -gt 0 ] && s_card_line "   $(s_n "$N_PRUNABLE" 'worktree record has no directory' 'worktree records have no directory')"
+    [ "$N_WT" -gt 0 ] && s_card_line "   $(s_n "$N_WT" 'stale worktree requires review' 'stale worktrees require review')"
+    [ "$N_BRANCH" -gt 0 ] && s_card_line "   $(s_n "$N_BRANCH" 'merged agent branch found' 'merged agent branches found')"
     [ "$N_LOCK" -gt 0 ] && s_card_line "   $(s_n "$N_LOCK" 'stale index.lock' 'stale index.locks')"
-    [ "$N_LITTER" -gt 0 ] && s_card_line "   $(s_n "$N_LITTER" 'litter file' 'litter files') (${LITTER_BYTES} B)"
-    [ "$N_STASH" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_STASH" 'stash on the shelf — your call' 'stashes on the shelf — your call'))${C_RESET}"
+    [ "$N_LITTER" -gt 0 ] && s_card_line "   $(s_n "$N_LITTER" 'conflict file' 'conflict files') (${LITTER_BYTES} B)"
+    [ "$N_STASH" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_STASH" 'stash retained' 'stashes retained'))${C_RESET}"
     s_card_line
-    printf -v quoted_root %q "$ROOT"
-    s_card_line "   review: ${C_CYAN}afterparty plan --root $quoted_root${C_RESET}"
+    quoted_root="$(export LC_ALL=C; printf '%q' "$ROOT")"
+    s_card_command "   review: ${C_CYAN}afterparty plan --root $quoted_root${C_RESET}"
   else
-    s_card_line "${C_BOLD}${C_GRN}✨ spotless — no git mess left behind${C_RESET}"
-    [ "$N_STASH" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_STASH" 'stash on the shelf — your call' 'stashes on the shelf — your call'))${C_RESET}"
-    s_card_line "   see you next session 🎉"
+    s_card_line "${C_BOLD}${C_GRN}✓ No Git cleanup candidates found in the inspected scope.${C_RESET}"
+    [ "$N_STASH" -gt 0 ] && s_card_line "${C_DIM}   ($(s_n "$N_STASH" 'stash retained' 'stashes retained'))${C_RESET}"
+    s_card_line "   See you next session."
   fi
   s_card_close
 }
@@ -556,13 +556,13 @@ print_git_card() {
 # --- main ----------------------------------------------------------------------------
 if [ "$JSON" -eq 0 ]; then
   if [ "$DO_CLEAN" -eq 1 ]; then
-    s_mode "$C_RED" "CLEAN" " — sweeping up the git leftovers in $ROOT (safe subset only)" \
+    s_mode "$C_RED" "CLEAN" ": Apply selected Git cleanup in $ROOT." \
       "CLEAN — applying safe git cleanup in $ROOT"
   else
     # --clean stopped applying anything in 0.9.0; it reports and exits 2. The
     # banner kept advertising it as the way to act, which is the one line a
     # person reads before deciding what to run next.
-    s_mode "$C_YEL" "DRY RUN" " — checking what the party did to $ROOT (approve removals via afterparty plan)" \
+    s_mode "$C_YEL" "DRY RUN" ": Report Git findings in $ROOT. Review removal choices with afterparty plan." \
       "DRY RUN — reporting git leftovers in $ROOT (approve removals via 'afterparty plan', then 'afterparty apply')"
   fi
 fi

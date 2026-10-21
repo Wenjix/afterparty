@@ -120,7 +120,7 @@ journal_show() {
       --all) all=1; shift ;;
       --workspace) [ "$#" -ge 2 ] || { echo '--workspace requires a directory' >&2; return 2; }; workspace="$2"; shift 2 ;;
       --since) [ "$#" -ge 2 ] || { echo '--since requires YYYY-MM-DD' >&2; return 2; }; since="$2"; shift 2 ;;
-      *) echo "unknown actions arg: $1" >&2; return 2 ;;
+      *) echo "actions: unknown option: $1" >&2; return 2 ;;
     esac
   done
   if [ -n "$since" ]; then

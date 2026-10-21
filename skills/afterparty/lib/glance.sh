@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# glance.sh - "what did I leave running?", answered on returning to the machine.
+# afterparty glance - report visible processes by workspace.
 #
-# Visible processes grouped by workspace, ordered by observed agent transcript
-# activity with unknown attribution retained. Severity is magnitude:
-# this view exists to make you look up, and the plan is where consequence gets
-# weighed. Read-only by construction -- there is deliberately no flag that acts.
+# The report groups visible processes by workspace and sorts them by transcript activity.
+# It keeps processes whose workspace or activity is unknown.
+# Severity describes CPU use, process count, and time since recorded activity.
+# This command is read-only. No option stops processes or deletes files.
 #
-# Attribution uses one lsof scan of process working directories. Transcript
-# mtimes are activity evidence, not proof of human presence or abandonment.
+# One lsof scan reads process working directories to attribute processes.
+# Transcript file modification times indicate recorded agent activity.
+# They do not prove that a person is present or that a workspace is abandoned.
 #
 # Usage:
-#   glance.sh [--oneline] [--json]
+#   afterparty glance [--oneline] [--json]
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,7 +27,7 @@ while [ $# -gt 0 ]; do
     --json)    AS_JSON=1; shift ;;
     -h|--help) sed -n '2,/^set -uo pipefail/{ /^set /d; p; }' "$0"; exit 0 ;;
     *) echo "glance: unknown option: $1" >&2
-       echo "glance reports; it never acts. Use 'audit --kill' or 'plan' to change anything." >&2
+       echo "glance is read-only. Use 'afterparty review' to select cleanup targets." >&2
        exit 2 ;;
   esac
 done
@@ -203,10 +204,11 @@ if [ "$ONELINE" -eq 1 ]; then
   exit 0
 fi
 
-s_banner "afterparty — welcome back" "let's see what is still running"
+render_human() {
+s_banner "afterparty glance" "READ ONLY · observed processes and recorded file activity"
 if [ "$TOTAL_WS" -eq 0 ]; then
   if [ "$GLANCE_INCOMPLETE" -eq 1 ]; then
-    s_warn "scan incomplete — nothing could be attributed, and that is not the same as nothing running"
+    s_warn "scan incomplete. Afterparty could not attribute processes to workspaces. Processes can still be running."
     [ "$CWD_STATUS" = ok ] || s_dim "  $CWD_REASON"
     [ "$LSOF_STATUS" = ok ] || s_dim "  $LSOF_REASON"
     [ "$PS_STATUS"   = ok ] || s_dim "  $PS_REASON"
@@ -214,12 +216,16 @@ if [ "$TOTAL_WS" -eq 0 ]; then
   else
     s_dim "  (nothing attributed to a workspace)"
   fi
-  exit 0
+  return 0
 fi
 
 printf '%s\n' "afterparty glance — $(s_n "$TOTAL_WS" 'process scope holding' 'process scopes holding') $(s_n "$TOTAL_PROCS" process processes)"
 echo
-s_dim "  WORKSPACE / PROCESS CWD       SOURCE       AGENT ACTIVITY PROCS     CPU  PORTS"
+if [ "$STYLE_ON" -eq 0 ]; then
+  s_dim "  WORKSPACE / PROCESS CWD       SOURCE       AGENT ACTIVITY PROCS     CPU  PORTS"
+elif [ "$S_COLUMNS" -ge 80 ]; then
+  s_dim '  PROCS     CPU%  FILE ACTIVITY   SOURCE          WORKSPACE'
+fi
 # Labels are computed across the rows being displayed, so each one is the
 # shortest suffix unique in THIS table rather than a guess made row by row.
 awk -F'\t' '{print $2}' "$T/rows" | ws_unique_labels > "$T/labels" 2>/dev/null || : > "$T/labels"
@@ -237,22 +243,43 @@ while IFS=$'\t' read -r ts path procs cpu ports attribution source; do
     claude-transcript,codex-transcript) source=Claude+Codex ;;
     *) source=unknown ;;
   esac
-  printf '  %-28s %-12s %-14s %5s  %s  %s\n' \
-    "$name" "$source" "$age" "$procs" \
-    "$(s_sevcell "${cpu%%.*}" 50 80 "$(printf '%6s' "$cpu")")" "$ports"
+  if [ "$STYLE_ON" -eq 1 ]; then
+    if [ "$S_COLUMNS" -lt 80 ]; then
+      printf '\n  %s%s%s\n' "$C_BOLD" "$name" "$C_RESET"
+      printf '    %s procs · CPU max %s%% · file activity %s\n' "$procs" "$(s_sevcell "$cpu" 50 80 "$cpu")" "$age"
+      printf '    Source: %s · attribution: %s\n' "$source" "$attribution"
+    else
+      printf '  %5s  %s  %-14s  %-14s  %s\n' "$procs" \
+        "$(s_sevcell "$cpu" 50 80 "$(printf '%7s' "$cpu")")" "$age" "$source" "$name"
+      printf '    Attribution: %s\n' "$attribution"
+    fi
+    printf '    Path: %s\n' "$path"
+    printf '    Ports: %s\n' "$ports"
+  else
+    printf '  %-28s %-12s %-14s %5s  %s  %s\n' \
+      "$name" "$source" "$age" "$procs" \
+      "$(s_sevcell "${cpu%%.*}" 50 80 "$(printf '%6s' "$cpu")")" "$ports"
+  fi
 done < "$T/rows"
 
 echo
 if [ "$IDLE_WS" -gt 0 ]; then
   s_dim "  $(s_n "$IDLE_WS" workspace workspaces) without agent transcript activity for over ${WS_IDLE_HOURS}h holding $(s_n "$IDLE_PROCS" process processes)"
 fi
-s_dim "  Unknown activity is not idle; cwd-only rows are not confirmed workspace ownership."
-s_dim "  glance only reports — use 'afterparty audit' to review what can be cleaned"
+s_dim "  Unknown activity does not prove inactivity. A cwd-only row shows a process directory, not confirmed workspace ownership."
+if [ "$STYLE_ON" -eq 1 ]; then
+  s_dim "  Next: run afterparty review to inspect targets and save your choices."
+else
+  s_dim "  glance only reports — use 'afterparty audit' to review what can be cleaned"
+fi
 if [ "$GLANCE_INCOMPLETE" -eq 1 ]; then
   echo
-  s_warn "scan incomplete — this is NOT a clean bill of health"
+  s_warn "scan incomplete. Results may be missing."
   [ "$CWD_STATUS" = ok ] || s_dim "  $CWD_REASON"
     [ "$LSOF_STATUS" = ok ] || s_dim "  $LSOF_REASON"
   [ "$PS_STATUS"   = ok ] || s_dim "  $PS_REASON"
   [ "$WS_STATUS"   = ok ] || s_dim "  $WS_REASON"
 fi
+}
+
+if [ "$STYLE_ON" -eq 1 ]; then render_human | s_wrap; else render_human; fi

@@ -12,12 +12,14 @@
 #   agent-hygiene.sh prune [--all|--root DIR]
 #   agent-hygiene.sh git [--clean] [--age <days>] [--root <dir>] [--json]
 #   agent-hygiene.sh artifacts [--root DIR] [--caches-only] [--plan|--clean]
+#   agent-hygiene.sh builds [--projects-root DIR ...] [--max-depth N] [--json|--plain] [--ascii]
 #   agent-hygiene.sh devclean [--orphans|--deep|--optimize|--disk|--history] [--apply --target ID]
 #   agent-hygiene.sh glance [--oneline] [--json]
 #   agent-hygiene.sh docs [--root DIR] [--since REF|--full] [--json] [--report]
 #   agent-hygiene.sh docs --show|--report-path|--template SCAN_ID|--check SCAN_ID|--save-review FILE
-#   agent-hygiene.sh plan [--root DIR] [--all] [--artifacts-only] [--caches-only]
-#   agent-hygiene.sh apply <plan.md>
+#   agent-hygiene.sh plan [--root DIR] [--all] [--artifacts-only] [--caches-only] [--json]
+#   agent-hygiene.sh review [--root DIR] [--all] [--artifacts-only] [--caches-only] [--output FILE] [--ascii]
+#   agent-hygiene.sh apply [--json] <plan.md>
 #   agent-hygiene.sh doctor [--strict]
 #   agent-hygiene.sh report [--show|--remind]
 #   agent-hygiene.sh report-path
@@ -35,8 +37,49 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/journal.sh"
 
 usage() {
-  # The header ends at set; additional usage lines must remain visible.
-  sed -n '2,/^set -euo pipefail/{ /^set /d; p; }' "$0"
+  cat <<'USAGE'
+Usage: afterparty <command> [options]
+
+Inspect
+  audit [--strict] [--json|--report]   Report processes, listeners, and Git findings
+  glance [--oneline|--json]           Workspace activity; read-only
+  list [--json] [--all|--root DIR]    Recorded process groups
+  git [--root DIR] [--json]           Report Git findings; --clean is report-only
+  artifacts [--root DIR]             Build/cache inventory; --clean is report-only
+  builds [--projects-root DIR ...]    Build output across projects; read-only TUI
+         [--max-depth N] [--json|--plain] [--ascii]
+  doctor [--strict]                  Combined diagnostics
+
+Review
+  plan [--root DIR] [--all] [--json]  Unchecked cleanup proposals
+       [--artifacts-only] [--caches-only]
+  review [--root DIR] [--all]         Mark targets, review choices, and save a plan
+         [--output FILE] [--ascii] [--artifacts-only] [--caches-only]
+  docs [--root DIR] [--since REF|--full] [--json] [--report]
+                                    Collect documentation evidence for agent review
+  devclean [--orphans|--deep|--optimize|--disk|--history]
+                                    Preview cleanup targets and their IDs
+
+Act on reviewed choices
+  apply [--json] <plan.md>            Check targets again. Apply only checked choices.
+  stop --kill [--keep PGID] [--all|--root DIR] [--kind KIND]
+  audit --kill tests,dev,browser [--pgid ID[,ID...]] [--keep ID]
+  devclean <mode> --apply --target ID
+  add --pid PID --kind KIND --port PORT --purpose TEXT -- command
+  prune [--all|--root DIR]            Delete records for absent process groups
+
+History
+  report [--show|--remind]            Read the saved audit
+  report-path                       Locate the saved audit
+  actions [--all|--workspace DIR] [--since YYYY-MM-DD] [--path]
+  actions-path                      Locate cleanup receipts
+  --version                         Show the installed version
+
+Start with afterparty glance. Then run afterparty review.
+Review saves your choices. Run afterparty apply <saved-plan> to apply them.
+Use afterparty <command> --help for command options.
+Review the targets before you run a cleanup command.
+USAGE
 }
 
 # The one finale card for the composite audit, fed by the children's tally.
@@ -57,85 +100,86 @@ print_finale_card() {
   echo
   s_card_open
   if [ "$killed" -gt 0 ] || [ "$prot" -gt 0 ] || [ "$failed" -gt 0 ]; then
-    s_card_line "${C_BOLD}${C_CYAN}🧾 receipt — afterparty audit --kill${C_RESET}"
+    s_card_line "${C_BOLD}${C_CYAN}🧾 Cleanup receipt: afterparty audit --kill${C_RESET}"
     segs="$(s_segments \
-      "$([ "$killed" -gt 0 ] && echo "$G_OK $killed killed")" \
+      "$([ "$killed" -gt 0 ] && echo "$G_OK $killed stopped")" \
       "$([ "$prot" -gt 0 ] && echo "$G_SKIP $prot protected")" \
       "$([ "$failed" -gt 0 ] && echo "$G_SKIP $failed failed")" \
-      "$([ "$gitf" -gt 0 ] && echo "$G_ACT $(s_n "$gitf" 'git leftover' 'git leftovers')")" \
-      "$([ "$live" -gt 0 ] && echo "$G_ACT $live on the tab")")"
+      "$([ "$gitf" -gt 0 ] && echo "$G_ACT $(s_n "$gitf" 'Git finding' 'Git findings')")" \
+      "$([ "$live" -gt 0 ] && echo "$G_ACT $(s_n "$live" 'live ledger entry' 'live ledger entries')")")"
     s_card_line "   $segs"
     if [ "$killed" -gt 0 ]; then
-      s_card_line "   $(s_n "$killed" 'process group shown the door' 'process groups shown the door')"
+      s_card_line "   $(s_n "$killed" 'process group stopped' 'process groups stopped')"
     elif [ "$prot" -gt 0 ]; then
-      s_card_line "   nothing stopped — $(s_n "$prot" 'group was protected' 'groups were protected')"
+      s_card_line "   No process group stopped. $(s_n "$prot" 'group is protected' 'groups are protected')."
     else
-      s_card_line "   no process-group exit was confirmed"
+      s_card_line "   Afterparty did not confirm any process group exit."
     fi
-    [ "$failed" -gt 0 ] && s_card_line "   $failed cleanup action(s) could not be confirmed"
+    [ "$failed" -gt 0 ] && s_card_line "   Afterparty could not confirm $failed cleanup action(s)."
     if [ "$gitf" -gt 0 ]; then
-      s_card_line "   still on the tab: $(s_n "$gitf" 'git leftover' 'git leftovers')"
+      s_card_line "   Remaining: $(s_n "$gitf" 'Git finding' 'Git findings')"
     fi
     if [ "$live" -gt 0 ]; then
-      s_card_line "   still on the tab: $(s_n "$live" 'ledger entry' 'ledger entries')"
+      s_card_line "   Remaining: $(s_n "$live" 'live ledger entry' 'live ledger entries')"
     fi
     s_card_line
-    s_card_line "   thanks for partying responsibly 🎉"
+    s_card_line "   Review the results above."
   elif [ $((found + live + gitf)) -gt 0 ]; then
-    s_card_line "${C_BOLD}${C_YEL}🧹 the damage${C_RESET}"
+    s_card_line "${C_BOLD}${C_YEL}🧹 Audit results${C_RESET}"
     segs="$(s_segments \
-      "$([ "$found" -gt 0 ] && echo "$G_ACT $(s_n "$found" 'stray' 'strays')")" \
-      "$([ "$live" -gt 0 ] && echo "$G_ACT $live on the tab")" \
-      "$([ "$gitf" -gt 0 ] && echo "$G_ACT $(s_n "$gitf" 'git leftover' 'git leftovers')")" \
+      "$([ "$found" -gt 0 ] && echo "$G_ACT $(s_n "$found" 'process candidate' 'process candidates')")" \
+      "$([ "$live" -gt 0 ] && echo "$G_ACT $(s_n "$live" 'live ledger entry' 'live ledger entries')")" \
+      "$([ "$gitf" -gt 0 ] && echo "$G_ACT $(s_n "$gitf" 'Git finding' 'Git findings')")" \
       "$([ "$listeners" -gt 0 ] && echo "$(s_n "$listeners" 'listener' 'listeners')")" \
       "$([ "$unavailable" -gt 0 ] && echo "$G_SKIP $unavailable unavailable")")"
     s_card_line "   $segs"
     if [ "$found" -gt 0 ]; then
-      s_card_line "   $(s_n "$found" 'stray process still partying' 'stray processes still partying')"
+      s_card_line "   $(s_n "$found" 'process candidate found' 'process candidates found')"
     fi
     if [ "$live" -gt 0 ]; then
-      s_card_line "   $(s_n "$live" 'ledger entry live on the tab' 'ledger entries live on the tab')"
+      s_card_line "   $(s_n "$live" 'ledger entry has a live process' 'ledger entries have live processes')"
     fi
     if [ "$gitf" -gt 0 ]; then
       if [ "$bytes" -gt 0 ]; then
-        s_card_line "   $(s_n "$gitf" 'git leftover' 'git leftovers') (${bytes} B of litter)"
+        s_card_line "   $(s_n "$gitf" 'Git finding' 'Git findings') (${bytes} B in conflict files)"
       else
-        s_card_line "   $(s_n "$gitf" 'git leftover' 'git leftovers')"
+        s_card_line "   $(s_n "$gitf" 'Git finding' 'Git findings')"
       fi
     fi
     if [ "$listeners" -gt 0 ]; then
-      s_card_line "${C_DIM}   ($(s_n "$listeners" 'localhost listener up — likely yours' 'localhost listeners up — likely yours'))${C_RESET}"
+      s_card_line "${C_DIM}   ($(s_n "$listeners" 'localhost listener detected' 'localhost listeners detected'))${C_RESET}"
     fi
     if [ "$stashes" -gt 0 ]; then
-      s_card_line "${C_DIM}   ($(s_n "$stashes" 'stash on the shelf — your call' 'stashes on the shelf — your call'))${C_RESET}"
+      s_card_line "${C_DIM}   ($(s_n "$stashes" 'stash retained' 'stashes retained'))${C_RESET}"
     fi
     if [ "$unavailable" -gt 0 ]; then
-      s_card_line "${C_DIM}   ($unavailable scanner(s) unavailable — audit incomplete)${C_RESET}"
+      s_card_line "${C_DIM}   ($unavailable scan(s) unavailable. The audit is incomplete.)${C_RESET}"
     fi
     s_card_line
-    s_card_line "   closing time:"
+    s_card_line "   Commands for reviewed targets:"
     if [ "$live" -gt 0 ]; then
-      s_card_line "     ${C_CYAN}afterparty stop --kill${C_RESET}"
+      s_card_command "     ${C_CYAN}afterparty stop --kill${C_RESET}"
     fi
     if [ "$found" -gt 0 ]; then
-      s_card_line "     ${C_CYAN}afterparty audit --kill tests,dev,browser --pgid <reviewed-pgid>${C_RESET}"
+      s_card_command "     ${C_CYAN}afterparty audit --kill tests,dev,browser --pgid <reviewed-pgid>${C_RESET}"
     fi
     if [ "$gitf" -gt 0 ]; then
-      s_card_line "     ${C_CYAN}afterparty plan${C_RESET}  (git --clean is report-only)"
+      s_card_command "     ${C_CYAN}afterparty plan${C_RESET}"
+      s_card_line "     git --clean is report-only"
     fi
   elif [ "$unavailable" -gt 0 ]; then
-    s_card_line "${C_BOLD}${C_YEL}⚠ audit incomplete — no clean bill of health${C_RESET}"
-    s_card_line "   $unavailable scanner(s) unavailable"
-    s_card_line "   run ${C_CYAN}afterparty doctor${C_RESET} after installing the missing tools"
+    s_card_line "${C_BOLD}${C_YEL}⚠ The audit is incomplete.${C_RESET}"
+    s_card_line "   $unavailable scan(s) unavailable"
+    s_card_line "   Install the missing tools. Then run ${C_CYAN}afterparty doctor${C_RESET}."
   else
-    s_card_line "${C_BOLD}${C_GRN}✨ spotless — nobody crashed on your couch${C_RESET}"
+    s_card_line "${C_BOLD}${C_GRN}✓ No cleanup candidates found in the inspected scope.${C_RESET}"
     if [ "$listeners" -gt 0 ]; then
-      s_card_line "${C_DIM}   ($(s_n "$listeners" 'localhost listener up — likely yours' 'localhost listeners up — likely yours'))${C_RESET}"
+      s_card_line "${C_DIM}   ($(s_n "$listeners" 'localhost listener detected' 'localhost listeners detected'))${C_RESET}"
     fi
     if [ "$stashes" -gt 0 ]; then
-      s_card_line "${C_DIM}   ($(s_n "$stashes" 'stash on the shelf — your call' 'stashes on the shelf — your call'))${C_RESET}"
+      s_card_line "${C_DIM}   ($(s_n "$stashes" 'stash retained' 'stashes retained'))${C_RESET}"
     fi
-    s_card_line "   see you next session 🎉"
+    s_card_line "   See you next session."
   fi
   s_card_close
 }
@@ -216,7 +260,7 @@ case "$cmd" in
       exit "$REPORT_RC"
     else
       if [ "$STYLE_ON" -eq 1 ] && [ -z "$JSON_FLAG" ]; then
-        s_banner "afterparty — last call" "let's see what the session left behind"
+        s_banner "afterparty audit" "Scan processes, listeners, and Git findings."
         if AFTERPARTY_TALLY="$(mktemp "${TMPDIR:-/tmp}/afterparty-tally.XXXXXX" 2>/dev/null)"; then
           export AFTERPARTY_TALLY
         else
@@ -241,6 +285,9 @@ case "$cmd" in
   artifacts)
     exec "$DIR/clean-artifacts.sh" "$@"
     ;;
+  builds)
+    exec bash "$DIR/builds.sh" "$@"
+    ;;
   devclean)
     exec "$DIR/devclean.sh" "$@"
     ;;
@@ -249,6 +296,9 @@ case "$cmd" in
     ;;
   docs)
     exec bash "$DIR/docs.sh" "$@"
+    ;;
+  review)
+    exec "$DIR/review.sh" "$@"
     ;;
   plan)
     exec "$DIR/plan.sh" "$@"
