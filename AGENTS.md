@@ -3,15 +3,18 @@
 This is the canonical repository-wide agent context. Host-specific instruction
 files should defer here instead of duplicating project rules.
 
-**What this is:** My cleanup tool for the mess coding agents leave behind,
-developed independently in this repo (single-root history), shipped three ways:
-Claude Code plugin (.claude-plugin/ manifests + bounded synchronous SessionEnd and
-lightweight SessionStart hooks), self-contained Agent Skill
-(skills/afterparty/ bundles SKILL.md + VERSION + LICENSE + bin + lib, commands anchored with ${CLAUDE_SKILL_DIR}), and standalone CLI (root
-bin/afterparty wrapper). The LICENSE deliberately retains an earlier author's
-copyright line — the code began as an MIT derivative — so never remove it. I'm
-iterating on this partly to learn Claude plugin development — explain plugin
-mechanics when you touch them.
+**What this is:** My cleanup tool for the mess coding agents leave behind.
+It is developed independently in this repository with single-root history.
+It ships as a Claude Code plugin, a self-contained Agent Skill, and a standalone CLI.
+The plugin uses `.claude-plugin/` manifests, bounded synchronous SessionEnd hooks,
+and lightweight SessionStart hooks. The `skills/afterparty/` bundle includes
+instructions, the review protocol, version, licenses, scripts, libraries, and
+optional Go TUI source. Skill commands use `${CLAUDE_SKILL_DIR}`.
+The standalone CLI uses the root `bin/afterparty` wrapper.
+The LICENSE retains an earlier author's copyright because the code began as an
+MIT derivative. Preserve that notice.
+Explain plugin mechanics when you change them. Learning plugin development is
+part of this project.
 
 **Design rules:**
 
@@ -82,6 +85,18 @@ mechanics when you touch them.
   two-signal rule in lib/eligible.sh; `unknown` is never eligible for a process
   plan. Worktrees/artifacts instead require their filesystem, occupancy and
   identity checks; stale transcript evidence is not required for their removal.
+- Review saves checked plans. Cleanup requires a separate `apply` command.
+  Python owns target order, marks, generation checks, and plan saving.
+  Go owns terminal input, rendering, and terminal restoration.
+  Before changing these boundaries, read the
+  [architecture guide](docs/architecture.md).
+- `builds` reports generated output. Its measurements do not establish cleanup
+  eligibility. Enter opens a fresh artifact review without marks.
+  `skills/afterparty/lib/artifact-kinds.tsv` defines supported names for inventory,
+  collection, and the apply allowlist. Preserve that shared source.
+  Missing or invalid definitions must refuse artifact selection.
+  Read the [inventory contract](docs/build-inventory.md) before changing discovery,
+  measurements, or growth history.
 - TSV rows written for `read` must never carry an empty middle field: tab is
   IFS-whitespace, so consecutive tabs collapse and every later column shifts
   left. Emit a sentinel ("-"). test-review-fixes C6 pins this for the ledger;
@@ -140,8 +155,11 @@ mechanics when you touch them.
   else a workspace-keyed cache report;
   the plugin's SessionEnd hook writes a separate bounded session marker,
   with no audit. Explicit reports retain session archives and completion status.
-- Terminal styling lives ONLY in skills/afterparty/lib/style.sh, gated on
-  TTY / NO_COLOR / AFTERPARTY_STYLE=always|never|auto. Plain (piped) and
+- CLI styling and shared theme policy live in `skills/afterparty/lib/style.sh`.
+  `s_review_theme` exports the palette and display policy.
+  The Go TUI applies these roles with Lip Gloss in `skills/afterparty/ui/theme.go`.
+  `NO_COLOR` preserves bold and reverse focus cues in the TUI.
+  CLI styling uses TTY / NO_COLOR / AFTERPARTY_STYLE=always|never|auto. Plain (piped) and
   --json output are CONTRACT surfaces — stable data contracts; intentional safety/status changes need regression coverage. Banners and finale
   cards are additive, styled-mode only. Composite `audit` collects child
   counters via the AFTERPARTY_TALLY file; AFTERPARTY_CARD=0 suppresses
@@ -203,6 +221,10 @@ LF endings enforced via .gitattributes — scripts must never pick up CRLF.
 `skills/afterparty/VERSION` is the canonical release version; synchronize the
 plugin manifest and SKILL metadata, bundle the root license, and update
 CHANGELOG.md in the same change.
+Release archives use explicit file lists in `bin/package-release`.
+Update those lists when adding runtime files. Keep licenses and dependency
+notices in each applicable archive. Run `tests/test-release-package.sh` after
+changing packaging or bundle contents.
 
 **Session completion:** before ending an authorized task, inspect `git status`,
 run the relevant tests, run the documentation review when the user-facing

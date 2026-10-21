@@ -8,6 +8,7 @@
 LICENSE text eol=lf
 VERSION text eol=lf
 bin/afterparty text eol=lf
+bin/package-release text eol=lf
 skills/afterparty/bin/afterparty text eol=lf
 *.png binary
 # Whole-frame terminal snapshots retain their cell padding.
