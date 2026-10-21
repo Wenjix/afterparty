@@ -8,9 +8,12 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import signal
 import sys
 import tarfile
 import tempfile
+import threading
 
 
 SKILL_FILES = (
@@ -162,6 +165,29 @@ def write_archive(handle, prefix, files):
                 archive.addfile(member, io.BytesIO(content))
 
 
+def archive_exists_error(destination):
+    return ValueError("Archive already exists: " + str(destination)
+                      + ". Select another output directory or move the existing archive.")
+
+
+def publish(temporary_path, destination, mode, created):
+    try:
+        os.link(temporary_path, destination)
+    except FileExistsError as error:
+        raise archive_exists_error(destination) from error
+    except OSError:
+        try:
+            fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                         | getattr(os, "O_BINARY", 0), mode)
+        except FileExistsError as error:
+            raise archive_exists_error(destination) from error
+        created.append(destination)
+        with os.fdopen(fd, "wb") as handle, temporary_path.open("rb") as source:
+            shutil.copyfileobj(source, handle)
+    else:
+        created.append(destination)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", required=True, type=Path,
@@ -169,6 +195,7 @@ def main():
     args = parser.parse_args()
     created = []
     temporary = []
+    pending = None
     success = False
     try:
         root = Path(__file__).resolve().parent.parent
@@ -190,22 +217,46 @@ def main():
         output_dir.mkdir(parents=True, exist_ok=True)
         umask = os.umask(0)
         os.umask(umask)
+        mode = 0o666 & ~umask
         for destination, prefix, content in packages:
             fd, temporary_name = tempfile.mkstemp(
                 dir=output_dir, prefix="." + destination.name + ".", suffix=".partial")
             temporary_path = Path(temporary_name)
             temporary.append(temporary_path)
-            os.chmod(temporary_path, 0o666 & ~umask)
+            os.chmod(temporary_path, mode)
             with os.fdopen(fd, "wb") as handle:
                 write_archive(handle, prefix, content)
 
-        for (destination, _, _), temporary_path in zip(packages, temporary):
+        def publish_archives():
+            nonlocal pending
+            for (destination, _, _), temporary_path in zip(packages, temporary):
+                pending = (destination, temporary_path)
+                publish(temporary_path, destination, mode, created)
+                pending = None
+
+        if threading.current_thread() is threading.main_thread():
+            sigint_received = False
+            original_sigint_handler = signal.getsignal(signal.SIGINT)
+
+            def defer_sigint(signum, frame):
+                nonlocal sigint_received
+                sigint_received = True
+
+            signal.signal(signal.SIGINT, defer_sigint)
             try:
-                os.link(temporary_path, destination)
-            except FileExistsError as error:
-                raise ValueError("Archive already exists: " + str(destination)
-                                 + ". Select another output directory or move the existing archive.") from error
-            created.append(destination)
+                try:
+                    publish_archives()
+                except BaseException:
+                    if sigint_received:
+                        raise KeyboardInterrupt
+                    raise
+            finally:
+                signal.signal(signal.SIGINT, original_sigint_handler)
+            if sigint_received:
+                raise KeyboardInterrupt
+        else:
+            publish_archives()
+
         for temporary_path in temporary:
             temporary_path.unlink(missing_ok=True)
         for destination in created:
@@ -215,11 +266,20 @@ def main():
         print("package-release: " + str(error), file=sys.stderr)
         return 1
     finally:
-        for temporary_path in temporary:
-            temporary_path.unlink(missing_ok=True)
         if not success:
             for destination in created:
                 destination.unlink(missing_ok=True)
+            if pending is not None:
+                destination, temporary_path = pending
+                if destination not in created and destination.exists():
+                    try:
+                        is_pending_archive = os.path.samefile(destination, temporary_path)
+                    except OSError:
+                        is_pending_archive = False
+                    if is_pending_archive:
+                        destination.unlink(missing_ok=True)
+        for temporary_path in temporary:
+            temporary_path.unlink(missing_ok=True)
     return 0
 
 

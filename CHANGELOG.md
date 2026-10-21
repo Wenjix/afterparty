@@ -8,7 +8,8 @@ All notable changes to Afterparty are documented here. Versions follow semantic 
 
 - Explicit source/plugin and Agent Skill release archives, with copied-bundle
   checks for required files, metadata, licenses, and read-only CLI operation.
-- Release archives are published only after both are fully written; interruptions leave no partial archives.
+- Release archives publish only after both writes complete; interruptions leave no
+  partial archives, and filesystems without hard links use an exclusive-copy fallback.
 - `afterparty builds`: a read-only terminal inventory of known generated output
   across explicit project roots. Rows show repository paths, allocated-size
   estimates, and growth against the previous complete matching-scope scan.

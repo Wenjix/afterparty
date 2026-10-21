@@ -1,6 +1,7 @@
 """Check release contents and copied entry points without running cleanup."""
 
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
+import errno
 import hashlib
 import io
 import json
@@ -9,6 +10,7 @@ from pathlib import Path
 import re
 import runpy
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -275,11 +277,13 @@ class ReleasePackageTests(unittest.TestCase):
         links = [0]
         os_module = namespace.get("os", os)
         original_link = os_module.link
+        racing_archive = self.output / ("afterparty-" + self.version + "-skill.tar.gz")
 
         def fail_second_link(source, destination, *args, **kwargs):
             links[0] += 1
             if links[0] == 2:
-                raise OSError("simulated publish failure")
+                Path(destination).write_bytes(b"other process")
+                raise FileExistsError("simulated race")
             return original_link(source, destination, *args, **kwargs)
 
         error_output = io.StringIO()
@@ -287,8 +291,96 @@ class ReleasePackageTests(unittest.TestCase):
                 mock.patch.object(sys, "argv", ["package-release", "--output-dir", str(self.output)]), \
                 redirect_stderr(error_output):
             self.assertEqual(namespace["main"](), 1)
-        self.assertIn("simulated publish failure", error_output.getvalue())
+        self.assertIn("Archive already exists", error_output.getvalue())
+        self.assertFalse((self.output / ("afterparty-" + self.version + "-source.tar.gz")).exists())
+        self.assertEqual({path.name for path in self.output.iterdir()}, {racing_archive.name})
+        self.assertEqual(racing_archive.read_bytes(), b"other process")
+
+    def test_interrupt_after_link_removes_archive(self):
+        namespace = runpy.run_path(str(self.source / "bin/package-release"))
+        os_module = namespace.get("os", os)
+        original_link = os_module.link
+        links = [0]
+
+        def interrupt_after_first_link(source, destination, *args, **kwargs):
+            links[0] += 1
+            result = original_link(source, destination, *args, **kwargs)
+            if links[0] == 1:
+                raise KeyboardInterrupt
+            return result
+
+        with mock.patch.object(os_module, "link", interrupt_after_first_link), \
+                mock.patch.object(sys, "argv", ["package-release", "--output-dir", str(self.output)]):
+            with self.assertRaises(KeyboardInterrupt):
+                namespace["main"]()
         self.assertEqual(list(self.output.iterdir()), [])
+
+        self.package()
+        self.assertEqual(
+            {path.name for path in self.output.iterdir()},
+            {"afterparty-" + self.version + "-source.tar.gz",
+             "afterparty-" + self.version + "-skill.tar.gz"})
+
+    @unittest.skipIf(os.name == "nt", "SIGINT delivery is not supported consistently on Windows")
+    def test_sigint_during_publish_is_deferred(self):
+        namespace = runpy.run_path(str(self.source / "bin/package-release"))
+        os_module = namespace.get("os", os)
+        original_link = os_module.link
+        links = [0]
+
+        def interrupt_after_first_link(source, destination, *args, **kwargs):
+            links[0] += 1
+            result = original_link(source, destination, *args, **kwargs)
+            if links[0] == 1:
+                os.kill(os.getpid(), signal.SIGINT)
+            return result
+
+        with mock.patch.object(os_module, "link", interrupt_after_first_link), \
+                mock.patch.object(sys, "argv", ["package-release", "--output-dir", str(self.output)]):
+            with self.assertRaises(KeyboardInterrupt):
+                namespace["main"]()
+        self.assertEqual(list(self.output.iterdir()), [])
+
+    def test_publish_without_hard_links(self):
+        reference = self.base / "hard-link-reference"
+        self.package(output=reference)
+        namespace = runpy.run_path(str(self.source / "bin/package-release"))
+        os_module = namespace.get("os", os)
+        output = io.StringIO()
+        umask = os.umask(0)
+        os.umask(umask)
+
+        def fail_link(source, destination, *args, **kwargs):
+            raise OSError(errno.EPERM, "Operation not permitted")
+
+        with mock.patch.object(os_module, "link", fail_link), \
+                mock.patch.object(sys, "argv", ["package-release", "--output-dir", str(self.output)]), \
+                redirect_stdout(output):
+            self.assertEqual(namespace["main"](), 0)
+        names = {"afterparty-" + self.version + "-source.tar.gz",
+                 "afterparty-" + self.version + "-skill.tar.gz"}
+        self.assertEqual({path.name for path in self.output.iterdir()}, names)
+        for name in names:
+            self.assertEqual((self.output / name).read_bytes(), (reference / name).read_bytes())
+            self.assertEqual((self.output / name).stat().st_mode & 0o777, 0o666 & ~umask)
+
+    def test_fallback_does_not_clobber_racing_archive(self):
+        namespace = runpy.run_path(str(self.source / "bin/package-release"))
+        os_module = namespace.get("os", os)
+        racing_archive = self.output / ("afterparty-" + self.version + "-source.tar.gz")
+        error_output = io.StringIO()
+
+        def fail_link(source, destination, *args, **kwargs):
+            Path(destination).write_bytes(b"other process")
+            raise OSError(errno.EPERM, "Operation not permitted")
+
+        with mock.patch.object(os_module, "link", fail_link), \
+                mock.patch.object(sys, "argv", ["package-release", "--output-dir", str(self.output)]), \
+                redirect_stderr(error_output):
+            self.assertEqual(namespace["main"](), 1)
+        self.assertIn("Archive already exists", error_output.getvalue())
+        self.assertEqual({path.name for path in self.output.iterdir()}, {racing_archive.name})
+        self.assertEqual(racing_archive.read_bytes(), b"other process")
 
     def test_metadata_and_license_mismatch_refuse_packaging(self):
         for name, content, message in (
