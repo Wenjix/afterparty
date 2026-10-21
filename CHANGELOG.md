@@ -36,6 +36,9 @@ All notable changes to Afterparty are documented here. Versions follow semantic 
 
 ### Changed
 
+- Reorganized the README around installation, review, and cleanup workflows.
+  Removed repeated guidance and corrected scope/output examples. Added DevClean
+  by ImL1s to the credits alongside Wenjie Fu and Kevin Liu's Agent-Broom.
 - Invalid-option and missing-value errors name the command, the option, and a
   recovery step. Documentation distinguishes plan validation, fresh target
   checks, attempted actions, and confirmed outcomes.
