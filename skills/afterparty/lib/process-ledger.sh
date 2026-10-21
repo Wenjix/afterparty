@@ -136,13 +136,18 @@ add_entry() {
 
   while [ $# -gt 0 ]; do
     case "$1" in
-      --pid) pid="${2:?}"; shift 2 ;;
-      --kind) kind="${2:?}"; shift 2 ;;
-      --port) port="${2:?}"; shift 2 ;;
-      --purpose) purpose="${2:?}"; shift 2 ;;
+      --pid|--kind|--port|--purpose)
+        [ $# -ge 2 ] && [ -n "$2" ] || { echo "add: $1 requires a value. Run afterparty add --help." >&2; exit 2; }
+        case "$1" in
+          --pid) pid="$2" ;;
+          --kind) kind="$2" ;;
+          --port) port="$2" ;;
+          --purpose) purpose="$2" ;;
+        esac
+        shift 2 ;;
       --) shift; command_label="$*"; break ;;
       -h|--help) usage; exit 0 ;;
-      *) echo "unknown add arg: $1" >&2; exit 2 ;;
+      *) echo "add: Unknown option: $1. Run afterparty add --help." >&2; exit 2 ;;
     esac
   done
 
@@ -216,11 +221,13 @@ list_entries() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --all) all_roots=1; shift ;;
-      --root) want_root="$(workspace_root "${2:?}")"; shift 2 ;;
-      --kind) want_kind="${2:?}"; shift 2 ;;
+      --root|--kind)
+        [ $# -ge 2 ] && [ -n "$2" ] || { echo "list: $1 requires a value. Run afterparty list --help." >&2; exit 2; }
+        if [ "$1" = --root ]; then want_root="$(workspace_root "$2")"; else want_kind="$2"; fi
+        shift 2 ;;
       --json) json=1; shift ;;
       -h|--help) usage; exit 0 ;;
-      *) echo "unknown list arg: $1" >&2; exit 2 ;;
+      *) echo "list: Unknown option: $1. Run afterparty list --help." >&2; exit 2 ;;
     esac
   done
 
@@ -278,11 +285,16 @@ stop_entries() {
     case "$1" in
       --kill) do_kill=1; shift ;;
       --all) all_roots=1; shift ;;
-      --root) want_root="$(workspace_root "${2:?}")"; shift 2 ;;
-      --kind) want_kind="${2:?}"; shift 2 ;;
-      --keep-pgid|--keep) keep_pgid="${2:?}"; shift 2 ;;
+      --root|--kind|--keep-pgid|--keep)
+        [ $# -ge 2 ] && [ -n "$2" ] || { echo "stop: $1 requires a value. Run afterparty stop --help." >&2; exit 2; }
+        case "$1" in
+          --root) want_root="$(workspace_root "$2")" ;;
+          --kind) want_kind="$2" ;;
+          --keep-pgid|--keep) keep_pgid="$2" ;;
+        esac
+        shift 2 ;;
       -h|--help) usage; exit 0 ;;
-      *) echo "unknown stop arg: $1" >&2; exit 2 ;;
+      *) echo "stop: Unknown option: $1. Run afterparty stop --help." >&2; exit 2 ;;
     esac
   done
 
@@ -565,9 +577,11 @@ prune_entries() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --all) all_roots=1; shift ;;
-      --root) want_root="$(workspace_root "${2:?}")"; shift 2 ;;
+      --root)
+        [ $# -ge 2 ] && [ -n "$2" ] || { echo 'prune: --root requires a directory. Run afterparty prune --help.' >&2; exit 2; }
+        want_root="$(workspace_root "$2")"; shift 2 ;;
       -h|--help) usage; exit 0 ;;
-      *) echo "unknown prune arg: $1" >&2; exit 2 ;;
+      *) echo "prune: Unknown option: $1. Run afterparty prune --help." >&2; exit 2 ;;
     esac
   done
 
@@ -613,7 +627,13 @@ prune_entries() {
         s_skip "  kept pid $pid pgid ${pgid:-unknown}: inspection unavailable"
       fi
     fi
-    printf '%s\n' "$__row" >> "$tmp"
+    if ! printf '%s\n' "$__row" >> "$tmp"; then
+      ledger_tmp_cleanup
+      LEDGER_TMP=""
+      trap - EXIT INT TERM
+      echo "prune: Could not write the replacement ledger: $LEDGER. The original ledger is unchanged. Check disk space and permissions before you retry." >&2
+      return 1
+    fi
     kept=$((kept + 1))
   done < "$LEDGER"
   if ! mv -f -- "$tmp" "$LEDGER"; then
@@ -642,5 +662,5 @@ case "$cmd" in
   stop) stop_entries "$@" ;;
   prune) prune_entries "$@" ;;
   -h|--help|help) usage ;;
-  *) echo "unknown command: $cmd" >&2; usage; exit 2 ;;
+  *) echo "afterparty: Unknown ledger command: $cmd. Run afterparty --help." >&2; usage; exit 2 ;;
 esac

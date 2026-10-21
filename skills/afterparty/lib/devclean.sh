@@ -67,6 +67,17 @@ usage() {
   sed -n '2,/^set -uo pipefail/{ /^set /d; p; }' "$0"
 }
 
+devclean_value() {
+  if [ "$#" -lt 2 ] || [ -z "${2:-}" ]; then
+    echo "devclean: $1 requires a value. Run afterparty devclean --help." >&2
+    return 2
+  fi
+  case "$2" in
+    --*) echo "devclean: $1 requires a value before $2. Run afterparty devclean --help." >&2; return 2 ;;
+  esac
+  printf '%s' "$2"
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply|--kill|--clean) DRY_RUN=0; shift ;;
@@ -76,13 +87,13 @@ while [ $# -gt 0 ]; do
     --optimize) OPTIMIZE=1; shift ;;
     --disk) DISK=1; shift ;;
     --history) HISTORY=1; shift ;;
-    --target) REQUESTED_TARGETS+=("${2:?}"); shift 2 ;;
-    --documents-root) DOCUMENTS_ROOT="${2:?}"; shift 2 ;;
-    --project-maxdepth) PROJECT_MAXDEPTH="${2:?}"; shift 2 ;;
+    --target) target_value="$(devclean_value "$1" "${2:-}")" || exit 2; REQUESTED_TARGETS+=("$target_value"); shift 2 ;;
+    --documents-root) DOCUMENTS_ROOT="$(devclean_value "$1" "${2:-}")" || exit 2; shift 2 ;;
+    --project-maxdepth) PROJECT_MAXDEPTH="$(devclean_value "$1" "${2:-}")" || exit 2; shift 2 ;;
     --no-repo-artifacts) RUN_REPO_ARTIFACTS=0; shift ;;
     --allow-broad-documents-root) ALLOW_BROAD_DOCUMENTS_ROOT=1; shift ;;
     -h|--help|help) usage; exit 0 ;;
-    *) echo "unknown arg: $1" >&2; usage; exit 2 ;;
+    *) echo "devclean: Unknown option: $1. Run afterparty devclean --help." >&2; exit 2 ;;
   esac
 done
 if [ "$DEEP" -eq 0 ] && [ "$OPTIMIZE" -eq 0 ] && [ "$DISK" -eq 0 ] && [ "$HISTORY" -eq 0 ]; then
@@ -140,8 +151,21 @@ devclean_receipt() {
 # the environment; only wholly stale directories of at least 1 MiB are offered.
 CODEX_SESSION_AGE_DAYS="${CODEX_SESSION_AGE_DAYS:-30}"
 case "$CODEX_SESSION_AGE_DAYS" in
-  ''|0|*[!0-9]*) echo "CODEX_SESSION_AGE_DAYS requires a positive whole number of days" >&2; exit 2 ;;
+  ''|0|*[!0-9]*) echo "devclean: CODEX_SESSION_AGE_DAYS requires 1 to 106751991167300 days. Set CODEX_SESSION_AGE_DAYS to a value in this range." >&2; exit 2 ;;
 esac
+# Shell arithmetic interprets leading zeroes as octal. Normalize decimal input
+# before using it in the retention cutoff, including zero-padded zero values.
+CODEX_SESSION_AGE_DAYS="${CODEX_SESSION_AGE_DAYS#"${CODEX_SESSION_AGE_DAYS%%[!0]*}"}"
+if [ -z "$CODEX_SESSION_AGE_DAYS" ]; then
+  echo "devclean: CODEX_SESSION_AGE_DAYS requires 1 to 106751991167300 days. Set CODEX_SESSION_AGE_DAYS to a value in this range." >&2
+  exit 2
+fi
+# The day-to-second product must fit Bash's signed 64-bit arithmetic. Compare
+# length before numbers so an oversized override cannot itself overflow.
+if [ "${#CODEX_SESSION_AGE_DAYS}" -gt 15 ] || [ "$CODEX_SESSION_AGE_DAYS" -gt 106751991167300 ]; then
+  echo "devclean: CODEX_SESSION_AGE_DAYS requires 1 to 106751991167300 days. Set CODEX_SESSION_AGE_DAYS to a value in this range." >&2
+  exit 2
+fi
 
 # IDs bind an explicit action to the reviewed object. Hashes keep whitespace
 # and shell metacharacters out of the copyable selection argument.
@@ -945,6 +969,10 @@ clean_dir() {
   fi
   target="$canonical"
   [ "$kind" != history ] || operation=history.clean
+  if [ "$kind" = history ] && history_is_archived "$target"; then
+    withhold "$label" "excluded archived_sessions history at $target"
+    return 1
+  fi
   s_heartbeat "Measure disk use: $target"
   kb="$(size_kb "$target")"
   [ "${kb:-0}" -ge 1024 ] || return 0
@@ -1041,6 +1069,15 @@ clean_find() {
 # Their YYYY/MM/DD paths must predate the configured cutoff, and a successful
 # scan of every regular file must prove retention age. A resumed old session
 # can have fresh file mtimes. Claude transcripts are not selected here.
+history_is_archived() {
+  local path="$1" archive="$HOME/.codex/archived_sessions"
+  [ -d "$archive" ] || return 1
+  archive="$(cd "$archive" && pwd -P)" || return 1
+  case "$path" in "$archive"|"$archive"/*) return 0 ;; esac
+  case "$archive" in "$path"/*) return 0 ;; esac
+  return 1
+}
+
 history_is_stale() {
   local path="$1" file stamp seen=0 cutoff
   cutoff=$(( $(date +%s) - CODEX_SESSION_AGE_DAYS * 86400 ))

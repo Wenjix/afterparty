@@ -126,3 +126,30 @@ func TestSmallPaneConfirmationRemainsUsable(t *testing.T) {
 		t.Fatal("small pane swallowed confirmed exit")
 	}
 }
+
+func TestSmallPaneCanLeaveRefreshConfirmationWithoutDiscardingMarks(t *testing.T) {
+	s := fixture()
+	s.Step = "confirm_refresh"
+	s.Marked = []string{"process:1"}
+	m := keyedModel(s)
+	m.width, m.height = 40, 10
+	m.render()
+	press(&m, tea.KeyEscape)
+	if len(m.backend.keys) != 1 || (<-m.backend.keys).Key != "ESC" {
+		t.Fatal("small pane swallowed the refresh confirmation's Escape action")
+	}
+	if cmd := press(&m, 'q'); cmd != nil {
+		t.Fatal("small pane discarded marks without backend confirmation")
+	}
+	if len(m.backend.keys) != 2 {
+		t.Fatal("small pane did not leave refresh confirmation before requesting quit")
+	}
+	first, second := <-m.backend.keys, <-m.backend.keys
+	if first.Key != "ESC" || second.Key != "q" || len(m.state.Marked) != 1 {
+		t.Fatalf("small pane bypassed quit confirmation: %+v %+v", first, second)
+	}
+	press(&m, tea.KeyEnter)
+	if len(m.backend.keys) != 0 {
+		t.Fatal("small pane allowed the refresh confirmation to collect again")
+	}
+}

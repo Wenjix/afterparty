@@ -111,6 +111,7 @@ group_facts() {
   | {
     local best="" maxcpu=0 pid cpu dir cand mixed=0
     while IFS=$'\t' read -r pid cpu; do
+      elig_cpu_valid "$cpu" || return 1
       awk -v c="$cpu" -v m="$maxcpu" 'BEGIN { exit !(c + 0 > m + 0) }' && maxcpu="$cpu"
       dir="$(awk -F'\t' -v p="$pid" '$1 == p { print $2; exit }' "$T/cwd")"
       # A member we cannot place is not a member we can vouch for. Skipping it
@@ -204,7 +205,7 @@ while IFS=$'\t' read -r type target want_fp category scope; do
         continue
       fi
       [ "$touched" = "-" ] && touched=""
-      verdict="$(elig_verdict "$touched" "${cpu:-0}" "$NOW")"
+      verdict="$(elig_verdict "$touched" "$cpu" "$NOW")"
       if [ "$verdict" != "eligible" ]; then
         s_skip "  pgid $pg — held, no longer eligible ($verdict)"
         s_dim  "      Current activity or CPU use no longer meets the cleanup conditions."

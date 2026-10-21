@@ -41,8 +41,12 @@ func has(values []string, value string) bool {
 
 func (s viewState) visible() []item {
 	var result []item
+	ids := make(map[string]bool, len(s.VisibleIDs))
+	for _, id := range s.VisibleIDs {
+		ids[id] = true
+	}
 	for _, target := range s.Items {
-		if has(s.VisibleIDs, target.ID) {
+		if ids[target.ID] {
 			result = append(result, target)
 		}
 	}
@@ -125,28 +129,32 @@ func (m *model) shortLabel(target item, limit int) string {
 	return ansi.Truncate(raw, limit, "...")
 }
 func (m *model) label(target item, width int) string {
+	return m.labels(width)[target.ID]
+}
+
+func (m *model) labels(width int) map[string]string {
 	width = max(8, width)
 
-	labels := map[string]bool{}
+	labels := make(map[string]string, len(m.state.Items))
+	seen := map[string]bool{}
 	collision := false
 	for _, other := range m.state.Items {
 		label := m.shortLabel(other, width)
-		if labels[label] {
+		labels[other.ID] = label
+		if seen[label] {
 			collision = true
 		}
-		labels[label] = true
+		seen[label] = true
 	}
 	if collision {
 		// A short ordinal is used only when shortening would erase a distinction.
 		// Every row then carries its own prefix, including literal lookalike paths.
 		for index, other := range m.state.Items {
-			if other.ID == target.ID {
-				prefix := fmt.Sprintf("[%d] ", index+1)
-				return prefix + m.shortLabel(target, max(1, width-len(prefix)))
-			}
+			prefix := fmt.Sprintf("[%d] ", index+1)
+			labels[other.ID] = prefix + m.shortLabel(other, max(1, width-len(prefix)))
 		}
 	}
-	return m.shortLabel(target, width)
+	return labels
 }
 
 func evidenceLines(target item) []string {

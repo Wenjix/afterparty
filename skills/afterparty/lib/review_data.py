@@ -224,12 +224,12 @@ class Review:
     def help_keys(self):
         step = self.return_step if self.step == "help" else self.step
         entries = self.legend(step)
-        extras = [("PgUp/PgDn", "scroll; keep target focus"),
-                  ("Ctrl+Z", "suspend; use fg to resume"), ("Ctrl+C", "exit without a new plan")]
+        extras = [("PgUp/PgDn", "scroll. Keep target focus"),
+                  ("Ctrl+Z", "suspend. Use fg to resume"), ("Ctrl+C", "exit without a new plan")]
         if step in ("choose", "evidence"):
             extras.append(("s", "Review choices"))
         if step not in ("saved", "confirm_quit", "confirm_refresh"):
-            extras.extend([("r", "refresh; asks before unmarking"), ("Esc", "go back; keep marks")])
+            extras.extend([("r", "refresh. Confirm before unmarking"), ("Esc", "return. Keep marks")])
             if step != "evidence":
                 extras.append(("d", "show or hide details"))
         existing = {entry["key"] for entry in entries}

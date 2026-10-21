@@ -131,9 +131,10 @@ done
 [ "$(type -t kill)" = function ] || { echo 'fixture kill interceptor unavailable' >&2; exit 97; }
 exec "$BASH" "$@"
 '''
-def run(t, env, *args):
+def run(t, env, *args, cli=False):
+    command = [shell_path(repo/'bin/afterparty'), 'devclean'] if cli else [shell_path(lib/'devclean.sh')]
     result = subprocess.run([bash, '--noprofile', '--norc', '-c', bootstrap, 'devclean-fixture',
-                             shell_path(lib/'devclean.sh'), *args], cwd=t, env=env,
+                             *command, *args], cwd=t, env=env,
                             encoding='utf-8', stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     if result.returncode == 97:
         raise RuntimeError('devclean fixture isolation failed: ' + result.stdout)
@@ -204,6 +205,80 @@ try:
         result=run(t,env,'--history','--apply','--target',chosen[0])
         check(old.exists() and result.returncode!=0 and 'activity evidence unavailable' in result.stdout,
               'D6: incomplete history scans must fail closed')
+
+    # A numeric environment override is decimal, including leading zeros.
+    # Each retention guard needs a stale selectable control in the same scan.
+    for configured, days in (('030',30), ('08',8), ('0'*30+'30',30)):
+        t,home,env=fixture('history-decimal-'+configured)
+        env['CODEX_SESSION_AGE_DAYS']=configured
+        retained=home/'.codex/sessions/2000/01/01/resumed.jsonl'
+        expired=home/'.codex/sessions/2000/01/02/expired.jsonl'
+        blob(retained); blob(expired)
+        os.utime(retained,(time.time()-(days-1)*86400,)*2)
+        os.utime(expired,(time.time()-(days+1)*86400,)*2)
+        preview=run(t,env,'--history',cli=True)
+        chosen=targets(preview.stdout,'2000/01/02')
+        check(preview.returncode==0 and len(chosen)==1,
+              'D19: decimal '+configured+' retention must offer expired history: '+preview.stdout)
+        check('recent activity' in preview.stdout and not targets(preview.stdout,'2000/01/01'),
+              'D19: decimal '+configured+' retention must withhold resumed history: '+preview.stdout)
+        shorter=dict(env, CODEX_SESSION_AGE_DAYS=str(days-2))
+        retained_choice=targets(run(t,shorter,'--history',cli=True).stdout,'2000/01/01')
+        check(len(retained_choice)==1, 'D19: shorter retention control must offer the resumed history')
+        if retained_choice:
+            result=run(t,env,'--history','--apply','--target',retained_choice[0],cli=True)
+            check(retained.exists() and result.returncode!=0 and 'recent activity' in result.stdout,
+                  'D19: decimal '+configured+' apply must reject an approval under shorter retention: '+result.stdout)
+        if chosen:
+            result=run(t,env,'--history','--apply','--target',chosen[0],cli=True)
+            check(retained.exists() and not expired.exists() and result.returncode!=0
+                  and 'recent activity' in result.stdout and '1 history action(s)' in result.stdout,
+                  'D19: decimal '+configured+' apply must remove only expired history: '+result.stdout)
+    for configured in ('00', '000', '106751991167301', '9223372036854775808'):
+        t,home,env=fixture('history-invalid-'+configured)
+        env['CODEX_SESSION_AGE_DAYS']=configured
+        recent=home/'.codex/sessions/2000/01/01/recent.jsonl'; blob(recent)
+        result=run(t,env,'--history',cli=True)
+        check(result.returncode==2 and 'CODEX_SESSION_AGE_DAYS requires' in result.stdout
+              and not targets(result.stdout) and recent.exists(),
+              'D19: zero or overflowing retention must reject the named override before scanning: '+result.stdout)
+
+    if os.name != 'nt':
+        t,home,env=fixture('history-archive-alias')
+        archived=home/'.codex/archived_sessions/2000/01/01/archived.jsonl'
+        log=home/'.codex/log/stale.log'
+        blob(archived,True); blob(log,True)
+        (home/'.codex/sessions').symlink_to('archived_sessions',target_is_directory=True)
+        preview=run(t,env,'--history',cli=True)
+        check(len(targets(preview.stdout,'/.codex/log'))==1,
+              'D20: independent stale logs must remain selectable in the archive-alias fixture: '+preview.stdout)
+        check('excluded archived_sessions' in preview.stdout and not targets(preview.stdout,'/archived_sessions/'),
+              'D20: a sessions alias must not offer archived history: '+preview.stdout)
+        fingerprint=subprocess.check_output([bash,'-c','. "$1"; fp_for_artifact "$2"',
+                                             'history-fingerprint',shell_path(lib/'fingerprint.sh'),
+                                             shell_path(archived.parent)],cwd=t,env=env,encoding='utf-8').strip()
+        result=run(t,env,'--history','--apply','--target','history:'+fingerprint,cli=True)
+        check(result.returncode!=0 and archived.exists() and log.exists()
+              and 'excluded archived_sessions' in result.stdout and '0 history action(s)' in result.stdout,
+              'D20: even an exact target ID must not override archived-history exclusion: '+result.stdout)
+
+        t,home,env=fixture('history-archive-inside-log')
+        archived=home/'.codex/log/archive/archived.jsonl'
+        session=home/'.codex/sessions/2000/01/01/session.jsonl'
+        blob(archived,True); blob(session,True)
+        (home/'.codex/archived_sessions').symlink_to('log/archive',target_is_directory=True)
+        preview=run(t,env,'--history',cli=True)
+        check(len(targets(preview.stdout,'/sessions/2000/01/01'))==1,
+              'D21: independent stale sessions must remain selectable beside protected logs: '+preview.stdout)
+        check('excluded archived_sessions' in preview.stdout and not targets(preview.stdout,'/.codex/log'),
+              'D21: history that contains the physical archive must be withheld: '+preview.stdout)
+        fingerprint=subprocess.check_output([bash,'-c','. "$1"; fp_for_artifact "$2"',
+                                             'history-fingerprint',shell_path(lib/'fingerprint.sh'),
+                                             shell_path(home/'.codex/log')],cwd=t,env=env,encoding='utf-8').strip()
+        result=run(t,env,'--history','--apply','--target','history:'+fingerprint,cli=True)
+        check(result.returncode!=0 and archived.exists() and session.exists()
+              and 'excluded archived_sessions' in result.stdout and '0 history action(s)' in result.stdout,
+              'D21: a checked parent history target cannot remove physical archives: '+result.stdout)
 
     t,home,env=fixture('settings')
     commented=home/'.vscode/argv.json'; active=home/'.cursor/argv.json'

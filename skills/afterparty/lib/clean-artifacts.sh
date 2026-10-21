@@ -32,13 +32,15 @@ ROOT="$PWD"
 DO_CLEAN=0 CLEAN_REQUESTED=0 AS_PLAN=0 CACHES_ONLY=0 ALLOW_NON_REPO_ROOT=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --root) ROOT="${2:?}"; shift 2 ;;
+    --root)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo 'artifacts: --root requires a directory. Run afterparty artifacts --help.' >&2; exit 2; }
+      ROOT="$2"; shift 2 ;;
     --clean) CLEAN_REQUESTED=1; shift ;;
     --plan) AS_PLAN=1; shift ;;
     --caches-only) CACHES_ONLY=1; shift ;;
     --allow-non-repo-root) ALLOW_NON_REPO_ROOT=1; shift ;;
     -h|--help) sed -n '2,/^set -uo pipefail/{ /^set /d; p; }' "$0"; exit 0 ;;
-    *) echo "unknown arg: $1" >&2; exit 2 ;;
+    *) echo "artifacts: Unknown option: $1. Run afterparty artifacts --help." >&2; exit 2 ;;
   esac
 done
 if [ "$AS_PLAN" -eq 1 ] && [ "$CLEAN_REQUESTED" -eq 1 ]; then

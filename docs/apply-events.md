@@ -19,7 +19,7 @@ Readers must refuse unknown versions. Record order is:
 
 1. One `apply_start`, with `plan_sha256` and `checked_count`. `plan_sha256` is the
    SHA-256 digest of the exact plan bytes checked for this invocation.
-2. One `apply_target` per checked target, after its fresh checks and possible
+2. One `apply_target` per checked target, after its fresh checks and any attempted
    action finish. Unchecked targets never appear. Results can arrive in
    execution order rather than plan order.
 3. One `apply_summary`, followed by one `apply_complete`.
@@ -39,9 +39,9 @@ escape sequences.
 | --- | --- |
 | `outcome` | `applied`, `gone`, `held`, `vetoed`, `drift`, `survived`, or `failed` |
 | `reason_code` | Machine-readable reason such as `identity-changed`, `tracked`, `group-survived`, `postcondition-confirmed`, `removal-failed`, or `child-evidence-unavailable` |
-| `detail` | Explanatory prose; readers must not parse it for decisions |
+| `detail` | Explanatory prose. Readers must not parse it for decisions. |
 | `mutation_attempted` | True when an operation was attempted, false when it was not, null when child evidence is unavailable |
-| `postcondition_confirmed` | Whether the parent confirmed target absence; signal delivery alone never proves this |
+| `postcondition_confirmed` | Whether the parent confirmed target absence. Signal delivery alone never proves absence. |
 | `receipt_status` | `recorded`, `failed`, `not-attempted`, or null when unavailable |
 | `delegation_exit_code` | Child exit status for delegated process targets, otherwise null |
 
@@ -53,10 +53,11 @@ The outcomes have these meanings:
 - `drift`: the reviewed identity changed.
 - `vetoed`: a fresh policy check refused cleanup.
 - `survived`: the target remains after delegated execution or worktree removal.
-- `failed`: the operation failed or another result is unavailable or unconfirmed; path absence may still be confirmed.
+- `failed`: the operation failed or another result is unavailable or unconfirmed.
+  The parent may still confirm that the path is absent.
 
 A filesystem removal command error does not count as an applied result, even
-when the parent confirms that the target path is absent. It is reported as
+when the parent confirms that the target path is absent. The target result is
 `failed` with `reason_code: "removal-failed"` and a confirmed postcondition.
 
 A journal failure does not undo a confirmed effect. That target remains

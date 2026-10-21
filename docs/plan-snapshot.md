@@ -39,9 +39,10 @@ observations do not prove human presence or abandonment. Filesystem
 availability uses separate policy checks, independently of transcript age.
 
 Item IDs are type-prefixed SHA-256 values. The hash input concatenates type,
-exact target, and scope. Each value uses UTF-8 bytes. Its prefix is the ASCII
-byte length followed by `:`. IDs support stable lookup. A replacement at the
-same path can retain its ID but change its fingerprint.
+exact target, and scope in that order. Encode each value as UTF-8.
+Prefix each value with its byte count, written as ASCII decimal digits,
+followed by `:`. IDs support stable lookup. A replacement at the same path
+can retain its ID but change its fingerprint.
 
 Neither an ID nor a fingerprint approves the target.
 

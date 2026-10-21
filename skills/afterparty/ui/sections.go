@@ -38,11 +38,16 @@ func (m *model) rowRight(target item, w int) string {
 }
 func (m *model) rowLabels(items []item, w int) map[string]string {
 	labels, widths := map[string]string{}, map[string]int{}
+	byWidth := map[int]map[string]string{}
 	seen := map[string]bool{}
 	collision := false
 	for _, target := range items {
 		widths[target.ID] = max(8, w-8-ansi.StringWidth(m.rowRight(target, w)))
-		label := m.label(target, widths[target.ID])
+		width := widths[target.ID]
+		if byWidth[width] == nil {
+			byWidth[width] = m.labels(width)
+		}
+		label := byWidth[width][target.ID]
 		labels[target.ID] = label
 		if seen[label] {
 			collision = true

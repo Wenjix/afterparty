@@ -35,11 +35,13 @@ ROOT="$PWD" AGE_DAYS=7 DO_CLEAN=0 JSON=0 CLEAN_REQUESTED=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --clean) CLEAN_REQUESTED=1; shift ;;
-    --age) AGE_DAYS="${2:?}"; shift 2 ;;
-    --root) ROOT="${2:?}"; shift 2 ;;
+    --age|--root)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "git: $1 requires a value. Run afterparty git --help." >&2; exit 2; }
+      if [ "$1" = --age ]; then AGE_DAYS="$2"; else ROOT="$2"; fi
+      shift 2 ;;
     --json) JSON=1; shift ;;
     -h|--help) sed -n '2,/^set -uo pipefail/{ /^set /d; p; }' "$0"; exit 0 ;;
-    *) echo "unknown arg: $1" >&2; exit 2 ;;
+    *) echo "git: Unknown option: $1. Run afterparty git --help." >&2; exit 2 ;;
   esac
 done
 case "$AGE_DAYS" in ''|*[!0-9]*) echo "--age requires a whole number of days" >&2; exit 2 ;; esac

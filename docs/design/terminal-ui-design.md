@@ -1,7 +1,7 @@
 # Terminal UI design specification
 
-Status: accepted design direction, October 2026. The first C+A guided reviewer
-is implemented in the working tree for 0.14.0. Commit and release are pending.
+Status: accepted design direction, October 2026. Commit `9210b5e` merged the
+first C+A guided reviewer on 2026-10-21. The changelog lists 0.14.0 as Unreleased.
 This document retains the broader design intent and illustrative comparisons.
 [README](../../README.md) describes the implemented CLI contract. The
 [implementation status](terminal-ui-implementation.md) covers the reviewer,
