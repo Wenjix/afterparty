@@ -660,13 +660,6 @@ The canonical version is `skills/afterparty/VERSION`. Keep plugin and skill
 metadata synchronized. Preserve the bundled license and update
 [CHANGELOG.md](./CHANGELOG.md) for user-visible changes.
 
-Wenjie Fu maintains Afterparty with coding-agent assistance. Human review is
-required before merge or release. Project guidance:
-[Contributing](./CONTRIBUTING.md), [Security](./SECURITY.md),
-[Code of conduct](./CODE_OF_CONDUCT.md), [Releasing](./RELEASING.md),
-and [agent instructions](./AGENTS.md). Historical plans and audits retain their
-dated purpose. This README and command help describe current behavior.
-
 ## License
 
 Afterparty uses the [MIT license](./LICENSE). The license retains copyright
@@ -674,8 +667,8 @@ notices for Kevin Liu and Wenjie Fu. The bundled skill includes the same license
 
 ### Credits and lineage
 
-- **Wenjie Fu** independently develops and maintains Afterparty. Its first
-  iteration combined his cleanup methods with Agent-Broom.
+- **Wenjie Fu** contributed the cleanup methods combined with Agent-Broom in
+  Afterparty's first iteration.
 - **Kevin Liu**, author of [Agent-Broom](https://github.com/Kevin-Liu-01/Agent-Broom),
   provided the original foundation for the process ledger, audit/stop workflow,
   and report-first defaults. Afterparty retains his MIT copyright notice.
