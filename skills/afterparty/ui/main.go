@@ -292,13 +292,13 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Suspend
 		}
 		// Legacy terminals encode Esc followed quickly by a key as Alt+key.
-		// Preserve the Escape action and the following printable character.
+		// Commands consumes the whole chord; elsewhere preserve both actions.
 		if msg.Mod.Contains(tea.ModAlt) {
 			if m.commands.open {
 				m.commands = commandSheet{}
-			} else {
-				m.send("ESC")
+				return m, nil
 			}
+			m.send("ESC")
 			msg.Mod &^= tea.ModAlt
 			key = msg.String()
 		}

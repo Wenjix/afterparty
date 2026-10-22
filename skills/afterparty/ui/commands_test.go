@@ -85,6 +85,63 @@ func TestCommandSearchConsumesLettersPasteAndEscapeLocally(t *testing.T) {
 	}
 }
 
+func TestCommandsConsumeTheWholeLegacyEscapeChord(t *testing.T) {
+	for _, mode := range []string{"review", "builds"} {
+		for _, key := range []struct {
+			name string
+			code rune
+		}{
+			{"space", ' '}, {"quit", 'q'}, {"filter", '/'},
+			{"enter", tea.KeyEnter}, {"refresh", 'r'}, {"page_down", tea.KeyPgDown},
+		} {
+			t.Run(mode+"/"+key.name, func(t *testing.T) {
+				s := commandFixture()
+				if mode == "builds" {
+					s = inventoryFixture()
+					s.Actions = []commandAction{{ID: "builds.review_repository", Label: "Review repository", Key: "Enter", Enabled: true}}
+				}
+				m := keyedModel(s)
+				m.inventory = mode == "builds"
+				m.state.Query = "vite"
+				m.state.Marked = []string{"artifact:1"}
+				m.scroll = 8
+				m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+				if !m.commands.open || !strings.Contains(ansi.Strip(m.View().Content), "Commands") {
+					t.Fatal("Commands did not open before the Escape chord")
+				}
+				m.Update(tea.KeyPressMsg{Code: key.code, Mod: tea.ModAlt})
+				if m.commands.open {
+					t.Fatal("Escape chord did not close Commands")
+				}
+				if len(m.backend.keys) != 0 {
+					t.Fatalf("Escape chord leaked a backend key: %+v", <-m.backend.keys)
+				}
+				if m.state.Query != "vite" || m.state.Focus != s.Focus || len(m.state.Marked) != 1 || m.state.Marked[0] != "artifact:1" || m.scroll != 8 {
+					t.Fatal("Escape chord changed the filter, focus, marks, or scroll")
+				}
+				press(&m, 'j')
+				if len(m.backend.keys) != 1 {
+					t.Fatal("closing Commands swallowed a subsequent key")
+				}
+				if request := <-m.backend.keys; request.Key != "j" {
+					t.Fatalf("subsequent key changed: %+v", request)
+				}
+			})
+		}
+	}
+}
+
+func TestCommandsKeepPlainInterruptsAvailable(t *testing.T) {
+	m := openCommandModel()
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd == nil || m.status != 130 {
+		t.Fatal("Commands swallowed Ctrl+C")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("Ctrl+C did not quit the terminal review")
+	}
+}
+
 func TestDisabledCommandHasReasonAndCannotDispatch(t *testing.T) {
 	m := openCommandModel()
 	for _, char := range "review" {

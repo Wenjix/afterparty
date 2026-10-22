@@ -88,6 +88,8 @@ All notable changes to Afterparty are documented here. Versions follow semantic 
 
 ### Fixed
 
+- Esc chords close Commands without sending the following key to Review or
+  Builds. Marks, filters, focus, and scroll position stay unchanged.
 - Codex history retention treats leading zeros as decimal. Zero-padded zero
   values and overflowing age limits are refused. Oversized process idle
   intervals withhold cleanup instead of wrapping to a shorter interval.
