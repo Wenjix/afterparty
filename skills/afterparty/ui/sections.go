@@ -70,15 +70,20 @@ func (m *model) body(w int) ([]string, map[string][2]int) {
 	switch s.Step {
 	case "choose":
 		previous := ""
-		labels := m.rowLabels(s.visible(), w)
-		for _, target := range s.visible() {
+		visible := s.visible()
+		labels := m.rowLabels(visible, w)
+		counts := map[string]int{}
+		for _, target := range visible {
+			counts[target.Type]++
+		}
+		for _, target := range visible {
 			if target.Type != previous {
-				lines = append(lines, m.paint("heading", sectionName(target.Type)))
+				lines = append(lines, m.sectionRule(fmt.Sprintf("%s %d", sectionName(target.Type), counts[target.Type]), "heading", w))
 				previous = target.Type
 			}
 			start := len(lines)
-			if s.Expanded {
-				lines = append(lines, m.targetDetails(target, w, true)...)
+			if s.Expanded && target.ID == s.Focus {
+				lines = append(lines, m.inlineRail(m.targetDetails(target, w-2, true), w)...)
 				add("", "")
 				anchors[target.ID] = [2]int{start, start + 1}
 				continue
@@ -141,6 +146,14 @@ func (m *model) body(w int) ([]string, map[string][2]int) {
 			add("", "")
 		}
 		if s.Step == "save" || s.Step == "saved" {
+			if s.Step == "saved" {
+				heading := "✓ Plan saved"
+				if m.ascii {
+					heading = "DONE Plan saved"
+				}
+				add(heading, "done")
+				add("No cleanup ran.", "")
+			}
 			label, path := "Destination: ", s.Destination
 			if s.SavedPath != "" {
 				label, path = "Saved: ", s.SavedPath
@@ -159,20 +172,24 @@ func (m *model) body(w int) ([]string, map[string][2]int) {
 			}
 		}
 	case "help":
-		add("Keys", "bold")
+		lines = append(lines, m.sectionRule("Keys", "bold", w))
 		for _, hint := range s.HelpKeys {
 			add(fmt.Sprintf("%-10s %s", hint.Key, hint.Label), "")
 		}
 
 		add("", "")
-		add("Scan status", "bold")
-		if s.MessageKind == "refused" || !s.SaveEnabled {
-			message := s.Message
-			if !s.SaveEnabled {
-				message = "Refresh before you save the plan. " + message
+		if s.Message != "" {
+			lines = append(lines, m.sectionRule("Latest message", "bold", w))
+			role := ""
+			if s.MessageKind == "refused" {
+				role = "warning"
 			}
-			add(message, "warning")
+			add(s.Message, role)
 			add("", "")
+		}
+		lines = append(lines, m.sectionRule("Scan status", "bold", w))
+		if !s.SaveEnabled {
+			add("Refresh before you save the plan.", "warning")
 		}
 		add("Scope: "+s.Scope.Root, "")
 		add("Observed: "+m.observation(), "")
@@ -185,24 +202,12 @@ func (m *model) body(w int) ([]string, map[string][2]int) {
 			add(cap.Name+": "+cap.Status+" - "+cap.Reason, role)
 		}
 		add("", "")
-		add("Target types", "bold")
+		lines = append(lines, m.sectionRule("Target types", "bold", w))
 		add("A process group contains processes with one process group ID (PGID).", "")
 		add("A worktree is a separate checkout of a Git repository.", "")
 		add("An artifact is a directory with generated files.", "")
-	case "confirm_quit":
-		question := fmt.Sprintf("Unmark %d targets and quit?", len(s.Marked))
-		if len(s.Marked) == 1 {
-			question = "Unmark 1 target and quit?"
-		}
-		add(question, "bold")
-		add("Press Enter or q to quit. Press Esc to keep your marks.", "")
-	case "confirm_refresh":
-		question := fmt.Sprintf("Unmark %d targets and refresh?", len(s.Marked))
-		if len(s.Marked) == 1 {
-			question = "Unmark 1 target and refresh?"
-		}
-		add(question, "bold")
-		add("Press Enter or r for a new scan. Press Esc to keep these results.", "")
+	case "confirm_quit", "confirm_refresh":
+		lines = m.confirmationPanel(w)
 	}
 	return lines, anchors
 }
@@ -229,28 +234,64 @@ func (m *model) targetDetails(target item, w int, evidence bool) []string {
 		identity = "PGID " + target.Target
 	}
 	add(prefix+identity, role)
+	return append(lines, m.targetEvidence(target, w, evidence)...)
+}
+func (m *model) targetEvidence(target item, w int, expanded bool) []string {
+	lines := []string{}
+	add := func(text, role string) { lines = append(lines, m.wrapped(m.plain(text), role, w)...) }
+	if expanded {
+		lines = append(lines, m.sectionRule("Decision", "bold", w))
+		add(m.focusBadge(target), "")
+	}
 	add("If applied: "+target.Consequence, "")
 	if target.Availability != "available" {
 		add("Withheld: "+m.reason(target), "warning")
+	} else if expanded && m.reason(target) != "" {
+		add("Checks: "+m.reason(target), "")
 	}
-	// A process approval covers the whole group, so Review always names every member.
-	if target.Type == "process-group" {
-		for _, member := range target.Evidence.Members {
-			add(fmt.Sprintf("Member %d: %s", member.PID, member.Command), "")
+	for _, section := range evidenceSections(target) {
+		// A process approval covers every member, even with optional evidence hidden.
+		if !expanded && section.Title != "Process members" {
+			continue
 		}
-	}
-	if evidence {
-		for _, line := range evidenceLines(target) {
-			add(line, "dim")
+		lines = append(lines, m.sectionRule(section.Title, "bold", w))
+		for _, line := range section.Lines {
+			add(line, "")
 		}
 	}
 	return lines
+}
+func (m *model) confirmationPanel(w int) []string {
+	count := fmt.Sprintf("%d targets marked.", len(m.state.Marked))
+	if len(m.state.Marked) == 1 {
+		count = "1 target marked."
+	}
+	content := m.wrapped(count, "bold", w-4)
+	result, key, action := "Quit without saving these marks.", "q/Enter", "Discard marks and quit"
+	if m.state.Step == "confirm_refresh" {
+		result, key, action = "Start a new scan. All marks are cleared.", "r/Enter", "Discard marks and refresh"
+	}
+	content = append(content, m.wrapped(result, "", w-4)...)
+	content = append(content, "")
+	content = append(content, m.keyHints([]keyHint{{"Esc", "Keep reviewing"}, {key, action}}, w-4)...)
+	return m.boundedPanel("Discard marks?", content, w, len(content)+2)
 }
 func (m *model) focusStrip(w int) []string {
 	target, ok := m.focused()
 	if !ok {
 		return nil
 	}
+	badge := m.focusBadge(target)
+	identity := m.label(target, max(8, w-ansi.StringWidth(badge)-8))
+	title := identity + " | " + m.plain(badge)
+	text, role := "If applied: "+target.Consequence, ""
+	if target.Availability != "available" {
+		text = "Withheld: " + m.reason(target)
+		role = "warning"
+	}
+	return m.evidencePanel(title, m.wrapped(m.plain(text), role, w-4), w, 4)
+}
+func (m *model) focusBadge(target item) string {
 	badge := "[ ] available"
 	if has(m.state.Marked, target.ID) {
 		badge = "[x] marked"
@@ -261,38 +302,50 @@ func (m *model) focusStrip(w int) []string {
 			badge = "WITHHELD"
 		}
 	}
-	identity := m.label(target, max(8, w-ansi.StringWidth(badge)-3))
-	title := identity + strings.Repeat(" ", max(1, w-ansi.StringWidth(identity)-ansi.StringWidth(badge))) + badge
-	lines := []string{m.line(title, "bold", w)}
-	text, role := "If applied: "+target.Consequence, ""
-	if target.Availability != "available" {
-		text = "Withheld: " + m.reason(target)
-		role = "warning"
+	return badge
+}
+func (m *model) focusPane(w, height int) []string {
+	target, ok := m.focused()
+	if !ok {
+		return m.boundedPanel("Focused target", m.wrapped("No target has focus.", "", w-4), w, height)
 	}
-	detail := m.wrapped(m.plain(text), role, w)
-	// Keep a useful list viewport even for multi-page consequences.
-	limit := 3
-	if len(detail) > limit {
-		detail = detail[:limit]
-		detail[limit-1] = m.line(ansi.Strip(detail[limit-1]), role, max(1, w-17)) + m.paint("bold", " [i: full detail]")
+	lines := []string{}
+	add := func(text, role string) { lines = append(lines, m.wrapped(m.plain(text), role, w-4)...) }
+	identity := target.Target
+	if target.Type == "process-group" {
+		identity = "PGID " + identity
 	}
-	lines = append(lines, detail...)
-	return lines
+	add(identity, "bold")
+	if target.Type == "process-group" && target.DisplayLabel != "" {
+		add(target.DisplayLabel, "")
+	}
+	lines = append(lines, m.targetEvidence(target, w-4, true)...)
+	return m.evidencePanel("Focused target", lines, w, height)
 }
 func (m *model) footer(w int) []string {
 	s := m.state
+	if s.Step == "confirm_quit" || s.Step == "confirm_refresh" {
+		return nil
+	}
 	lines := []string{}
 	if s.Searching || s.Query != "" {
 		query := "/ " + s.Query
 		if s.Searching {
 			query += "_"
 		}
+		if hidden := s.hiddenMarks(); hidden > 0 {
+			query = fmt.Sprintf("%d marked outside filter | %s", hidden, query)
+		}
 		lines = append(lines, m.line(m.plain(query), "", w))
 	}
-	message := s.Message
+	message := m.feedbackMessage()
+	kind := s.MessageKind
+	if message != s.Message {
+		kind = "info"
+	}
 	role := ""
 	symbol := ""
-	switch s.MessageKind {
+	switch kind {
 	case "done":
 		role = "done"
 		symbol = "✓ "
@@ -312,38 +365,11 @@ func (m *model) footer(w int) []string {
 	}
 	if message != "" {
 		message = symbol + m.plain(message)
-		if ansi.StringWidth(message) > w && (s.MessageKind == "refused" || (!s.SaveEnabled && !m.inventory)) {
+		if ansi.StringWidth(message) > w && (kind == "refused" || (!s.SaveEnabled && !m.inventory)) {
 			lines = append(lines, m.line(message, role, max(1, w-12))+" [? details]")
 		} else {
 			lines = append(lines, m.line(message, role, w))
 		}
 	}
-	hints := []string{}
-	for _, hint := range s.Legend {
-		hints = append(hints, hint.Key+" "+hint.Label)
-	}
-	if len(hints) == 0 {
-		hints = []string{"Enter continue", "Space mark", "i inspect", "d details", "? help", "q quit"}
-		if m.inventory {
-			hints = []string{"Enter review", "Up/Down focus", "i inspect", "/ filter", "r refresh", "? help", "q exit"}
-		}
-	}
-	// Pack the backend's mode-specific actions into readable default-color rows.
-	row := ""
-	for _, hint := range hints {
-		next := hint
-		if row != "" {
-			next = row + " | " + hint
-		}
-		if ansi.StringWidth(next) > w && row != "" {
-			lines = append(lines, m.line(m.plain(row), "", w))
-			row = hint
-		} else {
-			row = next
-		}
-	}
-	if row != "" {
-		lines = append(lines, m.line(m.plain(row), "", w))
-	}
-	return lines
+	return append(lines, m.keyHints(s.Legend, w)...)
 }

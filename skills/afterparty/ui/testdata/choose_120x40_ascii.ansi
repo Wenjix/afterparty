@@ -1,0 +1,40 @@
+ [1mafterparty[m / [1mREVIEW[m                                                                            [2m09:23 UTC | 2m 5s ago[m
+ [1mChoose[m > Review choices > Save plan                                                                                 
+ Scope: /work/afterparty                                                                                             
+ Scan: complete | 3 available | 1 withheld                                                                           
+ Process groups 1 ----------------------------------------------------  +- [1mFocused target[m --------------------------+
+ [1;7m> [x] vite | PGID 4821                                       CPU 0.2%[m  | [1mPGID 4821[m                                 |
+ Worktrees 1 ---------------------------------------------------------  | vite | PGID 4821                          |
+   [-] /work/afterparty-wt/auth         A live process uses this wo...  | [1mDecision[m -------------------------------- |
+ Artifacts 2 ---------------------------------------------------------  | [x] marked                                |
+ [1m  [x] .next                                                    840 MB[m  | If applied: Stop every group member.      |
+   [ ] playwright-report                                        120 MB  | Restart the service manually.             |
+                                                                        | Checks: Recorded agent activity is old.   |
+                                                                        | Observed CPU use is below the limit.      |
+                                                                        | [1mMeasurements[m ---------------------------- |
+                                                                        | CPU 0.2%                                  |
+                                                                        | Ports: 3000                               |
+                                                                        | Recorded activity 18h 0m ago              |
+                                                                        | [1mIdentity[m -------------------------------- |
+                                                                        | Scope: /work/afterparty                   |
+                                                                        | Category: none                            |
+                                                                        | Providers: codex                          |
+                                                                        | [1mProcess members[m ------------------------- |
+                                                                        | Member 4821: npm run dev --token          |
+                                                                        | [REDACTED]                                |
+                                                                        | Member 4822: node vite --host 127.0.0.1   |
+                                                                        |                                           |
+                                                                        |                                           |
+                                                                        |                                           |
+                                                                        |                                           |
+                                                                        |                                           |
+                                                                        |                                           |
+                                                                        |                                           |
+                                                                        |                                           |
+                                                                        |                                           |
+                                                                        |                                           |
+                                                                        |                                           |
+                                                                        +-------------------------------------------+
+ [2m2 marked | Target 1 of 4: vite | PGID 4821[m                                                                          
+ Mark targets to include in the plan.                                                                                
+ [1mSpace[m mark/unmark | [1mEnter[m Review choices | [1mUp/Down[m focus (j/k) | [1mq[m quit | [1mCtrl+P[m commands | [1m?[m help                  

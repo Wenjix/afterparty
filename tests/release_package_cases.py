@@ -31,7 +31,7 @@ process-ledger.sh protect.sh report.sh review.py review.sh review_data.py state.
 style.sh terminal_text.py vetoes.sh workspace-index.py workspace.sh
 """.split())
 UI_FILES = set("""
-THIRD_PARTY_NOTICES.txt go.mod go.sum inventory.go main.go sections.go state.go
+THIRD_PARTY_NOTICES.txt go.mod go.sum commands.go inventory.go layout.go main.go sections.go state.go
 terminal.go text.go theme.go view.go
 """.split())
 SKILL_FILES = {

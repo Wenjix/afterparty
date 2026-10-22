@@ -33,7 +33,7 @@ SKILL_FILES = (
     "lib/style.sh", "lib/terminal_text.py", "lib/vetoes.sh",
     "lib/workspace-index.py", "lib/workspace.sh",
     "ui/THIRD_PARTY_NOTICES.txt", "ui/go.mod", "ui/go.sum",
-    "ui/inventory.go", "ui/main.go", "ui/sections.go", "ui/state.go",
+    "ui/commands.go", "ui/inventory.go", "ui/layout.go", "ui/main.go", "ui/sections.go", "ui/state.go",
     "ui/terminal.go", "ui/text.go", "ui/theme.go", "ui/view.go",
 )
 

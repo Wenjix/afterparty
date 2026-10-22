@@ -32,7 +32,7 @@ func inventoryFixture() viewState {
 	for _, target := range report.Items {
 		s.VisibleIDs = append(s.VisibleIDs, target.ID)
 	}
-	s.HelpKeys = []keyHint{{"Enter", "Review this repository"}, {"Up/Down", "Move focus (j/k)"}, {"/", "Filter paths"}, {"i", "Inspect the path"}, {"d", "Show or hide details"}, {"r", "Refresh the scan"}, {"q", "Finish"}, {"Ctrl+Z", "Suspend; use fg to resume"}}
+	s.HelpKeys = []keyHint{{"Enter", "review"}, {"Up/Down", "focus (j/k)"}, {"/", "filter"}, {"i", "inspect"}, {"d", "show or hide details"}, {"?", "help"}, {"r", "refresh"}, {"q", "finish"}, {"PgUp/PgDn", "scroll"}, {"Ctrl+Z", "suspend and resume with fg"}, {"Ctrl+C", "exit"}, {"Ctrl+P", "commands"}}
 	return inventoryFixtureMode(s, "inventory")
 }
 
@@ -42,9 +42,9 @@ func inventoryFixtureMode(s viewState, step string) viewState {
 	case "inventory_help":
 		s.Legend = []keyHint{{"q/Esc/?", "back"}, {"PgUp/PgDn", "scroll"}}
 	case "inventory_inspect":
-		s.Legend = []keyHint{{"Enter", "review repository"}, {"q/Esc", "back"}, {"?", "help"}, {"PgUp/PgDn", "scroll"}}
+		s.Legend = []keyHint{{"Enter", "review repository"}, {"q/Esc", "back"}, {"PgUp/PgDn", "scroll"}, {"Ctrl+P", "commands"}, {"?", "help"}}
 	default:
-		s.Legend = []keyHint{{"Enter", "review"}, {"Up/Down", "focus (j/k)"}, {"/", "filter"}, {"i", "inspect"}, {"d", "details"}, {"?", "help"}, {"r", "refresh"}, {"q", "finish"}}
+		s.Legend = []keyHint{{"Enter", "review"}, {"Up/Down", "focus (j/k)"}, {"i", "inspect"}, {"q", "finish"}, {"Ctrl+P", "commands"}, {"?", "help"}}
 	}
 	return s
 }
@@ -69,6 +69,9 @@ func inventoryVariant(variant string) viewState {
 		s.Inventory.CollectionStatus = "incomplete"
 		s.Inventory.HistoryStatus = "unavailable"
 		s.Inventory.DeltaBytes = nil
+		for index := range s.Inventory.Items {
+			s.Inventory.Items[index].DeltaBytes = nil
+		}
 		s.Inventory.Issues = []inventoryIssue{{Path: "/side-projects/notes/node_modules/.cache", Message: "Afterparty could not read this directory. Check its access permissions."}}
 		s.Inventory.Items[1].Status = "unavailable"
 		s.Inventory.Items[1].SizeBytes = nil
@@ -87,7 +90,7 @@ func inventoryVariant(variant string) viewState {
 }
 
 func TestInventoryFramesFitAndPreserveReadOnlyFacts(t *testing.T) {
-	for _, size := range [][2]int{{60, 20}, {80, 24}, {120, 40}} {
+	for _, size := range [][2]int{{60, 20}, {80, 24}, {100, 24}, {120, 40}} {
 		for _, kind := range []string{"dark", "light", "mono", "ascii"} {
 			setTheme(t, kind)
 			for _, variant := range []string{"inventory", "inventory_help", "inventory_inspect", "first", "incomplete", "filter", "expanded"} {
@@ -101,6 +104,13 @@ func TestInventoryFramesFitAndPreserveReadOnlyFacts(t *testing.T) {
 					t.Fatalf("%s frame is too tall", variant)
 				}
 				for _, line := range strings.Split(frame, "\n") {
+					if kind == "ascii" {
+						for _, char := range line {
+							if char > 127 {
+								t.Fatalf("%s contains non-ASCII display text: %q", variant, char)
+							}
+						}
+					}
 					if ansi.StringWidth(line) >= size[0] {
 						t.Fatalf("%s frame is too wide: %q", variant, line)
 					}
@@ -124,11 +134,12 @@ func TestInventoryFrameGoldens(t *testing.T) {
 	oldLocal := time.Local
 	time.Local = time.UTC
 	t.Cleanup(func() { time.Local = oldLocal })
-	for _, size := range [][2]int{{60, 20}, {80, 24}} {
-		for _, kind := range []string{"color", "mono"} {
+	for _, size := range [][2]int{{60, 20}, {80, 24}, {120, 40}} {
+		for _, kind := range []string{"color", "mono", "ascii"} {
 			setTheme(t, kind)
 			for _, variant := range []string{"inventory", "inventory_help", "inventory_inspect", "first", "incomplete", "filter", "expanded"} {
 				m := inventoryModel(inventoryVariant(variant), size[0], size[1])
+				m.ascii = kind == "ascii"
 				frame := m.render() + "\n"
 				path := filepath.Join("testdata", fmt.Sprintf("builds_%s_%dx%d_%s.ansi", variant, size[0], size[1], kind))
 				if os.Getenv("UPDATE_GOLDEN") == "1" {
@@ -173,7 +184,7 @@ func TestInventoryInspectionUsesFullIdentityAndFileTime(t *testing.T) {
 	m := inventoryModel(s, 60, 20)
 	body, _ := m.inventoryBody(57)
 	text := strings.Join(strings.Fields(ansi.Strip(strings.Join(body, "\n"))), " ")
-	for _, fact := range []string{s.Inventory.Items[0].Path, "Repository: /work/afterparty", "Kind: build", "(file time)", "File modification time does not prove last use.", "Enter opens this repository's cleanup review."} {
+	for _, fact := range []string{s.Inventory.Items[0].Path, "Repository: /work/afterparty", "Kind: build", "(file time)", "File modification time does not prove last use.", "Enter opens repository review."} {
 		if !strings.Contains(text, fact) {
 			t.Fatalf("inspection lost %q:\n%s", fact, text)
 		}
@@ -206,8 +217,16 @@ func TestInventoryExpandedDetailsPreserveOrderAndFocus(t *testing.T) {
 			t.Fatalf("expanded details lost %q:\n%s", fact, text)
 		}
 	}
+	if strings.Contains(text, "Path: /side-projects/notes") || strings.Contains(text, "Path: /work/afterparty/playwright-report") {
+		t.Fatal("inline evidence expanded a path without focus")
+	}
 	m.state.Focus = "test:one"
 	m.state.RevealFocus = true
+	refocused, _ := m.inventoryBody(57)
+	refocusedText := strings.Join(strings.Fields(strings.ReplaceAll(ansi.Strip(strings.Join(refocused, "\n")), "│ ", "")), " ")
+	if !strings.Contains(refocusedText, "Path: /work/afterparty/playwright-report") || strings.Contains(refocusedText, "Path: /work/afterparty/.next") {
+		t.Fatal("inline evidence did not move with focus")
+	}
 	frame := ansi.Strip(m.render())
 	if !strings.Contains(frame, "> afterparty/playwright-report") || !m.focusVisible {
 		t.Fatalf("expanded navigation did not reveal the focused row:\n%s", frame)
@@ -239,6 +258,186 @@ func TestInventoryFirstScanDoesNotInventGrowth(t *testing.T) {
 	frame := ansi.Strip(m.render())
 	if !strings.Contains(frame, "Growth: first scan; no comparison") || !strings.Contains(frame, "unknown") || strings.Contains(frame, "+120.0 MB") {
 		t.Fatalf("first scan implies a comparison:\n%s", frame)
+	}
+}
+
+func TestInventoryMetersDistinguishKnownZeroAndUnavailable(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		size  *int64
+		total int64
+		ascii bool
+		want  string
+	}{
+		{"half", inventoryNumber(500), 1000, false, "████░░░░"},
+		{"zero", inventoryNumber(0), 1000, false, "░░░░░░░░"},
+		{"unknown", nil, 1000, false, "unknown "},
+		{"zero total", inventoryNumber(0), 0, false, "░░░░░░░░"},
+		{"ascii", inventoryNumber(500), 1000, true, "####...."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := inventoryMeter(test.size, test.total, test.ascii)
+			if got != test.want || ansi.StringWidth(got) != 8 {
+				t.Fatalf("meter=%q, want %q with width 8", got, test.want)
+			}
+		})
+	}
+	if inventoryShare(nil, 1000) != "Share: unknown" || inventoryShare(inventoryNumber(0), 0) != "Share: unknown" {
+		t.Fatal("missing measurements or a zero denominator acquired a percentage")
+	}
+	if got := inventoryShare(inventoryNumber(500), 1000); got != "Share: 50.0% of known bytes" {
+		t.Fatalf("known measurements lost their proportional share: %s", got)
+	}
+}
+
+func TestInventoryMetersKeepScopeDenominatorWhenFiltered(t *testing.T) {
+	m := inventoryModel(inventoryFixture(), 80, 24)
+	before, anchors := m.inventoryBody(77)
+	row := ansi.Strip(before[anchors["test:one"][0]])
+	m.state = inventoryVariant("filter")
+	after, anchors := m.inventoryBody(77)
+	filteredRow := ansi.Strip(after[anchors["test:one"][0]])
+	if strings.TrimPrefix(filteredRow, "> ") != strings.TrimPrefix(row, "  ") {
+		t.Fatalf("filter changed a measurement or bar denominator:\nbefore %q\nafter %q", row, filteredRow)
+	}
+	if !strings.HasSuffix(filteredRow, "█░░░░░░░") || !strings.Contains(filteredRow, "120.0 MB") || !strings.Contains(filteredRow, "+20.0 MB") {
+		t.Fatalf("filtered row lost its share or numeric evidence: %s", filteredRow)
+	}
+	frame := ansi.Strip(m.render())
+	if !strings.Contains(frame, "Share of known bytes") || !strings.Contains(frame, "Known total: 1.2 GB") {
+		t.Fatalf("filter lost its scope denominator:\n%s", frame)
+	}
+	m.width = 60
+	body, _ := m.inventoryBody(57)
+	if strings.Contains(strings.Join(body, "\n"), "█") || strings.Contains(ansi.Strip(m.render()), "Share of known bytes") {
+		t.Fatal("small panes spent path identity space on meters")
+	}
+}
+
+func TestInventoryCompactStripIsBoundedAndShowsKnownShare(t *testing.T) {
+	for _, variant := range []string{"inventory", "filter", "incomplete"} {
+		m := inventoryModel(inventoryVariant(variant), 60, 20)
+		strip := m.inventoryStrip(57)
+		if len(strip) != 4 {
+			t.Fatalf("%s focused strip uses %d rows, want 4", variant, len(strip))
+		}
+		for _, line := range strip {
+			if ansi.StringWidth(line) > 57 {
+				t.Fatalf("%s focused strip overflowed: %q", variant, line)
+			}
+		}
+		text := ansi.Strip(strings.Join(strip, "\n"))
+		for _, fact := range []string{"Kind:", "Share:", "of known bytes", "Enter opens review. No cleanup runs here."} {
+			if !strings.Contains(text, fact) {
+				t.Fatalf("%s focused strip lost %q:\n%s", variant, fact, text)
+			}
+		}
+		if variant == "inventory" && !strings.Contains(text, "72.2%") {
+			t.Fatalf("focused strip lost its proportional measurement:\n%s", text)
+		}
+		if m.render() == "" || m.roomTooSmall {
+			t.Fatalf("%s inventory no longer fits 60x20", variant)
+		}
+	}
+	incomplete := inventoryVariant("incomplete")
+	incomplete.Query, incomplete.Focus = ".cache", "cache:two"
+	incomplete.VisibleIDs = []string{"cache:two"}
+	m := inventoryModel(incomplete, 60, 20)
+	frame := ansi.Strip(m.render())
+	if m.roomTooSmall || !strings.Contains(frame, "> notes/node_modules/.cache") || !strings.Contains(frame, "Share: unknown") || !strings.Contains(frame, "(estimated, partial)") {
+		t.Fatalf("filtered incomplete inventory hid its row or measurement state:\n%s", frame)
+	}
+	setTheme(t, "ascii")
+	m = inventoryModel(inventoryFixture(), 60, 20)
+	m.ascii = true
+	for _, r := range ansi.Strip(strings.Join(m.inventoryStrip(57), "\n")) {
+		if r > 127 {
+			t.Fatalf("ASCII focused strip included %q", r)
+		}
+	}
+}
+
+func TestInventoryRepositorySubtotalUsesAllKnownPathsAndFlagsPartial(t *testing.T) {
+	m := inventoryModel(inventoryFixture(), 120, 40)
+	m.state.VisibleIDs = []string{"cache:one"}
+	total, partial := m.inventoryRepositoryTotal("/work/afterparty")
+	if total != 960000000 || partial {
+		t.Fatalf("filtered repository subtotal=%d partial=%t", total, partial)
+	}
+	m.state.Inventory.Repositories[1].Status = "unavailable"
+	if _, partial = m.inventoryRepositoryTotal("/work/afterparty"); partial {
+		t.Fatal("an unrelated repository made a complete subtotal partial")
+	}
+	m.state.Inventory.Items[2].SizeBytes = nil
+	total, partial = m.inventoryRepositoryTotal("/work/afterparty")
+	if total != 840000000 || !partial {
+		t.Fatalf("unknown measurement was treated as a complete subtotal: %d %t", total, partial)
+	}
+	m.state.Inventory.Items[2].SizeBytes = inventoryNumber(120000000)
+	m.state.Inventory.Repositories[0].Status = "unavailable"
+	if _, partial = m.inventoryRepositoryTotal("/work/afterparty"); !partial {
+		t.Fatal("incomplete repository acquired a complete subtotal")
+	}
+	panel := strings.Join(strings.Fields(ansi.Strip(strings.Join(m.inventoryPanel(34, 30), "\n"))), " ")
+	for _, fact := range []string{"Focused output", "Allocated: 840.0 MB", "Growth: +120.0 MB", "Share: 72.2% of known bytes", "Repo known: 960.0 MB", "(estimated, partial)", "Path: /work/afterparty/.next", "Kind: build | Scan: complete"} {
+		if !strings.Contains(panel, fact) {
+			t.Fatalf("focused panel lost %q:\n%s", fact, panel)
+		}
+	}
+}
+
+func TestInventoryWidePanelFitsAndRetainsFocusedEvidence(t *testing.T) {
+	for _, size := range [][2]int{{100, 24}, {120, 40}} {
+		m := inventoryModel(inventoryFixture(), size[0], size[1])
+		frame := ansi.Strip(m.render())
+		for _, fact := range []string{"Focused output", "Allocated: 840.0 MB", "Growth: +120.0 MB", "Repo known: 960.0 MB", "Share of known bytes", "Enter opens repository review.", "No cleanup runs here."} {
+			if !strings.Contains(frame, fact) {
+				t.Fatalf("%dx%d wide inventory lost %q:\n%s", size[0], size[1], fact, frame)
+			}
+		}
+		if len(strings.Split(frame, "\n")) > size[1] {
+			t.Fatalf("%dx%d inventory is too tall", size[0], size[1])
+		}
+		if size[1] >= 40 && !strings.Contains(frame, "Path: /work/afterparty/.next") {
+			t.Fatal("wide inventory lost its full path")
+		}
+		if size[1] == 24 && (!strings.Contains(frame, "more lines") || !strings.Contains(frame, "i inspect")) {
+			t.Fatal("compact panel lost its disclosure")
+		}
+		for _, line := range strings.Split(frame, "\n") {
+			if ansi.StringWidth(line) >= size[0] {
+				t.Fatalf("%dx%d inventory is too wide: %q", size[0], size[1], line)
+			}
+		}
+	}
+}
+
+func TestInventoryPanelEscapesPathsOnce(t *testing.T) {
+	s := inventoryFixture()
+	s.Inventory.Items[0].RelativePath = "cache\\files"
+	s.Inventory.Items[0].Path = "/work/afterparty/cache\\files\tbad\x1b[31m"
+	m := inventoryModel(s, 120, 40)
+	panel := ansi.Strip(strings.Join(m.inventoryPanel(80, 30), "\n"))
+	for _, value := range []string{m.inventoryRawLabel(s.Inventory.Items[0]), safeText(s.Inventory.Items[0].Path, false)} {
+		if !strings.Contains(panel, value) {
+			t.Fatalf("panel lost or double-escaped path %q:\n%s", value, panel)
+		}
+	}
+	if strings.ContainsAny(panel, "\t\x1b") {
+		t.Fatal("panel exposed a raw path control character")
+	}
+}
+
+func TestInventoryPanelLongIdentityPreservesSummaryAndRecovery(t *testing.T) {
+	s := inventoryFixture()
+	s.Inventory.Items[0].RelativePath = strings.Repeat("long directory/", 80) + ".next"
+	s.Inventory.Items[0].Path = "/work/afterparty/" + s.Inventory.Items[0].RelativePath
+	m := inventoryModel(s, 100, 24)
+	panel := ansi.Strip(strings.Join(m.inventoryPanel(34, 14), "\n"))
+	for _, fact := range []string{"Allocated: 840.0 MB", "Growth: +120.0 MB", "No cleanup runs here.", "more lines", "i inspect"} {
+		if !strings.Contains(panel, fact) {
+			t.Fatalf("long identity hid %q:\n%s", fact, panel)
+		}
 	}
 }
 

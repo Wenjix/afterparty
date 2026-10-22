@@ -1,0 +1,20 @@
+ [1mafterparty[m / [1mREVIEW / Help[m          [2m09:23 UTC | 2m 5s ago[m
+ Scope: /work/afterparty                                  
+ Scan: complete | 3 available | 1 withheld                
+ [1mKeys[m ----------------------------------------------------
+ Space      mark/unmark                                   
+ Enter      Review choices                                
+ Up/Down    focus (j/k)                                   
+ i          inspect                                       
+ d          details                                       
+ /          filter                                        
+ r          refresh                                       
+ q          quit                                          
+ ?          help                                          
+ PgUp/PgDn  scroll. Keep target focus                     
+ Ctrl+Z     suspend. Use fg to resume                     
+ Ctrl+C     exit without a new plan                       
+ s          Review choices                                
+ [2m2 marked | Lines 1-14 of 31[m                              
+ Mark targets to include in the plan.                     
+ [1mq/Esc/?[m back | [1mPgUp/PgDn[m scroll                          

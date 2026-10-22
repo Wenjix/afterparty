@@ -34,6 +34,10 @@ type item struct {
 	ReasonSentence                                                      string `json:"reason_sentence"`
 }
 type keyHint struct{ Key, Label string }
+type commandAction struct {
+	ID, Label, Description, Key, Reason string
+	Enabled                             bool
+}
 type inventoryRepository struct {
 	Root, Label, Status string
 }
@@ -90,4 +94,8 @@ type viewState struct {
 	HelpKeys                          []keyHint `json:"help_keys"`
 	CapturedAt                        string    `json:"captured_at"`
 	ReviewRoot                        string    `json:"review_root"`
+	Actions                           []commandAction
+	Guidance                          string
+	MessageID                         int  `json:"message_id"`
+	MessageTransient                  bool `json:"message_transient"`
 }

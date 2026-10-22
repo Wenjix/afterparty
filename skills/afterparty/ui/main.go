@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -122,10 +123,17 @@ type keyRequest struct {
 	Generation   int    `json:"generation"`
 	FocusVisible bool   `json:"focus_visible"`
 	IgnoredKeys  int    `json:"ignored_keys,omitempty"`
+	Action       string `json:"action,omitempty"`
+	Step         string `json:"step,omitempty"`
+	Focus        string `json:"focus"`
 }
 
-func tick() tea.Cmd {
-	return tea.Tick(time.Second, func(when time.Time) tea.Msg { return tickMsg(when) })
+func tick(collecting bool) tea.Cmd {
+	interval := time.Second
+	if collecting {
+		interval = 200 * time.Millisecond
+	}
+	return tea.Tick(interval, func(when time.Time) tea.Msg { return tickMsg(when) })
 }
 
 type model struct {
@@ -146,10 +154,14 @@ type model struct {
 	focusVisible          bool
 	inventory             bool
 	reviewRoot            string
+	commands              commandSheet
+	feedbackID            int
+	feedbackGeneration    int
+	feedbackAt            time.Time
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.backend.next, tick(), func() tea.Msg {
+	return tea.Batch(m.backend.next, tick(m.collecting()), func() tea.Msg {
 		select {
 		case <-m.interrupts:
 			return interruptMsg{}
@@ -164,6 +176,7 @@ func (m *model) send(key string) {
 	case m.backend.keys <- keyRequest{Key: key, Generation: m.state.Generation, FocusVisible: m.focusVisible}:
 	default:
 		m.state.Message = "Afterparty cannot accept more keys. Wait for this step to finish."
+		m.state.MessageKind, m.state.MessageTransient = "refused", false
 	}
 }
 
@@ -182,20 +195,28 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.state.RevealFocus = true
+		if msg.Width < 60 || msg.Height < 20 {
+			m.commands = commandSheet{}
+		}
 	case tickMsg:
+		if m.finished {
+			return m, nil
+		}
 		m.now = time.Time(msg)
 		m.reportIgnored()
-		return m, tick()
+		return m, tick(m.collecting())
 	case tea.ResumeMsg:
 		m.now = time.Now()
 	case viewState:
 		if msg.Event == "scan" {
+			m.commands = commandSheet{}
 			m.state.Collecting = true
 			m.state.Generation = msg.Generation
 			m.scanStarted = m.nowTime()
 			return m, m.backend.next
 		}
 		if msg.Event == "done" || msg.Event == "error" {
+			m.commands = commandSheet{}
 			m.final, m.status, m.finished = msg.Lines, msg.ExitCode, msg.Event == "done"
 			if m.inventory && m.finished {
 				m.reviewRoot = msg.ReviewRoot
@@ -211,6 +232,14 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.scroll = 0
 		}
 		wasCollecting := m.collecting()
+		if m.commands.open && (msg.Generation != m.commands.generation || msg.Step != m.commands.step || msg.Focus != m.commands.focus || msg.Collecting || msg.Searching ||
+			!slices.Equal(msg.Actions, m.state.Actions) || msg.Scope.Root != m.state.Scope.Root || msg.Mode != m.state.Mode || !slices.Equal(msg.Inventory.Roots, m.state.Inventory.Roots)) {
+			m.commands = commandSheet{}
+		}
+		if msg.MessageID != m.feedbackID || msg.Generation != m.feedbackGeneration {
+			m.feedbackID, m.feedbackGeneration = msg.MessageID, msg.Generation
+			m.feedbackAt = m.nowTime()
+		}
 		m.state = msg
 		if msg.Collecting && !wasCollecting {
 			m.scanStarted = m.nowTime()
@@ -238,6 +267,9 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.dropped++
 			return m, nil
 		}
+		if m.commands.open {
+			return m, nil
+		}
 		m.send("PASTE")
 	case tea.KeyPressMsg:
 		key := msg.String()
@@ -260,8 +292,12 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Suspend
 		}
 		// Legacy terminals encode Esc followed quickly by a key as Alt+key.
-		// Preserve the Escape action and the following printable character.
+		// Commands consumes the whole chord; elsewhere preserve both actions.
 		if msg.Mod.Contains(tea.ModAlt) {
+			if m.commands.open {
+				m.commands = commandSheet{}
+				return m, nil
+			}
 			m.send("ESC")
 			msg.Mod &^= tea.ModAlt
 			key = msg.String()
@@ -306,6 +342,14 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.commands.open {
+			m.commandKey(key)
+			return m, nil
+		}
+		if key == "ctrl+p" {
+			m.openCommands()
+			return m, nil
+		}
 		if key == "pgup" || key == "pgdown" {
 			amount := max(3, m.height/2)
 			if key == "pgup" {
@@ -328,7 +372,13 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) View() tea.View {
-	view := tea.NewView(m.render())
+	content := ""
+	if m.commands.open && m.width >= 60 && m.height >= 20 && !m.collecting() {
+		content = m.renderCommands()
+	} else {
+		content = m.render()
+	}
+	view := tea.NewView(content)
 	view.AltScreen = true
 	return view
 }

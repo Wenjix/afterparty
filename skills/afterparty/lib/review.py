@@ -85,6 +85,8 @@ def emit_state(review, destination):
           "reveal_focus": review.reveal_focus, "generation": review.generation,
           "ignored_keys": review.ignored_keys, "collecting": review.collecting,
           "message_kind": review.message_kind, "legend": review.legend(),
+          "actions": review.actions(), "guidance": review.guidance(),
+          "message_id": review.message_id, "message_transient": review.message_transient,
           "summary": review.summary(), "position_label": review.position_label(),
           "help_keys": review.help_keys(),
           "captured_at": review.rows[0]["observed_at"]})
@@ -130,10 +132,10 @@ def main():
                 if not isinstance(key, str) or not 1 <= len(key) <= 32:
                     raise SnapshotError("invalid review input")
                 generation = request.get("generation", -1)
-                if type(generation) is not int:
+                if type(generation) is not int and key != "ACTION":
                     raise SnapshotError("invalid input generation")
                 focus_visible = request.get("focus_visible", True)
-                if type(focus_visible) is not bool:
+                if type(focus_visible) is not bool and key != "ACTION":
                     raise SnapshotError("invalid focus visibility")
                 if key == "IGNORED":
                     count = request.get("ignored_keys", 0)
@@ -141,6 +143,8 @@ def main():
                         raise SnapshotError("invalid ignored-key count")
                     review.ignore_keys(count)
                     action = None
+                elif key == "ACTION":
+                    action = review.handle_action(request)
                 else:
                     action = "cancel" if key == "CANCEL" else review.handle(key, generation, focus_visible)
                 if action in ("cancel", "done", "finish"):

@@ -63,6 +63,20 @@ func (s viewState) available() int {
 	return count
 }
 
+func (s viewState) hiddenMarks() int {
+	visible := make(map[string]bool, len(s.VisibleIDs))
+	for _, id := range s.VisibleIDs {
+		visible[id] = true
+	}
+	count := 0
+	for _, id := range s.Marked {
+		if !visible[id] {
+			count++
+		}
+	}
+	return count
+}
+
 func measurement(target item) string {
 	if target.Type == "process-group" {
 		if target.Evidence.CPU == nil {
@@ -157,13 +171,16 @@ func (m *model) labels(width int) map[string]string {
 	return labels
 }
 
-func evidenceLines(target item) []string {
+type detailSection struct {
+	Title string
+	Lines []string
+}
+
+// Sections contain raw evidence. Rendering escapes and wraps each value once.
+func evidenceSections(target item) []detailSection {
 	ev := target.Evidence
-	reason := target.ReasonSentence
-	if reason == "" {
-		reason = target.Reason
-	}
-	lines := []string{"Scope: " + target.Scope, "Checks: " + reason}
+	measurements := []string{}
+	identity := []string{"Scope: " + target.Scope}
 	if target.Type == "process-group" {
 		ports := []string{}
 		for _, port := range ev.Ports {
@@ -177,21 +194,30 @@ func evidenceLines(target item) []string {
 		if category == "" {
 			category = "none"
 		}
-		lines = append(lines, measurement(target), "Ports: "+portText, "Category: "+category)
+		measurements = append(measurements, measurement(target), "Ports: "+portText)
+		identity = append(identity, "Category: "+category)
 	} else {
-		lines = append(lines, "Size: "+measurement(target))
+		measurements = append(measurements, "Size: "+measurement(target))
 		if ev.Branch != "" {
-			lines = append(lines, "Branch: "+ev.Branch)
+			identity = append(identity, "Branch: "+ev.Branch)
 		}
 	}
 	if a := activityText(ev.Activity); a != "" {
-		lines = append(lines, a)
+		measurements = append(measurements, a)
 	}
 	if ev.Activity != nil && len(ev.Activity.Sources) > 0 {
-		lines = append(lines, "Providers: "+strings.Join(ev.Activity.Sources, ", "))
+		identity = append(identity, "Providers: "+strings.Join(ev.Activity.Sources, ", "))
 	}
 	if target.Fingerprint != "" {
-		lines = append(lines, "Identity: "+target.Fingerprint)
+		identity = append(identity, "Identity: "+target.Fingerprint)
 	}
-	return lines
+	sections := []detailSection{{"Measurements", measurements}, {"Identity", identity}}
+	if target.Type == "process-group" && len(ev.Members) > 0 {
+		members := make([]string, 0, len(ev.Members))
+		for _, member := range ev.Members {
+			members = append(members, fmt.Sprintf("Member %d: %s", member.PID, member.Command))
+		}
+		sections = append(sections, detailSection{"Process members", members})
+	}
+	return sections
 }

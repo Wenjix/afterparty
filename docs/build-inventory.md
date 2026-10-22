@@ -52,9 +52,20 @@ shows unavailable history instead of inventing a growth value.
 ## Terminal and plain reports
 
 The terminal helper shows scan coverage, estimated size, growth, and a focused
-list. `i` opens full details. `d` toggles inline details. `/` filters.
+list. `i` opens full details. `d` toggles details for the focused path. `/` filters.
 `?` shows scope and errors. `r`
 collects a new inventory. `q` exits, or closes inspection and Help.
+
+Ctrl+P searches the available commands. Arrow keys choose a command. Enter
+runs an available command. Esc returns without changing the target filter.
+Commands never offers marking, saving, or Apply. Help keeps the full key list.
+
+At 80 columns or wider, eight-cell bars show each path's share of known
+allocated bytes. Filtering does not change that denominator. Unknown sizes have
+no invented bar. At 100 columns by 24 rows, a focused detail pane shows the
+path's measurements and its repository's known subtotal. Missing measurements
+or incomplete repository scans make that subtotal partial. Repository subtotals
+do not imply a growth comparison or cleanup eligibility.
 
 Enter leaves the inventory and opens the bundled review command for the
 focused repository with `--artifacts-only`. Arguments use a fixed command and

@@ -41,6 +41,15 @@ All notable changes to Afterparty are documented here. Versions follow semantic 
 
 ### Changed
 
+- Terminal review and build inventory add searchable commands and shorter
+  primary key hints. Focused evidence uses structured sections and hidden-line
+  counts. Discard confirmations name their choices. Routine acknowledgements
+  expire after four seconds while Help retains the latest message.
+- Terminal review now shows its phase, filtered group counts, and bounded focus
+  panels. Wide layouts place target evidence beside the list. Build inventory
+  adds allocated-size comparison bars and explicit repository subtotals.
+  Unknown and partial measurements stay visible. Collection has an activity
+  indicator, and saved plans have a clear completion receipt.
 - Replaced historical design experiments, task plans, and review reports in the
   public documentation tree with a concise current architecture guide.
   Public interface contracts remain available. Local critique output stays ignored.
@@ -79,6 +88,8 @@ All notable changes to Afterparty are documented here. Versions follow semantic 
 
 ### Fixed
 
+- Esc chords close Commands without sending the following key to Review or
+  Builds. Marks, filters, focus, and scroll position stay unchanged.
 - Codex history retention treats leading zeros as decimal. Zero-padded zero
   values and overflowing age limits are refused. Oversized process idle
   intervals withhold cleanup instead of wrapping to a shorter interval.

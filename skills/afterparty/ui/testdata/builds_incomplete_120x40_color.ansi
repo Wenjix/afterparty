@@ -1,0 +1,40 @@
+ [1;35mafterparty[m / [1mBUILD OUTPUT[m                                                                      [2m09:23 UTC · 2m 5s ago[m
+ Roots (2): /work | /side-projects                                                                                   
+ [33mScan: incomplete | 2 repos | depth 3[m                                                                                
+ [33mKnown total: 960.0 MB (estimated, partial)[m                                                                          
+ Growth: unknown (? details)                                                                                         
+ [33m1 scan issue (? details)[m                                                                                            
+ Share of known bytes                                                                                                
+ [2m  Repository / path                               Allocated     Growth  Share[m     ┌─ [1mFocused output[m ───────────────┐
+ [1;7m> afterparty/.next                                 840.0 MB    unknown  ███████░[m  │ [1mafterparty/.next[m               │
+   notes/node_modules/.cache                         unknown    unknown  unknown   │ [1mDecision[m ───────────────────── │
+   afterparty/playwright-report                     120.0 MB    unknown  █░░░░░░░  │ No cleanup runs here.          │
+                                                                                   │ Enter opens repository review. │
+                                                                                   │ [1mMeasurements[m ───────────────── │
+                                                                                   │ Allocated: 840.0 MB            │
+                                                                                   │ Growth: unknown                │
+                                                                                   │ Share: 87.5% of known bytes    │
+                                                                                   │ Repo known: 960.0 MB           │
+                                                                                   │ (estimated)                    │
+                                                                                   │ Modified: 2026-10-12 08:15 UTC │
+                                                                                   │ (file time)                    │
+                                                                                   │ File modification time does    │
+                                                                                   │ not prove last use.            │
+                                                                                   │ [1mIdentity[m ───────────────────── │
+                                                                                   │ Path: /work/afterparty/.next   │
+                                                                                   │ Repository: /work/afterparty   │
+                                                                                   │ Kind: build | Scan: complete   │
+                                                                                   │ This inventory does not check  │
+                                                                                   │ cleanup eligibility.           │
+                                                                                   │                                │
+                                                                                   │                                │
+                                                                                   │                                │
+                                                                                   │                                │
+                                                                                   │                                │
+                                                                                   │                                │
+                                                                                   │                                │
+                                                                                   │                                │
+                                                                                   └────────────────────────────────┘
+ [2mPath 1 of 3: afterparty/.next[m                                                                                       
+ Size and file time do not prove that output is unused.                                                              
+ [1mEnter[m review | [1mUp/Down[m focus (j/k) | [1mi[m inspect | [1mq[m finish | [1mCtrl+P[m commands | [1m?[m help                                
