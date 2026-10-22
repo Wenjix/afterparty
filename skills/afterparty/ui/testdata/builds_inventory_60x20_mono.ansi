@@ -1,20 +1,20 @@
- [1mafterparty[m [1mBUILD OUTPUT[m             [2m09:23 UTC · 2m 5s ago[m
+ [1mafterparty[m / [1mBUILD OUTPUT[m           [2m09:23 UTC · 2m 5s ago[m
  Roots (2): /work | /side-projects                        
  Scan: complete | 2 repos | depth 3                       
  Known total: 1.2 GB (estimated)                          
  Growth: +124.0 MB since previous complete scan           
- [2m  Repository / path                       Size     Growth[m
+ [2m  Repository / path                  Allocated     Growth[m
  [1;7m> afterparty/.next                    840.0 MB  +120.0 MB[m
    notes/node_modules/.cache           204.0 MB   -16.0 MB
    afterparty/playwright-report        120.0 MB   +20.0 MB
                                                           
                                                           
                                                           
-                                                          
  [2mPath 1 of 3: afterparty/.next[m                            
- [1mafterparty/.next[m                                         
- [2mKind: build | Modified: 2026-10-12 08:15 UTC (file time)[m 
- Enter opens repository review. No cleanup runs here.     
+ ┌─ [1mafterparty/.next[m ────────────────────────────────────┐
+ │ Kind: build | Share: 72.2% of known bytes             │
+ │ Enter opens review. No cleanup runs here.             │
+ └───────────────────────────────────────────────────────┘
  Size and file time do not prove that output is unused.   
- Enter review | Up/Down focus (j/k) | / filter | i inspect
- d details | ? help | r refresh | q finish                
+ [1mEnter[m review | [1mUp/Down[m focus (j/k) | [1mi[m inspect | [1mq[m finish
+ [1mCtrl+P[m commands | [1m?[m help                                 

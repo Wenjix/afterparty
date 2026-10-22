@@ -62,13 +62,44 @@ func (m *model) title(width int) string {
 	case "confirm_refresh":
 		name = "Confirm refresh"
 	}
-	left := m.paint("brand", "afterparty") + " " + m.paint("bold", "REVIEW / "+name)
+	label := "REVIEW"
+	switch m.state.Step {
+	case "choose", "review", "save", "saved":
+	default:
+		label += " / " + name
+	}
+	left := m.paint("brand", "afterparty") + " / " + m.paint("bold", label)
 	right := m.plain(m.observation())
 	gap := width - ansi.StringWidth(left) - ansi.StringWidth(right)
 	if gap < 2 {
 		return m.line(ansi.Strip(left), "brand", max(1, width-len(right)-2)) + "  " + right
 	}
 	return left + strings.Repeat(" ", gap) + m.paint("dim", right)
+}
+func (m *model) progressRail(width int) string {
+	labels := []string{"Choose", "Review choices", "Save plan"}
+	current := 0
+	switch m.state.Step {
+	case "review":
+		current = 1
+	case "save":
+		current = 2
+	case "saved":
+		current = 2
+		labels[2] = "Plan saved"
+	case "choose":
+	default:
+		return ""
+	}
+	if !m.theme.attributes {
+		labels[current] = "[" + labels[current] + "]"
+	}
+	labels[current] = m.paint("bold", labels[current])
+	separator := " › "
+	if m.ascii {
+		separator = " > "
+	}
+	return m.line(strings.Join(labels, separator), "", width)
 }
 func (m *model) tooSmall() string {
 	w := max(1, m.width-2)
@@ -117,11 +148,14 @@ func (m *model) render() string {
 		if m.state.Generation > 1 {
 			action = "Afterparty scans for cleanup targets again."
 		}
-		lines := []string{m.paint("brand", "afterparty REVIEW"), "", m.paint("bold", action), fmt.Sprintf("Elapsed: %s", durationText(elapsed)), "", "Afterparty ignores review keys during the scan.", "Press q or Ctrl+C to exit without cleanup."}
+		lines := []string{m.paint("brand", "afterparty / REVIEW"), "", m.paint("bold", m.collectionPulse()+" "+action), fmt.Sprintf("Elapsed: %s", durationText(elapsed)), "", "Afterparty ignores review keys during the scan.", "Press q or Ctrl+C to exit without cleanup."}
 		return lipgloss.NewStyle().PaddingLeft(1).Render(strings.Join(lines, "\n"))
 	}
 	s := m.state
 	header := []string{m.title(w)}
+	if rail := m.progressRail(w); rail != "" {
+		header = append(header, rail)
+	}
 	counts := fmt.Sprintf("Scan: %s | %d available | %d withheld", s.Scope.Status, s.available(), len(s.Items)-s.available())
 	// Scope is one stable row; the full path remains in Help and target evidence.
 	header = append(header, m.line(m.plain("Scope: "+s.Scope.Root), "", w))
@@ -142,10 +176,15 @@ func (m *model) render() string {
 	if len(unavailable) > 0 {
 		header = append(header, m.line("Unavailable: "+m.plain(strings.Join(unavailable, ", "))+" (? details)", "warning", w))
 	}
-	body, anchors := m.body(w)
+	wide := s.Step == "choose" && m.width >= 100 && m.height >= 24
+	bodyWidth := w
+	if wide {
+		bodyWidth = w * 3 / 5
+	}
+	body, anchors := m.body(bodyWidth)
 	footer := m.footer(w)
 	strip := []string{}
-	if s.Step == "choose" {
+	if s.Step == "choose" && !wide {
 		strip = m.focusStrip(w)
 	}
 	room := m.height - len(header) - len(footer) - len(strip) - 1
@@ -154,10 +193,12 @@ func (m *model) render() string {
 		return m.tooSmall()
 	}
 	if s.RevealFocus {
-		if bounds, ok := anchors[s.Focus]; ok && (bounds[0] < m.scroll || bounds[1] > m.scroll+room) {
-			m.scroll = bounds[0]
+		if s.Step == "choose" || s.Step == "review" {
+			if bounds, ok := anchors[s.Focus]; ok && (bounds[0] < m.scroll || bounds[1] > m.scroll+room) {
+				m.scroll = bounds[0]
+			}
 		}
-		if s.Step == "evidence" {
+		if s.Step == "evidence" || s.Step == "save" || s.Step == "saved" {
 			m.scroll = 0
 		}
 		m.state.RevealFocus = false
@@ -171,6 +212,9 @@ func (m *model) render() string {
 	for len(shown) < room {
 		shown = append(shown, "")
 	}
+	if wide {
+		shown = m.joinColumns(shown, m.focusPane(w-bodyWidth-2, room), bodyWidth)
+	}
 	pos := fmt.Sprintf("%d marked", len(s.Marked))
 	if s.Step == "choose" {
 		for i, t := range s.visible() {
@@ -179,7 +223,7 @@ func (m *model) render() string {
 				break
 			}
 		}
-	} else {
+	} else if s.Step != "confirm_quit" && s.Step != "confirm_refresh" {
 		pos += fmt.Sprintf(" | Lines %d-%d of %d", min(m.scroll+1, len(body)), min(m.scroll+room, len(body)), len(body))
 	}
 	if s.Step == "choose" && !m.focusVisible {

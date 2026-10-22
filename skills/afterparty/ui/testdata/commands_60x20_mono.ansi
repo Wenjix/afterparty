@@ -1,0 +1,19 @@
+ [1mafterparty[m / [1mCOMMANDS[m                                    
+ Scope: /work/afterparty                                  
+ 0 marked | Choose                                        
+ Target: vite | PGID 4821                                 
+                                                          
+ ┌─ [1mCommands[m ────────────────────────────────────────────┐
+ │ Find: _                                               │
+ │                                                       │
+ │ [1;7m> Mark target                                   Space[m │
+ │   Inspect target                                    i │
+ │ ⊘ Review choices                                Enter │
+ │   Show details                                      d │
+ │                                                       │
+ │ Include this target in the plan.                      │
+ │ Command 1 of 8                                        │
+ │                                                       │
+ │ [1mUp/Down[m choose | [1mEnter[m run command | [1mEsc[m back         │
+ │ [1mCtrl+U[m clear                                          │
+ └───────────────────────────────────────────────────────┘

@@ -56,6 +56,190 @@ def snapshot():
 
 
 class BackendInteractionTests(unittest.TestCase):
+    def test_named_action_crosses_protocol_and_marks_only_its_reviewed_context(self):
+        focus = Review(snapshot()).focus
+        requests = [{"key": "ACTION", "action": "review.mark_target", "generation": 1,
+                     "step": "choose", "focus": focus, "focus_visible": True},
+                    {"key": "CANCEL", "generation": 1}]
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary, patch.object(sys, "argv", ["review.py", "--state-dir", temporary]), \
+                patch.object(sys, "stdin", io.StringIO("\n".join(map(json.dumps, requests)) + "\n")), \
+                contextlib.redirect_stdout(output), patch.object(review, "collect", return_value=snapshot()):
+            self.assertEqual(review.main(), 0)
+        states = [event for event in map(json.loads, output.getvalue().splitlines()) if event["event"] == "state"]
+        self.assertEqual(states[1]["marked"], [focus])
+        self.assertIn("review.unmark_target", {action["id"] for action in states[1]["actions"]})
+        self.assertNotIn("review.mark_target", {action["id"] for action in states[1]["actions"]})
+
+    def test_quit_confirmation_preserves_a_review_target_hidden_by_the_filter(self):
+        state = Review(snapshot())
+        state.handle(" ")
+        selected = state.focus
+        state.query = "dist"
+        state.retain_visible_focus()
+        state.handle("ENTER")
+        self.assertEqual(state.focus, selected)
+        state.handle("q")
+        self.assertEqual(state.step, "confirm_quit")
+        self.assertEqual(state.focus, selected)
+        state.handle("ESC")
+        self.assertEqual(state.step, "review")
+        self.assertEqual(state.focus, selected)
+        self.assertEqual(state.marked, {selected})
+
+    def test_feedback_sequence_survives_navigation_and_save_has_current_guidance(self):
+        state = Review(snapshot())
+        before = state.message_id
+        state.handle(" ")
+        self.assertGreater(state.message_id, before)
+        self.assertTrue(state.message_transient)
+        sequence, message = state.message_id, state.message
+        state.handle("j")
+        state.handle("?")
+        self.assertEqual((state.message_id, state.message), (sequence, message))
+        state.handle("q")
+        state.handle("ENTER")
+        self.assertEqual(state.step, "review")
+        state.handle("ENTER")
+        self.assertEqual(state.step, "save")
+        self.assertNotIn("unmark", state.message.lower())
+        self.assertNotIn("Space", state.guidance())
+        self.assertLessEqual(len(state.guidance()), 57, "the separate apply instruction must fit at60 columns")
+        self.assertIn("apply", state.guidance())
+        self.assertFalse(state.message_transient)
+
+    def test_compact_legend_keeps_complete_help_and_named_commands(self):
+        state = Review(snapshot())
+        self.assertIn("Ctrl+\\", {entry["key"] for entry in state.help_keys()})
+        self.assertLessEqual(len(state.legend()), 6)
+        self.assertIn("Ctrl+P", {entry["key"] for entry in state.legend()})
+        for shortcut in ("/", "d", "i", "s", "r", "PgUp/PgDn", "Ctrl+Z", "Ctrl+C"):
+            self.assertIn(shortcut, {entry["key"] for entry in state.help_keys()})
+        state.handle("/")
+        self.assertEqual(state.actions(), [])
+        self.assertNotIn("Ctrl+P", {entry["key"] for entry in state.legend()})
+
+    def test_named_actions_reject_stale_context_disabled_targets_and_replays(self):
+        state = Review(snapshot())
+        request = {"key": "ACTION", "action": "review.mark_target", "generation": state.generation,
+                   "step": state.step, "focus": state.focus, "focus_visible": True}
+        invalid = [{"generation": 0}, {"generation": True}, {"step": "save"}, {"focus": "other-target"},
+                   {"focus": None}, {"action": "builds.review_repository"}, {"action": "review.save_plan"}]
+        invalid.extend({field: None} for field in ("action", "step", "generation"))
+        for change in invalid:
+            with self.subTest(change=change):
+                before = state.focus, state.step, state.generation, state.rows
+                self.assertIsNone(state.handle_action(dict(request, **change)))
+                self.assertEqual(state.message_kind, "refused")
+                self.assertEqual(state.marked, set())
+                self.assertEqual((state.focus, state.step, state.generation, state.rows), before)
+        for field in ("focus", "step", "generation", "action"):
+            missing = dict(request)
+            del missing[field]
+            self.assertIsNone(state.handle_action(missing))
+            self.assertEqual(state.marked, set())
+            self.assertEqual(state.message_kind, "refused")
+        state.handle_action(dict(request, focus_visible=False))
+        self.assertEqual(state.marked, set())
+        self.assertIn("The target is visible", state.message)
+        state.handle_action(request)
+        self.assertEqual(state.marked, {request["focus"]}, "a valid request must reach marking")
+        state.handle_action(request)
+        self.assertEqual(state.marked, {request["focus"]}, "a replay must not unmark the reviewed target")
+        self.assertEqual(state.message_kind, "refused")
+        state.handle_action(dict(request, action="review.unmark_target"))
+        self.assertEqual(state.marked, set())
+        withheld = next(item for item in state.items if item["availability"] == "withheld")
+        state.focus = withheld["item_id"]
+        mark = next(action for action in state.actions() if action["id"] == "review.mark_target")
+        self.assertFalse(mark["enabled"])
+        self.assertEqual(mark["reason"], withheld["reason_sentence"])
+        state.handle_action(dict(request, focus=state.focus))
+        self.assertEqual(state.marked, set())
+        self.assertEqual(state.message, withheld["reason_sentence"])
+        self.assertEqual(state.message_kind, "refused")
+
+    def test_named_commands_cannot_confirm_discard_or_bypass_save_step(self):
+        state = Review(snapshot())
+        request = lambda action: {"action": action, "generation": state.generation, "step": state.step, "focus": state.focus or ""}
+        state.handle_action(request("review.mark_target"))
+        selected = state.marked.copy()
+        self.assertNotIn("review.save_plan", {action["id"] for action in state.actions()})
+        state.handle_action(request("review.refresh"))
+        self.assertEqual(state.step, "confirm_refresh")
+        generation = state.generation
+        self.assertEqual(state.actions(), [])
+        self.assertIsNone(state.handle_action(request("review.refresh")))
+        self.assertEqual((state.marked, state.generation), (selected, generation))
+        state.handle("ESC")
+        state.handle_action(request("review.review_choices"))
+        self.assertEqual(state.step, "review")
+        state.handle_action(request("review.continue_save"))
+        self.assertEqual(state.step, "save")
+        self.assertEqual(state.handle_action(request("review.save_plan")), "save")
+
+    def test_named_refresh_rejects_old_generation_before_starting_collection(self):
+        state = Review(snapshot())
+        request = {"action": "review.refresh", "generation": 0, "step": "choose", "focus": state.focus}
+        self.assertIsNone(state.handle_action(request))
+        self.assertEqual(state.message_kind, "refused")
+        self.assertFalse(state.collecting)
+        self.assertEqual(state.generation, 1)
+        self.assertEqual(state.handle_action(dict(request, generation=1)), "refresh")
+        self.assertTrue(state.collecting)
+        self.assertEqual(state.generation, 2)
+
+    def test_empty_focus_can_finish_unavailable_review_and_help_retains_full_keys(self):
+        state = Review(snapshot())
+        state.items = [item for item in state.items if item["availability"] == "withheld"]
+        state.focus = None
+        request = {"action": "review.finish_review", "generation": 1, "step": "choose", "focus": ""}
+        self.assertEqual(state.handle_action(request), "finish")
+        state.handle("?")
+        self.assertEqual(state.actions(), [])
+        self.assertIn("Ctrl+P", {entry["key"] for entry in state.help_keys()})
+        state.handle("q")
+        state.collecting = True
+        self.assertEqual(state.actions(), [])
+
+    def test_protocol_malformed_named_context_is_refused_without_losing_the_review(self):
+        focus = Review(snapshot()).focus
+        requests = [{"key": "ACTION", "action": "review.mark_target", "generation": "1", "step": "choose", "focus": focus},
+                    {"key": "ACTION", "action": "review.mark_target", "generation": 1, "step": "choose", "focus": focus},
+                    {"key": "CANCEL", "generation": 1}]
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary, patch.object(sys, "argv", ["review.py", "--state-dir", temporary]), \
+                patch.object(sys, "stdin", io.StringIO("\n".join(map(json.dumps, requests)) + "\n")), \
+                contextlib.redirect_stdout(output), patch.object(review, "collect", return_value=snapshot()):
+            self.assertEqual(review.main(), 0)
+        states = [event for event in map(json.loads, output.getvalue().splitlines()) if event["event"] == "state"]
+        self.assertEqual(states[1]["message_kind"], "refused")
+        self.assertEqual(states[1]["marked"], [])
+        self.assertEqual(states[2]["marked"], [focus])
+
+    def test_named_save_crosses_protocol_once_after_review_and_preserves_refusals(self):
+        focus = Review(snapshot()).focus
+        def command(action, step, **changes):
+            return {"key": "ACTION", "action": "review." + action, "generation": 1,
+                    "step": step, "focus": focus, **changes}
+        requests = [command("mark_target", "choose"), command("review_choices", "choose"),
+                    command("continue_save", "review"), command("save_plan", "save", generation=0),
+                    command("save_plan", "save"), command("save_plan", "save"), {"key": "CANCEL", "generation": 1}]
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary, patch.object(sys, "argv", ["review.py", "--state-dir", temporary]), \
+                patch.object(sys, "stdin", io.StringIO("\n".join(map(json.dumps, requests)) + "\n")), \
+                contextlib.redirect_stdout(output), patch.object(review, "collect", return_value=snapshot()), \
+                patch.object(review, "save_review", return_value=str(Path(temporary, "plan.md"))) as save:
+            self.assertEqual(review.main(), 0)
+            self.assertEqual(save.call_count, 1)
+            self.assertEqual(save.call_args.args[1]["marked_ids"], [focus])
+        states = [event for event in map(json.loads, output.getvalue().splitlines()) if event["event"] == "state"]
+        self.assertEqual([event["step"] for event in states], ["choose", "choose", "review", "save", "save", "saved", "saved"])
+        self.assertEqual(states[4]["message_kind"], "refused")
+        self.assertEqual(states[5]["message_kind"], "done")
+        self.assertFalse(states[5]["message_transient"])
+        self.assertEqual(states[6]["message_kind"], "refused")
+
     def test_filter_matches_displayed_process_names_and_member_commands(self):
         state = Review(snapshot())
         self.assertEqual(len(state.visible()), 7)
@@ -232,7 +416,7 @@ class BackendInteractionTests(unittest.TestCase):
 
     def test_contextual_keys_match_each_step(self):
         state = Review(snapshot())
-        self.assertIn("/", [entry["key"] for entry in state.legend()])
+        self.assertIn("/", [entry["key"] for entry in state.help_keys()])
         state.handle("/")
         self.assertNotIn("d", [entry["key"] for entry in state.legend()])
         state.handle("ESC")

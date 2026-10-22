@@ -362,6 +362,115 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(events[-1]["review_root"], str(self.repository))
         self.assertIn("No cleanup was run", events[-1]["lines"][0])
 
+    def test_named_repository_review_crosses_the_inventory_protocol(self):
+        report = self.collect()
+        options = type("Options", (), {"projects_root": [str(self.projects)], "max_depth": 6, "state_dir": str(self.state)})()
+        requests = [{"key": "ACTION", "action": "builds.review_repository", "generation": 1,
+                     "step": "inventory", "focus": report["items"][0]["item_id"], "focus_visible": True},
+                    {"key": "CANCEL", "generation": 1}]
+        output = io.StringIO()
+        with patch.object(sys, "stdin", io.StringIO("\n".join(map(json.dumps, requests)) + "\n")), \
+                contextlib.redirect_stdout(output), patch.object(inventory, "collect", return_value=report):
+            self.assertEqual(inventory.serve(options), 0)
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertIn("review_root", events[-1])
+        self.assertEqual(events[-1]["review_root"], str(self.repository))
+        self.assertIn("actions", events[1])
+        self.assertTrue(all(action["id"].startswith("builds.") for action in events[1]["actions"]))
+
+    def test_inventory_compact_hints_and_feedback_remain_separate(self):
+        state = inventory.InventoryView(self.collect())
+        initial = state.state()
+        self.assertLessEqual(len(initial["legend"]), 6)
+        self.assertIn("Ctrl+P", {entry["key"] for entry in initial["legend"]})
+        self.assertIn("Ctrl+\\", {entry["key"] for entry in initial["help_keys"]})
+        state.handle({"key": "d", "generation": 1})
+        changed = state.state()
+        self.assertTrue(changed["message_transient"])
+        self.assertGreater(changed["message_id"], initial["message_id"])
+        self.assertIn("No cleanup", changed["guidance"])
+        state.handle({"key": "j", "generation": 1})
+        self.assertEqual(state.state()["message_id"], changed["message_id"])
+
+    def test_named_inventory_actions_reject_stale_scope_and_keep_reveal_guard(self):
+        second = self.make_repo(self.projects / "second")
+        self.artifact(second / "dist")
+        state = inventory.InventoryView(self.collect())
+        report = copy.deepcopy(state.report)
+        request = {"key": "ACTION", "action": "builds.review_repository", "generation": 1,
+                   "step": "inventory", "focus": state.focus, "focus_visible": True}
+        for change in ({"generation": 0}, {"generation": True}, {"step": "inventory_inspect"},
+                       {"focus": "another-repository"}, {"focus": None}, {"action": "review.mark_target"},
+                       {"action": "builds.save_plan"}, {"action": None}):
+            with self.subTest(change=change):
+                before = state.focus, state.step, state.generation
+                self.assertIsNone(state.handle(dict(request, **change)))
+                self.assertEqual(state.message_kind, "refused")
+                self.assertEqual((state.focus, state.step, state.generation), before)
+                self.assertEqual(state.report, report)
+        for field in ("action", "focus", "step", "generation"):
+            missing = dict(request)
+            del missing[field]
+            self.assertIsNone(state.handle(missing))
+            self.assertEqual(state.message_kind, "refused")
+        state.handle(dict(request, focus_visible=False))
+        self.assertIn("Focused output revealed", state.message)
+        self.assertEqual(state.handle(request), "review", "valid context must still open the exact repository")
+        state.handle({"key": "j", "generation": 1})
+        self.assertIsNone(state.handle(request))
+        self.assertEqual(state.message_kind, "refused")
+        self.assertNotEqual(state.focus, request["focus"])
+        current = dict(request, focus=state.focus, action="builds.show_details")
+        state.handle(current)
+        self.assertTrue(state.expanded)
+        state.handle(current)
+        self.assertTrue(state.expanded, "replayed Show must not hide details")
+        self.assertEqual(state.message_kind, "refused")
+        state.handle(dict(current, action="builds.refresh"))
+        self.assertTrue(state.collecting)
+        self.assertEqual(state.generation, 2)
+        self.assertEqual(state.actions(), [])
+        self.assertIsNone(state.handle(dict(current, action="builds.refresh")))
+        self.assertEqual(state.generation, 2, "a replay must not start a second refresh")
+        self.assertEqual(state.report, report)
+
+    def test_inventory_missing_focus_disables_repository_review_and_has_no_cleanup_commands(self):
+        state = inventory.InventoryView(self.collect())
+        state.query = "no matching paths"
+        state.keep_focus()
+        self.assertIsNone(state.focus)
+        actions = {action["id"]: action for action in state.actions()}
+        self.assertFalse(actions["builds.review_repository"]["enabled"])
+        self.assertIn("No output path", actions["builds.review_repository"]["reason"])
+        for action in actions.values():
+            self.assertNotIn("mark", action["id"])
+            self.assertNotIn("save", action["id"])
+            self.assertNotIn("apply", action["id"])
+        request = {"key": "ACTION", "action": "builds.review_repository", "generation": 1,
+                   "step": "inventory", "focus": ""}
+        self.assertIsNone(state.handle(request))
+        self.assertEqual(state.message, actions["builds.review_repository"]["reason"])
+        self.assertEqual(state.message_kind, "refused")
+        state.handle(dict(request, action="builds.filter_paths"))
+        self.assertTrue(state.searching, "empty focus must still permit valid non-target actions")
+        self.assertEqual(state.actions(), [])
+        state.handle({"key": "ESC", "generation": 1})
+        state.handle({"key": "?", "generation": 1})
+        self.assertEqual(state.actions(), [])
+
+    def test_inspect_catalog_offers_back_and_main_catalog_can_finish(self):
+        state = inventory.InventoryView(self.collect())
+        state.handle({"key": "i", "generation": 1})
+        self.assertEqual(state.step, "inventory_inspect")
+        self.assertNotIn("builds.finish", {action["id"] for action in state.actions()})
+        self.assertIn("builds.back", {action["id"] for action in state.actions()})
+        request = {"key": "ACTION", "action": "builds.back", "generation": 1,
+                   "step": state.step, "focus": state.focus}
+        state.handle(request)
+        self.assertEqual(state.step, "inventory")
+        self.assertIn("builds.finish", {action["id"] for action in state.actions()})
+        self.assertEqual(state.handle(dict(request, action="builds.finish", step="inventory")), "done")
+
 
 if __name__ == "__main__":
     unittest.main()

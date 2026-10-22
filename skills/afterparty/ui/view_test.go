@@ -22,25 +22,35 @@ func fixture() viewState {
 	for _, target := range s.Items {
 		s.VisibleIDs = append(s.VisibleIDs, target.ID)
 	}
-	s.HelpKeys = []keyHint{{"Space", "Mark or unmark"}, {"Enter", "Review choices, then Save plan"}, {"Up/Down", "Move focus"}, {"i", "Inspect target"}, {"d", "Show or hide details"}, {"/", "Filter targets"}, {"r", "Refresh the scan"}, {"q", "Quit"}, {"Ctrl+Z", "Suspend; use fg to resume"}}
+	s.HelpKeys = []keyHint{{"Space", "mark/unmark"}, {"Enter", "Review choices"}, {"Up/Down", "focus (j/k)"}, {"i", "inspect"}, {"d", "details"}, {"/", "filter"}, {"r", "refresh"}, {"q", "quit"}, {"?", "help"}, {"PgUp/PgDn", "scroll. Keep target focus"}, {"Ctrl+Z", "suspend. Use fg to resume"}, {"Ctrl+C", "exit without a new plan"}, {"s", "Review choices"}, {"Esc", "return. Keep marks"}, {"Ctrl+P", "commands"}}
 	return fixtureMode(s, "choose")
 }
 func fixtureMode(s viewState, step string) viewState {
 	s.Step = step
 	switch step {
 	case "review":
-		s.Legend = []keyHint{{"Enter", "Continue to Save plan"}, {"Space", "unmark"}, {"Up/Down", "focus"}, {"d", "details"}, {"Esc", "Choose"}, {"q", "quit"}, {"?", "help"}}
+		s.Legend = []keyHint{{"Enter", "Continue to Save plan"}, {"Space", "unmark"}, {"Up/Down", "focus (j/k)"}, {"Esc", "Choose"}, {"Ctrl+P", "commands"}, {"?", "help"}}
 		s.Summary = []string{"1 process group · 2 members", "0 worktrees", "1 artifact"}
+		s.Guidance = "Check each marked target. Space unmarks the focused target. Enter continues to Save plan."
+		s.Message = "Review marked targets. Press Space to unmark a target."
 	case "save":
-		s.Legend = []keyHint{{"Enter", "Save plan"}, {"Esc", "Review choices"}, {"q", "quit"}, {"?", "help"}}
+		s.Legend = []keyHint{{"Enter", "Save plan"}, {"Esc", "Review choices"}, {"q", "quit"}, {"Ctrl+P", "commands"}, {"?", "help"}}
+		s.Guidance = "Enter saves the plan. Run apply separately for cleanup."
+		if s.MessageKind != "refused" {
+			s.Message = s.Guidance
+		}
 	case "saved":
-		s.Legend = []keyHint{{"Enter/q", "finish"}, {"d", "details"}, {"?", "help"}}
+		s.Legend = []keyHint{{"Enter/q", "finish"}, {"d", "details"}, {"Ctrl+P", "commands"}, {"?", "help"}}
+		s.Guidance = "The plan is saved. Finish the review to see the apply command."
+		s.Message, s.MessageKind = "Afterparty saved the plan. It did not run cleanup.", "done"
 	case "help":
 		s.Legend = []keyHint{{"q/Esc/?", "back"}, {"PgUp/PgDn", "scroll"}}
 	case "evidence":
-		s.Legend = []keyHint{{"Space", "mark/unmark"}, {"Enter", "Review choices"}, {"Up/Down", "focus"}, {"PgUp/PgDn", "scroll"}, {"q/Esc", "Choose"}, {"?", "help"}}
+		s.Legend = []keyHint{{"Space", "mark/unmark"}, {"Enter", "Review choices"}, {"Up/Down", "focus (j/k)"}, {"q/Esc", "Choose"}, {"Ctrl+P", "commands"}, {"?", "help"}}
+		s.Guidance = "Inspect the target and its evidence. Space marks or unmarks this target."
 	default:
-		s.Legend = []keyHint{{"Space", "mark/unmark"}, {"Enter", "Review choices"}, {"Up/Down", "focus"}, {"i", "inspect"}, {"d", "details"}, {"/", "filter"}, {"r", "refresh"}, {"q", "quit"}, {"?", "help"}}
+		s.Legend = []keyHint{{"Space", "mark/unmark"}, {"Enter", "Review choices"}, {"Up/Down", "focus (j/k)"}, {"q", "quit"}, {"Ctrl+P", "commands"}, {"?", "help"}}
+		s.Guidance = "Mark targets to include in the plan. Cleanup runs separately."
 	}
 	return s
 }
@@ -62,7 +72,7 @@ func setTheme(t *testing.T, kind string) {
 
 }
 func TestResponsiveFrames(t *testing.T) {
-	for _, size := range [][2]int{{60, 20}, {80, 24}, {120, 40}} {
+	for _, size := range [][2]int{{60, 20}, {80, 24}, {100, 24}, {120, 40}} {
 		for _, kind := range []string{"dark", "light", "mono", "ascii"} {
 			t.Run(fmt.Sprintf("%dx%d/%s", size[0], size[1], kind), func(t *testing.T) {
 				setTheme(t, kind)
@@ -78,6 +88,13 @@ func TestResponsiveFrames(t *testing.T) {
 							t.Fatalf("%s too tall", step)
 						}
 						for _, line := range strings.Split(frame, "\n") {
+							if kind == "ascii" {
+								for _, char := range line {
+									if char > 127 {
+										t.Fatalf("%s contains non-ASCII display text: %q", step, char)
+									}
+								}
+							}
 							if ansi.StringWidth(line) >= size[0] {
 								t.Fatalf("%s too wide: %q", step, line)
 							}
@@ -101,15 +118,19 @@ func TestFrameGoldens(t *testing.T) {
 	oldLocal := time.Local
 	time.Local = time.UTC
 	t.Cleanup(func() { time.Local = oldLocal })
-	for _, size := range [][2]int{{60, 20}, {80, 24}} {
-		for _, kind := range []string{"color", "mono"} {
-			for _, step := range []string{"choose", "review", "help"} {
+	for _, size := range [][2]int{{60, 20}, {80, 24}, {120, 40}} {
+		for _, kind := range []string{"color", "mono", "ascii"} {
+			for _, step := range []string{"choose", "review", "saved", "help"} {
 				t.Run(fmt.Sprintf("%s_%dx%d_%s", step, size[0], size[1], kind), func(t *testing.T) {
 					setTheme(t, kind)
 					s := fixtureMode(fixture(), step)
+					if step == "saved" {
+						s.SavedPath = s.Destination
+					}
 					s.Marked = []string{"process:1", "artifact:1"}
 					s.Capabilities = []capability{{Name: "activity", Status: "complete", Reason: "Transcript index complete"}}
 					m := fixtureModel(s, size[0], size[1])
+					m.ascii = kind == "ascii"
 					frame := m.render() + "\n"
 					path := filepath.Join("testdata", fmt.Sprintf("%s_%dx%d_%s.ansi", step, size[0], size[1], kind))
 					if os.Getenv("UPDATE_GOLDEN") == "1" {
@@ -137,7 +158,7 @@ func TestCompactRowsAndBoundedFocusStrip(t *testing.T) {
 	s.Items[0].Consequence = strings.Repeat("Restart all services manually after stopping the group. ", 50)
 	m := fixtureModel(s, 60, 20)
 	frame := ansi.Strip(m.render())
-	for _, fact := range []string{"Process groups", "Worktrees", "Artifacts", "PGID 4821", "840 MB", "120 MB", "[i: full detail]"} {
+	for _, fact := range []string{"Process groups", "Worktrees", "Artifacts", "PGID 4821", "840 MB", "120 MB", "more lines", "i inspect"} {
 		if !strings.Contains(frame, fact) {
 			t.Fatalf("missing %q:\n%s", fact, frame)
 		}
@@ -177,16 +198,20 @@ func TestExpandedChooseRetainsFullIdentityAndConsequence(t *testing.T) {
 		s.Expanded = true
 		s.Items[2].Target = "/work/afterparty/a long generated output directory/with another segment/.next"
 		s.Items[2].Consequence = strings.Repeat("Delete this generated output. Rebuild it before the next preview. ", 8)
+		s.Focus = s.Items[2].ID
 		m := fixtureModel(s, width+3, 24)
 		body, _ := m.body(width)
-		text := strings.Join(strings.Fields(ansi.Strip(strings.Join(body, "\n"))), "")
-		for _, fact := range []string{s.Items[2].Target, s.Items[2].Consequence, "PGID 4821", "Member 4821: npm run dev --token [REDACTED]"} {
+		text := strings.Join(strings.Fields(strings.ReplaceAll(ansi.Strip(strings.Join(body, "\n")), "│ ", "")), "")
+		for _, fact := range []string{s.Items[2].Target, s.Items[2].Consequence, "PGID 4821"} {
 			if !strings.Contains(text, strings.Join(strings.Fields(fact), "")) {
 				t.Fatalf("expanded Choose at %d columns omitted %q", width, fact)
 			}
 		}
-		if !strings.Contains(ansi.Strip(body[1]), "> [ ] PGID 4821") {
-			t.Fatal("expanded Choose lost its focused target")
+		if strings.Contains(text, "Member4821:") || strings.Contains(text, strings.Join(strings.Fields(s.Items[0].Consequence), "")) {
+			t.Fatal("expanded Choose included a target without focus")
+		}
+		if !strings.Contains(ansi.Strip(strings.Join(body, "\n")), "> [ ] "+s.Items[2].Target[:20]) {
+			t.Fatal("expanded Choose lost its focused target identity")
 		}
 	}
 }

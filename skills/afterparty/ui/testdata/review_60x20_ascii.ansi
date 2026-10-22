@@ -1,0 +1,20 @@
+ [1mafterparty[m / [1mREVIEW[m                 [2m09:23 UTC | 2m 5s ago[m
+ Choose > [1mReview choices[m > Save plan                      
+ Scope: /work/afterparty                                  
+ Scan: complete | 3 available | 1 withheld                
+ [1m1 process group | 2 members[m                              
+ [1m0 worktrees[m                                              
+ [1m1 artifact[m                                               
+                                                          
+ [1;7m> [x] PGID 4821[m[7m                                          [m
+ If applied: Stop every group member. Restart the service 
+ manually.                                                
+ [1mProcess members[m -----------------------------------------
+ Member 4821: npm run dev --token [REDACTED]              
+ Member 4822: node vite --host 127.0.0.1                  
+                                                          
+ [2m2 marked | Lines 1-11 of 15[m                              
+ Review marked targets. Press Space to unmark a target.   
+ [1mEnter[m Continue to Save plan | [1mSpace[m unmark               
+ [1mUp/Down[m focus (j/k) | [1mEsc[m Choose | [1mCtrl+P[m commands       
+ [1m?[m help                                                   

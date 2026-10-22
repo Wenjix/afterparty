@@ -131,6 +131,15 @@ def review_items(rows):
     return result
 
 
+REVIEW_ACTION_KEYS = {
+    "review.mark_target": " ", "review.unmark_target": " ", "review.inspect_target": "i",
+    "review.review_choices": "ENTER", "review.finish_review": "ENTER", "review.continue_save": "ENTER",
+    "review.save_plan": "ENTER", "review.finish": "q", "review.show_details": "d", "review.hide_details": "d",
+    "review.filter_targets": "/", "review.refresh": "r", "review.quit": "q", "review.help": "?",
+    "review.back_choose": "ESC", "review.back_review": "ESC",
+}
+
+
 class Review:
     def __init__(self, rows):
         validate(rows)
@@ -147,6 +156,8 @@ class Review:
         self.confirm_return = "choose"
         self.message = "Mark targets to include in the plan."
         self.message_kind = "info"
+        self.message_id = 1
+        self.message_transient = False
         self.save_enabled = True
         self.scroll = 0
         self.reveal_focus = True
@@ -155,8 +166,10 @@ class Review:
         self.ignored_keys = 0
         self.collecting = False
 
-    def say(self, message, kind="info"):
+    def say(self, message, kind="info", transient=False):
         self.message, self.message_kind = message, kind
+        self.message_id += 1
+        self.message_transient = transient and kind != "refused"
 
     def visible(self):
         query = self.query.casefold()
@@ -167,6 +180,8 @@ class Review:
 
     def active_items(self):
         step = self.return_step if self.step == "help" else self.step
+        if step in ("confirm_quit", "confirm_refresh"):
+            step = self.confirm_return
         if step in ("review", "save", "saved"):
             return [item for item in self.items if item["item_id"] in self.marked]
         return self.visible()
@@ -194,7 +209,97 @@ class Review:
                 counted(sum(item["type"] == "worktree" for item in items), "worktree"),
                 counted(sum(item["type"] == "artifact" for item in items), "artifact")]
 
-    def legend(self, step=None):
+    def guidance(self):
+        if self.searching:
+            return "Type to filter targets. Enter keeps the filter. Esc restores it."
+        if self.step == "review":
+            return "Check each marked target. Space unmarks the focused target. Enter continues to Save plan."
+        if self.step == "save":
+            return "Enter saves the plan. Run apply separately for cleanup."
+        if self.step == "saved":
+            return "The plan is saved. Finish the review to see the apply command."
+        if self.step == "evidence":
+            return "Inspect the target and its evidence. Space marks or unmarks this target."
+        if self.step == "help":
+            return "Keys and scan status for this review. Esc returns to the previous view."
+        if self.step in ("confirm_quit", "confirm_refresh"):
+            return "Esc keeps your marks and returns to the review."
+        return "Mark targets to include in the plan. Cleanup runs separately."
+
+    def actions(self):
+        if self.collecting or self.searching or self.step not in ("choose", "evidence", "review", "save", "saved"):
+            return []
+        result = []
+
+        def add(name, label, description, enabled=True, reason=""):
+            action_id = "review." + name
+            key = REVIEW_ACTION_KEYS[action_id]
+            result.append({"id": action_id, "label": label, "description": description,
+                           "key": {" ": "Space", "ENTER": "Enter", "ESC": "Esc"}.get(key, key),
+                           "enabled": bool(enabled), "reason": "" if enabled else reason})
+
+        target = self.focused()
+        mark_reason = ("No target has focus. Change the filter or refresh the scan." if not target else
+                       "Refresh before you change marks or save the plan." if not self.save_enabled else
+                       target["reason_sentence"] if target["availability"] != "available" else "")
+        if self.step in ("choose", "evidence", "review"):
+            marked = self.focus in self.marked
+            add("unmark_target" if marked else "mark_target", "Unmark target" if marked else "Mark target",
+                "Remove this target from the plan." if marked else "Include this target in the saved plan. No cleanup runs here.",
+                not mark_reason, mark_reason)
+        if self.step == "choose":
+            add("inspect_target", "Inspect target", "Show the full target identity, decision, and evidence.",
+                target is not None, "No target has focus. Change the filter or refresh the scan.")
+            add("filter_targets", "Filter targets", "Filter displayed targets without changing marks.")
+        if self.step in ("choose", "evidence"):
+            if not self.marked and not any(item["availability"] == "available" for item in self.items):
+                add("finish_review", "Finish review", "Finish without saving a plan. No targets are available.")
+            else:
+                reason = "Mark at least one target before you continue." if not self.marked else "Refresh before you save the plan."
+                add("review_choices", "Review choices", "Review every marked target before Save plan.",
+                    bool(self.marked) and self.save_enabled, reason)
+        elif self.step == "review":
+            add("continue_save", "Continue to Save plan", "Check the destination before saving your choices.",
+                bool(self.marked), "Mark at least one target before you continue.")
+        elif self.step == "save":
+            reason = "Mark at least one target before you continue." if not self.marked else "Refresh before you save the plan."
+            add("save_plan", "Save plan", "Save checked choices. Cleanup requires a separate apply command.",
+                bool(self.marked) and self.save_enabled, reason)
+        if self.step in ("choose", "review", "save", "saved"):
+            subject = "the focused target" if self.step == "choose" else "marked targets"
+            add("hide_details" if self.expanded else "show_details", "Hide details" if self.expanded else "Show details",
+                "Hide optional evidence." if self.expanded else f"Show optional evidence for {subject}.")
+        if self.step in ("evidence", "review"):
+            add("back_choose", "Back to Choose", "Return to target selection and keep your marks.")
+        elif self.step == "save":
+            add("back_review", "Back to Review choices", "Return to the marked target review.")
+        if self.step == "saved":
+            add("finish", "Finish review", "Exit and show the saved plan and apply command.")
+        else:
+            add("refresh", "Refresh scan", "Collect fresh evidence. Marked choices require confirmation first.")
+            if self.step != "evidence":
+                add("quit", "Quit review", "Exit the review. Marked choices require confirmation first.")
+        add("help", "Help", "Show every key, scan status, and the latest message.")
+        return result
+
+    def handle_action(self, request):
+        if (type(request.get("generation")) is not int or request["generation"] != self.generation
+                or not isinstance(request.get("step"), str) or request["step"] != self.step
+                or not isinstance(request.get("focus"), str) or request["focus"] != (self.focus or "")
+                or type(request.get("focus_visible", True)) is not bool):
+            self.say("The command is out of date. Open Commands and choose it again.", "refused")
+            return None
+        action_id = request.get("action")
+        action = next((entry for entry in self.actions() if entry["id"] == action_id), None)
+        if action is None:
+            self.say("This command is not available in this view. Open Commands and choose another command.", "refused")
+            return None
+        if not action["enabled"]:
+            self.say(action["reason"], "refused")
+            return None
+        return self.handle(REVIEW_ACTION_KEYS[action_id], request["generation"], request.get("focus_visible", True))
+
+    def _mode_keys(self, step=None):
         def keys(*pairs):
             return [{"key": key, "label": label} for key, label in pairs]
         searching = self.searching if step is None else False
@@ -221,20 +326,44 @@ class Review:
         return keys(("Space", "mark/unmark"), ("Enter", enter), ("Up/Down", "focus (j/k)"), ("i", "inspect"),
                     ("d", "details"), ("/", "filter"), ("r", "refresh"), ("q", "quit"), ("?", "help"))
 
-    def help_keys(self):
-        step = self.return_step if self.step == "help" else self.step
-        entries = self.legend(step)
+    def key_catalog(self, step=None):
+        entries = self._mode_keys(step)
+        if self.searching and step is None:
+            return entries
+        step = self.step if step is None else step
         extras = [("PgUp/PgDn", "scroll. Keep target focus"),
-                  ("Ctrl+Z", "suspend. Use fg to resume"), ("Ctrl+C", "exit without a new plan")]
+                  ("Ctrl+Z", "suspend. Use fg to resume"), ("Ctrl+C", "exit without a new plan"),
+                  ("Ctrl+\\", "exit without a new plan")]
         if step in ("choose", "evidence"):
             extras.append(("s", "Review choices"))
         if step not in ("saved", "confirm_quit", "confirm_refresh"):
             extras.extend([("r", "refresh. Confirm before unmarking"), ("Esc", "return. Keep marks")])
             if step != "evidence":
                 extras.append(("d", "show or hide details"))
+        if step in ("choose", "evidence", "review", "save", "saved") and not self.collecting:
+            extras.append(("Ctrl+P", "commands"))
         existing = {entry["key"] for entry in entries}
         entries.extend({"key": key, "label": label} for key, label in extras if key not in existing)
         return entries
+
+    def legend(self, step=None):
+        entries = self.key_catalog(step)
+        if self.searching and step is None:
+            return entries
+        step = self.step if step is None else step
+        primary = {
+            "choose": ("Space", "Enter", "Up/Down", "q"),
+            "evidence": ("Space", "Enter", "Up/Down", "q/Esc"),
+            "review": ("Enter", "Space", "Up/Down", "Esc"),
+            "save": ("Enter", "Esc", "q"), "saved": ("Enter/q", "d"),
+            "help": ("q/Esc/?", "PgUp/PgDn"),
+            "confirm_quit": ("q/Enter", "Esc"), "confirm_refresh": ("r/Enter", "Esc"),
+        }.get(step, ())
+        by_key = {entry["key"]: entry for entry in entries}
+        return [by_key[key] for key in (*primary, "Ctrl+P", "?") if key in by_key]
+
+    def help_keys(self):
+        return self.key_catalog(self.return_step if self.step == "help" else self.step)
 
     def selection(self):
         return {"snapshot_id": self.rows[0]["snapshot_id"], "marked_ids": sorted(self.marked), "mark_count": len(self.marked)}
@@ -340,7 +469,7 @@ class Review:
             self.reveal_focus = True
         elif key == "d" and self.step in ("choose", "review", "save", "saved"):
             self.expanded = not self.expanded
-            self.say(("Details are visible." if self.expanded else "Details are hidden.") + f" {len(self.marked)} marked.")
+            self.say(("Details are visible." if self.expanded else "Details are hidden.") + f" {len(self.marked)} marked.", transient=True)
             self.reveal_focus = True
         elif key == "/" and self.step == "choose":
             self.searching = True
@@ -362,7 +491,7 @@ class Review:
                 label = "PGID " + item["target"] if item["type"] == "process-group" else item["display_label"]
                 if self.focus in self.marked:
                     self.marked.remove(self.focus)
-                    self.say(f"You unmarked {label}. {len(self.marked)} marked.", "done")
+                    self.say(f"You unmarked {label}. {len(self.marked)} marked.", "done", transient=True)
                     if self.step == "review":
                         remaining = self.active_items()
                         if remaining:
@@ -372,7 +501,7 @@ class Review:
                             self.retain_visible_focus()
                 else:
                     self.marked.add(self.focus)
-                    self.say(f"You marked {label}. {len(self.marked)} marked.", "done")
+                    self.say(f"You marked {label}. {len(self.marked)} marked.", "done", transient=True)
                 self.reveal_focus = True
             elif item:
                 self.say("Withheld: " + item["reason_sentence"] if self.save_enabled else "The scan failed. Refresh before you save the plan.", "refused")
@@ -400,6 +529,7 @@ class Review:
             if self.step == "review" and self.marked:
                 self.step = "save"
                 self.scroll = 0
+                self.say(self.guidance())
             elif self.step == "save" and self.marked and self.save_enabled:
                 return "save"
         return None

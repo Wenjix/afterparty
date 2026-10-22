@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 	"time"
@@ -49,6 +50,29 @@ func inventoryTime(stamp string) string {
 		return when.Local().Format("2006-01-02 15:04 MST")
 	}
 	return "unknown"
+}
+
+func inventoryMeter(size *int64, total int64, ascii bool) string {
+	const width = 8
+	if size == nil {
+		return fmt.Sprintf("%-*s", width, "unknown")
+	}
+	filled := 0
+	if total > 0 {
+		filled = max(0, min(width, int(math.Round(float64(*size)/float64(total)*width))))
+	}
+	full, empty := "█", "░"
+	if ascii {
+		full, empty = "#", "."
+	}
+	return strings.Repeat(full, filled) + strings.Repeat(empty, width-filled)
+}
+
+func inventoryShare(size *int64, total int64) string {
+	if size == nil || total <= 0 {
+		return "Share: unknown"
+	}
+	return fmt.Sprintf("Share: %.1f%% of known bytes", 100*float64(*size)/float64(total))
 }
 
 func (m *model) inventoryVisible() []inventoryItem {
@@ -128,12 +152,12 @@ func (m *model) inventoryBody(w int) ([]string, map[string][2]int) {
 	r, s := m.state.Inventory, m.state
 	switch s.Step {
 	case "inventory_help":
-		add("Keys", "bold")
+		lines = append(lines, m.sectionRule("Keys", "bold", w))
 		for _, hint := range s.HelpKeys {
 			add(fmt.Sprintf("%-10s %s", hint.Key, hint.Label), "")
 		}
 		add("", "")
-		add("Scan status", "bold")
+		lines = append(lines, m.sectionRule("Scan status", "bold", w))
 		add("Collection: "+r.CollectionStatus, "")
 		add(fmt.Sprintf("Repository depth: %d", r.MaxDepth), "")
 		add("Scanned: "+m.observation(), "")
@@ -152,49 +176,52 @@ func (m *model) inventoryBody(w int) ([]string, map[string][2]int) {
 		add("The inventory does not check cleanup eligibility.", "")
 		add("Enter opens cleanup review for the focused repository.", "")
 		add("", "")
-		add("Roots", "bold")
+		lines = append(lines, m.sectionRule("Roots", "bold", w))
 		for _, root := range r.Roots {
 			add(root, "")
 		}
 		add("", "")
-		add("Repositories", "bold")
+		lines = append(lines, m.sectionRule("Repositories", "bold", w))
 		for _, repo := range r.Repositories {
 			add(repo.Root+" - "+repo.Status, "")
 		}
 		add("", "")
-		add("Scan issues", "bold")
+		lines = append(lines, m.sectionRule("Scan issues", "bold", w))
 		if len(r.Issues) == 0 {
 			add("None.", "dim")
 		}
 		for _, issue := range r.Issues {
 			add(issue.Path+": "+issue.Message, "warning")
 		}
-		if s.MessageKind == "refused" {
+		if s.Message != "" {
 			add("", "")
-			add(s.Message, "warning")
+			lines = append(lines, m.sectionRule("Latest message", "bold", w))
+			role := ""
+			if s.MessageKind == "refused" {
+				role = "warning"
+			}
+			add(s.Message, role)
 		}
 	case "inventory_inspect":
 		if target, ok := m.inventoryFocused(); ok {
 			lines = append(lines, m.wrapped(m.inventoryRawLabel(target), "bold", w)...)
-			add("Path: "+target.Path, "")
-			add("Repository: "+target.Repository, "")
-			add("Kind: "+target.Kind, "")
-			add("Scan: "+target.Status, "")
-			add("Size: "+inventoryItemSize(target)+" (estimated)", "")
-			add("Growth: "+inventoryDelta(target.DeltaBytes), "")
-			add("Modified: "+inventoryTime(target.ModifiedAt)+" (file time)", "")
-			add("File modification time does not prove last use.", "dim")
-			add("", "")
-			add("Enter opens this repository's cleanup review.", "")
-			add("This inventory does not delete files or check cleanup eligibility.", "")
+			lines = append(lines, m.inventoryDetails(target, w)...)
 		} else {
 			add("No target has focus. Return to the list to choose a target.", "")
 		}
 	default:
 		items := m.inventoryVisible()
 		labelWidth := max(8, w-24)
+		meters := m.width >= 80
+		if meters {
+			labelWidth = max(8, w-34)
+		}
 		labels := m.inventoryLabels(items, labelWidth)
-		add(fmt.Sprintf("  %-*s %10s %10s", labelWidth, "Repository / path", "Size", "Growth"), "dim")
+		heading := fmt.Sprintf("  %-*s %10s %10s", labelWidth, "Repository / path", "Allocated", "Growth")
+		if meters {
+			heading += "  Share"
+		}
+		add(heading, "dim")
 		for _, target := range items {
 			cursor, role := "  ", ""
 			if target.ID == s.Focus {
@@ -204,13 +231,13 @@ func (m *model) inventoryBody(w int) ([]string, map[string][2]int) {
 			label := labels[target.ID]
 			row := cursor + label + strings.Repeat(" ", max(0, labelWidth-ansi.StringWidth(label)))
 			row += fmt.Sprintf(" %10s %10s", inventoryItemSize(target), inventoryDelta(target.DeltaBytes))
+			if meters {
+				row += "  " + inventoryMeter(target.SizeBytes, r.TotalBytes, m.ascii)
+			}
 			lines = append(lines, m.line(row, role, w))
 			anchors[target.ID] = [2]int{start, start + 1}
-			if s.Expanded {
-				add("    Repository: "+target.Repository, "dim")
-				add("    Path: "+target.Path, "dim")
-				add("    Kind: "+target.Kind+" | Scan: "+target.Status, "dim")
-				add("    Modified: "+inventoryTime(target.ModifiedAt)+" (file time)", "dim")
+			if s.Expanded && target.ID == s.Focus {
+				lines = append(lines, m.inlineRail(m.inventoryDetails(target, w-2), w)...)
 			}
 		}
 		if len(items) == 0 {
@@ -231,12 +258,69 @@ func (m *model) inventoryStrip(w int) []string {
 	if !ok {
 		return nil
 	}
-	labels := m.inventoryLabels(m.inventoryVisible(), w)
-	return []string{
-		m.line(labels[target.ID], "bold", w),
-		m.line(m.plain("Kind: "+target.Kind+" | Modified: "+inventoryTime(target.ModifiedAt)+" (file time)"), "dim", w),
-		m.line("Enter opens repository review. No cleanup runs here.", "", w),
+	labels := m.inventoryLabels(m.inventoryVisible(), w-5)
+	lines := m.wrapped(m.plain("Kind: "+target.Kind+" | "+inventoryShare(target.SizeBytes, m.state.Inventory.TotalBytes)), "", w-4)
+	lines = append(lines, m.line("Enter opens review. No cleanup runs here.", "", w-4))
+	return m.evidencePanel(labels[target.ID], lines, w, 4)
+}
+
+func (m *model) inventoryRepositoryTotal(root string) (int64, bool) {
+	var total int64
+	partial := true
+	for _, repository := range m.state.Inventory.Repositories {
+		if repository.Root == root {
+			partial = repository.Status != "complete"
+			break
+		}
 	}
+	for _, target := range m.state.Inventory.Items {
+		if target.Repository != root {
+			continue
+		}
+		if target.SizeBytes == nil {
+			partial = true
+		} else {
+			total += *target.SizeBytes
+		}
+	}
+	return total, partial
+}
+
+func (m *model) inventoryPanel(width, height int) []string {
+	lines := []string{}
+	add := func(text, role string) {
+		lines = append(lines, m.wrapped(m.plain(text), role, width-4)...)
+	}
+	if target, ok := m.inventoryFocused(); ok {
+		labels := m.inventoryLabels(m.inventoryVisible(), width-4)
+		lines = append(lines, m.line(labels[target.ID], "bold", width-4))
+		lines = append(lines, m.inventoryDetails(target, width-4)...)
+	} else {
+		add("No output has focus.", "")
+		add("Choose a path to inspect its measurements.", "dim")
+	}
+	return m.evidencePanel("Focused output", lines, width, height)
+}
+
+func (m *model) inventoryDetails(target inventoryItem, width int) []string {
+	total, partial := m.inventoryRepositoryTotal(target.Repository)
+	qualifier := " (estimated)"
+	if partial {
+		qualifier = " (estimated, partial)"
+	}
+	sections := []detailSection{
+		{"Decision", []string{"No cleanup runs here.", "Enter opens repository review."}},
+		{"Measurements", []string{"Allocated: " + inventoryItemSize(target), "Growth: " + inventoryDelta(target.DeltaBytes), inventoryShare(target.SizeBytes, m.state.Inventory.TotalBytes), "Repo known: " + inventorySize(total) + qualifier, "Modified: " + inventoryTime(target.ModifiedAt) + " (file time)", "File modification time does not prove last use."}},
+		{"Identity", []string{"Path: " + target.Path, "Repository: " + target.Repository, "Kind: " + target.Kind + " | Scan: " + target.Status, "This inventory does not check cleanup eligibility."}},
+	}
+	lines := []string{}
+	for _, section := range sections {
+		lines = append(lines, m.sectionRule(section.Title, "bold", width))
+		for _, line := range section.Lines {
+			lines = append(lines, m.wrapped(m.plain(line), "", width)...)
+		}
+	}
+	return lines
 }
 
 func (m *model) renderInventory() string {
@@ -251,8 +335,8 @@ func (m *model) renderInventory() string {
 			elapsed = 0
 		}
 		lines := []string{
-			m.paint("brand", "afterparty BUILD OUTPUT"), "",
-			m.paint("bold", "Afterparty scans build output."),
+			m.paint("brand", "afterparty / BUILD OUTPUT"), "",
+			m.paint("bold", m.collectionPulse()+" Afterparty scans build output."),
 			fmt.Sprintf("Elapsed: %s", durationText(elapsed)), "",
 			"This scan does not delete files.",
 			"Afterparty ignores keys during the scan.",
@@ -261,7 +345,7 @@ func (m *model) renderInventory() string {
 		return lipgloss.NewStyle().PaddingLeft(1).Render(strings.Join(lines, "\n"))
 	}
 	s, r := m.state, m.state.Inventory
-	left := m.paint("brand", "afterparty") + " " + m.paint("bold", "BUILD OUTPUT")
+	left := m.paint("brand", "afterparty") + " / " + m.paint("bold", "BUILD OUTPUT")
 	right := m.plain(m.observation())
 	header := []string{left + strings.Repeat(" ", max(2, w-ansi.StringWidth(left)-ansi.StringWidth(right))) + m.paint("dim", right)}
 	header = append(header, m.line(m.plain(fmt.Sprintf("Roots (%d): %s", len(r.Roots), strings.Join(r.Roots, " | "))), "", w))
@@ -283,10 +367,19 @@ func (m *model) renderInventory() string {
 		}
 		header = append(header, m.line(fmt.Sprintf("%d %s (? details)", len(r.Issues), label), "warning", w))
 	}
-	body, anchors := m.inventoryBody(w)
+	if s.Step == "inventory" && m.width >= 80 {
+		header = append(header, m.line("Share of known bytes", "", w))
+	}
+	wide := s.Step == "inventory" && m.width >= 100 && m.height >= 24
+	bodyWidth := w
+	const panelWidth = 34
+	if wide {
+		bodyWidth -= panelWidth + 2
+	}
+	body, anchors := m.inventoryBody(bodyWidth)
 	footer := m.footer(w)
 	strip := []string{}
-	if s.Step == "inventory" {
+	if s.Step == "inventory" && !wide {
 		strip = m.inventoryStrip(w)
 	}
 	room := m.height - len(header) - len(footer) - len(strip) - 1
@@ -311,6 +404,9 @@ func (m *model) renderInventory() string {
 	shown := append([]string{}, body[m.scroll:min(len(body), m.scroll+room)]...)
 	for len(shown) < room {
 		shown = append(shown, "")
+	}
+	if wide {
+		shown = m.joinColumns(shown, m.inventoryPanel(panelWidth, room), bodyWidth)
 	}
 	position := fmt.Sprintf("%d paths", len(m.inventoryVisible()))
 	if s.Step == "inventory" {

@@ -1,0 +1,40 @@
+ [1;35mafterparty[m / [1mREVIEW / Help[m                                                                     [2m09:23 UTC · 2m 5s ago[m
+ Scope: /work/afterparty                                                                                             
+ Scan: complete | 3 available | 1 withheld                                                                           
+ [1mKeys[m ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Space      mark/unmark                                                                                              
+ Enter      Review choices                                                                                           
+ Up/Down    focus (j/k)                                                                                              
+ i          inspect                                                                                                  
+ d          details                                                                                                  
+ /          filter                                                                                                   
+ r          refresh                                                                                                  
+ q          quit                                                                                                     
+ ?          help                                                                                                     
+ PgUp/PgDn  scroll. Keep target focus                                                                                
+ Ctrl+Z     suspend. Use fg to resume                                                                                
+ Ctrl+C     exit without a new plan                                                                                  
+ s          Review choices                                                                                           
+ Esc        return. Keep marks                                                                                       
+ Ctrl+P     commands                                                                                                 
+                                                                                                                     
+ [1mLatest message[m ─────────────────────────────────────────────────────────────────────────────────────────────────────
+ Mark targets to include in the plan.                                                                                
+                                                                                                                     
+ [1mScan status[m ────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Scope: /work/afterparty                                                                                             
+ Observed: 09:23 UTC · 2m 5s ago                                                                                     
+ [2mRecorded file activity does not prove human presence.[m                                                               
+ activity: complete - Transcript index complete                                                                      
+                                                                                                                     
+ [1mTarget types[m ───────────────────────────────────────────────────────────────────────────────────────────────────────
+ A process group contains processes with one process group ID (PGID).                                                
+ A worktree is a separate checkout of a Git repository.                                                              
+ An artifact is a directory with generated files.                                                                    
+                                                                                                                     
+                                                                                                                     
+                                                                                                                     
+                                                                                                                     
+ [2m2 marked | Lines 1-30 of 30[m                                                                                         
+ Mark targets to include in the plan.                                                                                
+ [1mq/Esc/?[m back | [1mPgUp/PgDn[m scroll                                                                                     

@@ -1,0 +1,24 @@
+ [1mafterparty[m / [1mREVIEW[m                                     [2m09:23 UTC | 2m 5s ago[m
+ Choose > Review choices > [1mPlan saved[m                                         
+ Scope: /work/afterparty                                                      
+ Scan: complete | 3 available | 1 withheld                                    
+ DONE Plan saved                                                              
+ No cleanup ran.                                                              
+ [1mSaved: /tmp/reviewed-plan.md[m                                                 
+ Finish the review to print the apply command.                                
+ [2mThe plan records your choices. Apply checks each target again.[m               
+                                                                              
+ [1m[x] PGID 4821[m                                                                
+ If applied: Stop every group member. Restart the service manually.           
+ [1mProcess members[m -------------------------------------------------------------
+ Member 4821: npm run dev --token [REDACTED]                                  
+ Member 4822: node vite --host 127.0.0.1                                      
+                                                                              
+ [1m[x] /work/afterparty/.next[m                                                   
+ If applied: Delete build output. Run a build to recreate it.                 
+                                                                              
+                                                                              
+                                                                              
+ [2m2 marked | Lines 1-15 of 15[m                                                  
+ DONE Afterparty saved the plan. It did not run cleanup.                      
+ [1mEnter/q[m finish | [1md[m details | [1mCtrl+P[m commands | [1m?[m help                        

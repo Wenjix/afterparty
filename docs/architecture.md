@@ -105,9 +105,28 @@ policy. `s_review_theme` exports roles for Go's
 [`theme.go`](../skills/afterparty/ui/theme.go). `NO_COLOR` removes hues while
 retaining bold and reverse focus cues in the terminal interface.
 
-Compact rows and a bounded focus strip keep scope, status, choices, and keys
-visible. Inspection and Review show full identities and consequences. Shortened
-labels remain distinct. Display escaping never supplies authoritative paths.
+Compact rows and bounded focus panels keep scope, status, choices, and keys
+visible. Wide layouts place focused evidence beside the list. A phase indicator
+tracks selection, review, and saving. Inspection and Review show full identities
+and consequences. Shortened labels remain distinct. Display escaping never
+supplies authoritative paths.
+
+Inventory bars use the known allocated-byte total, including during filtering.
+Unknown sizes retain their status. Repository subtotals include known estimates
+and label incomplete evidence. Neither display establishes cleanup eligibility.
+Collection pulses show activity beside elapsed time without claiming percentage
+completion. Saved reviews use a static plan receipt.
+
+The backend supplies primary hints, complete Help keys, and named commands.
+Commands validate the scan generation, mode, focused identity, and current
+availability before they use an existing handler. Separate Mark and Unmark
+commands prevent a repeated request from toggling a target twice.
+The Go command search never executes entered text. Apply remains separate.
+
+Mode guidance stays separate from retained feedback. Routine acknowledgements
+expire in the main footer after four seconds. Help retains their full text.
+Refusals and save receipts remain persistent. Focused evidence uses structured
+sections and exact hidden-line counts. Review retains every process-group member.
 
 The optional helper supports macOS/Linux terminals. Small panes show a size notice
 and preserve marks while blocking marking and saving. Unsupported review terminals

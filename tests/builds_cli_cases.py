@@ -310,12 +310,45 @@ class BuildsCliTests(unittest.TestCase):
         terminal = BuildsTerminal(self, ("--projects-root", str(self.projects), "--projects-root", str(self.other_projects)))
         terminal.expect("Scan: complete | 2 repos")
         terminal.press(b"/", "finish search")
-        terminal.press(b"beta", "/ beta")
-        terminal.press(b"\r", "Path 1 of 1:")
-        terminal.press(b"i", "Enter opens this repository's cleanup review.")
+        terminal.press(b"beta", "/ beta_")
+        terminal.press(b"\r", "Ctrl+P commands")
+        terminal.expect("Path 1 of 1:")
+        terminal.press(b"i", "Enter opens repository review.")
         terminal.expect(str(self.beta / ".cache"), compact=True)
-        terminal.press(b"\r", "afterparty REVIEW")
+        terminal.press(b"\r", "REVIEW")
         terminal.expect("Choose")
+        self.assertEqual(handoff.read_bytes().split(b"\0")[:-1],
+                         [b"--artifacts-only", b"--root", str(self.beta).encode()])
+        terminal.press(b"q", "builds-exit:1")
+        terminal.finish(1)
+        self.assertGreaterEqual(terminal.transcript.count(b"\x1b[?1049h"), 2)
+        self.assertGreaterEqual(terminal.transcript.count(b"\x1b[?1049l"), 2)
+
+    @unittest.skipUnless(PTY_AVAILABLE, "PTY tests require a Unix terminal and pyte")
+    def test_inventory_commands_open_only_a_fresh_review_for_the_focused_repository(self):
+        self.require_helper()
+        handoff = self.base / "command-handoff"
+        review = self.bundle / "lib/review.sh"
+        original = self.bundle / "lib/review-original.sh"
+        review.rename(original)
+        review.write_text('#!/usr/bin/env bash\nprintf "%s\\0" "$@" > "$BUILDS_HANDOFF"\nexec "$BUILDS_REVIEW_REAL" "$@"\n')
+        review.chmod(0o755)
+        self.env.update(BUILDS_HANDOFF=str(handoff), BUILDS_REVIEW_REAL=str(original))
+        terminal = BuildsTerminal(self, ("--projects-root", str(self.projects), "--projects-root", str(self.other_projects)))
+        terminal.expect("Scan: complete | 2 repos")
+        terminal.press(b"\x10", "Commands")
+        for query, forbidden in ((b"mark", "Mark target"), (b"save", "Save plan"), (b"apply", "Apply")):
+            terminal.press(b"\x15" + query, "Find: " + query.decode())
+            self.assertNotRegex("\n".join(terminal.screen.display),
+                                r"(?m)^\s*[>-]?\s*" + re.escape(forbidden) + r" {2,}")
+        terminal.press(b"\x10", "BUILD OUTPUT")
+        terminal.press(b"/beta", "/ beta_")
+        terminal.press(b"\r", "Ctrl+P commands")
+        terminal.expect("Path 1 of 1:")
+        terminal.press(b"\x10", "Commands")
+        terminal.press(b"Review repository", "Find: Review repository")
+        terminal.press(b"\r", "REVIEW")
+        terminal.expect("0 marked")
         self.assertEqual(handoff.read_bytes().split(b"\0")[:-1],
                          [b"--artifacts-only", b"--root", str(self.beta).encode()])
         terminal.press(b"q", "builds-exit:1")

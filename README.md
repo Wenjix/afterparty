@@ -263,6 +263,9 @@ ship with the source bundle.
 Run `afterparty review` from the project. The steps are **Choose**, **Review
 choices**, **Save plan**, and **Finish**. Choose uses compact rows and a bounded
 focus strip. Inspection shows full identities, consequences, and group members.
+A step indicator tracks Choose, Review choices, and Save plan. At 100 columns
+by 24 rows, focused evidence appears beside the list. Smaller layouts keep a
+bounded panel below it.
 
 | Key | Action |
 | --- | --- |
@@ -270,18 +273,29 @@ focus strip. Inspection shows full identities, consequences, and group members.
 | PgUp/PgDn | Scroll without changing target focus |
 | Space | Mark or unmark an available target. In Review, unmark it. |
 | `i` | Inspect the focused target from Choose |
-| `d` | Show or hide inline details where available |
+| `d` | Show or hide focused details in Choose. Toggle optional evidence in Review. |
 | `/` | Filter in Choose. Hidden marks still count. |
 | Enter | Advance to review or save. Finish after saving. |
 | Esc | Return while keeping choices |
 | `r` | Refresh. Confirm before clearing marks. |
 | `q` | Quit. Confirm before discarding marks. Close help or inspection first. |
 | `?` | Show mode-specific keys, scope, and scan status |
+| Ctrl+P | Search the available commands |
 | Ctrl+Z | Suspend. Use `fg` to resume. |
 | Ctrl+C | Exit immediately. A previously saved plan remains saved. |
 
-The on-screen legend lists the controls for the current mode. Space first
-reveals a focused target hidden by paging. Keys typed during collection cannot
+The on-screen legend lists primary controls for the current mode. Help lists
+all keys. Ctrl+P opens Commands outside Help, filtering, and confirmations.
+Type to find a command. Use arrows to choose it. Enter runs an available
+command, and Esc returns without changing the target filter or marks.
+Unavailable commands explain why they cannot run. Apply remains separate.
+
+Choose expands only the focused target. Inspection shows full evidence.
+Panels count hidden detail lines. Review always lists each process-group
+member. Brief mark confirmations disappear after four seconds. Help retains
+the latest message. Refusals and save receipts remain visible.
+
+Space first reveals a focused target hidden by paging. Keys typed during collection cannot
 mark an older snapshot or advance it. A failed refresh disables saving until
 another refresh succeeds.
 
@@ -354,6 +368,11 @@ In the terminal, use arrows or `j`/`k`, `/`, `i`, `d`, `r`, and `?` to navigate
 and inspect. Enter leaves the inventory and opens a fresh artifact review for
 one repository. That review starts without marks. Saving and Apply remain
 separate actions.
+
+At 80 columns, bars compare each path with the known allocated-byte total.
+Filtering keeps that scale. Unknown sizes remain unknown. These bars do not
+estimate reclaimable space. Wide layouts show focused evidence and the
+repository's known subtotal beside the list. Incomplete subtotals say partial.
 
 `--plain` prints a readable report. Piped output also uses plain text.
 `--json` emits one report object. These modes require Python 3 but not the

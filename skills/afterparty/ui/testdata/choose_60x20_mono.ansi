@@ -1,20 +1,20 @@
- [1mafterparty[m [1mREVIEW / Choose[m          [2m09:23 UTC · 2m 5s ago[m
+ [1mafterparty[m / [1mREVIEW[m                 [2m09:23 UTC · 2m 5s ago[m
+ [1mChoose[m › Review choices › Save plan                      
  Scope: /work/afterparty                                  
  Scan: complete | 3 available | 1 withheld                
- Process groups                                           
+ Process groups 1 ────────────────────────────────────────
  [1;7m> [x] vite | PGID 4821                           CPU 0.2%[m
- Worktrees                                                
+ Worktrees 1 ─────────────────────────────────────────────
     ⊘  /work/afterparty-w...  A live process uses this ...
- Artifacts                                                
+ Artifacts 2 ─────────────────────────────────────────────
  [1m  [x] .next                                        840 MB[m
    [ ] playwright-report                            120 MB
                                                           
-                                                          
  [2m2 marked | Target 1 of 4: vite | PGID 4821[m               
- [1mvite | PGID 4821                               [x] marked[m
- If applied: Stop every group member. Restart the service 
- manually.                                                
+ ┌─ [1mvite | PGID 4821 | [x] marked[m ───────────────────────┐
+ │ If applied: Stop every group member. Restart the      │
+ │ service manually.                                     │
+ └───────────────────────────────────────────────────────┘
  Mark targets to include in the plan.                     
- Space mark/unmark | Enter Review choices | Up/Down focus 
- i inspect | d details | / filter | r refresh | q quit    
- ? help                                                   
+ [1mSpace[m mark/unmark | [1mEnter[m Review choices                 
+ [1mUp/Down[m focus (j/k) | [1mq[m quit | [1mCtrl+P[m commands | [1m?[m help  

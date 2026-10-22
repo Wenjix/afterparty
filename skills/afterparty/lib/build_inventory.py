@@ -496,6 +496,13 @@ def plain_lines(report, ascii_only=False):
     return lines
 
 
+INVENTORY_ACTION_KEYS = {
+    "builds.review_repository": "ENTER", "builds.inspect_path": "i", "builds.show_details": "d",
+    "builds.hide_details": "d", "builds.filter_paths": "/", "builds.refresh": "r",
+    "builds.finish": "q", "builds.back": "ESC", "builds.help": "?",
+}
+
+
 class InventoryView:
     def __init__(self, report):
         self.report, self.generation = report, 1
@@ -504,6 +511,20 @@ class InventoryView:
         self.searching, self.expanded, self.reveal_focus = False, False, True
         self.message = "Size and file time do not prove that output is unused."
         self.message_kind, self.ignored_keys = "info", 0
+        self.message_id, self.message_transient = 1, False
+        self.collecting = False
+
+    def say(self, message, kind="info", transient=False):
+        self.message, self.message_kind = message, kind
+        self.message_id += 1
+        self.message_transient = transient and kind != "refused"
+
+    def guidance(self):
+        if self.searching:
+            return "Type to filter paths. Enter keeps the filter. Esc restores it."
+        if self.step == "inventory_help":
+            return "Review scan coverage and issues. Esc returns to the previous view."
+        return "No cleanup runs here. Enter opens a fresh artifact review."
 
     def visible(self):
         query = self.query.casefold()
@@ -518,10 +539,9 @@ class InventoryView:
 
     def ignore(self, count=1):
         self.ignored_keys += count
-        self.message = f"Ignored {self.ignored_keys} keys during collection. Review the current inventory."
-        self.message_kind = "info"
+        self.say(f"Ignored {self.ignored_keys} keys during collection. Review the current inventory.")
 
-    def keys(self, help_keys=False):
+    def key_catalog(self, help_keys=False):
         step = self.return_step if self.step == "inventory_help" and help_keys else self.step
         if self.searching:
             pairs = [("Enter", "finish search"), ("Esc", "restore filter")]
@@ -532,12 +552,73 @@ class InventoryView:
         else:
             pairs = [("Enter", "review"), ("Up/Down", "focus (j/k)"), ("/", "filter"),
                      ("i", "inspect"), ("d", "details"), ("?", "help"), ("r", "refresh"), ("q", "finish")]
-        if help_keys:
+        if not self.searching:
             pairs = [(key, "show or hide details" if key == "d" else label) for key, label in pairs]
             existing = {key for key, _label in pairs}
-            extras = [("PgUp/PgDn", "scroll"), ("Ctrl+Z", "suspend and resume with fg"), ("Ctrl+C", "exit")]
+            extras = [("PgUp/PgDn", "scroll"), ("Ctrl+Z", "suspend and resume with fg"),
+                      ("Ctrl+C", "exit"), ("Ctrl+\\", "exit")]
+            if step in ("inventory", "inventory_inspect") and not self.collecting:
+                extras.append(("Ctrl+P", "commands"))
             pairs.extend(pair for pair in extras if pair[0] not in existing)
         return [{"key": key, "label": label} for key, label in pairs]
+
+    def keys(self, help_keys=False):
+        entries = self.key_catalog(help_keys)
+        if help_keys or self.searching:
+            return entries
+        primary = {
+            "inventory": ("Enter", "Up/Down", "i", "q"),
+            "inventory_inspect": ("Enter", "q/Esc", "PgUp/PgDn"),
+            "inventory_help": ("q/Esc/?", "PgUp/PgDn"),
+        }.get(self.step, ())
+        by_key = {entry["key"]: entry for entry in entries}
+        return [by_key[key] for key in (*primary, "Ctrl+P", "?") if key in by_key]
+
+    def actions(self):
+        if self.collecting or self.searching or self.step not in ("inventory", "inventory_inspect"):
+            return []
+        result = []
+
+        def add(name, label, description, enabled=True, reason=""):
+            action_id = "builds." + name
+            key = INVENTORY_ACTION_KEYS[action_id]
+            result.append({"id": action_id, "label": label, "description": description,
+                           "key": {"ENTER": "Enter", "ESC": "Esc"}.get(key, key),
+                           "enabled": bool(enabled), "reason": "" if enabled else reason})
+
+        focused = self.focused() is not None
+        reason = "No output path has focus. Change the filter or refresh the scan."
+        add("review_repository", "Review repository", "Open fresh artifact review for this repository without marks.", focused, reason)
+        if self.step == "inventory":
+            add("inspect_path", "Inspect path", "Show full identity, measurements, and file modification time.", focused, reason)
+            add("hide_details" if self.expanded else "show_details", "Hide details" if self.expanded else "Show details",
+                "Hide optional path evidence." if self.expanded else "Show optional evidence for the focused path.")
+            add("filter_paths", "Filter paths", "Filter the displayed paths. The known-byte scale stays unchanged.")
+        else:
+            add("back", "Back to inventory", "Return to the output list without changing focus.")
+        add("refresh", "Refresh scan", "Collect fresh output measurements. No cleanup runs here.")
+        if self.step == "inventory":
+            add("finish", "Finish inventory", "Exit this read-only inventory.")
+        add("help", "Help", "Show every key, scan coverage, issues, and the latest message.")
+        return result
+
+    def handle_action(self, request):
+        if (type(request.get("generation")) is not int or request["generation"] != self.generation
+                or not isinstance(request.get("step"), str) or request["step"] != self.step
+                or not isinstance(request.get("focus"), str) or request["focus"] != (self.focus or "")
+                or type(request.get("focus_visible", True)) is not bool):
+            self.say("The command is out of date. Open Commands and choose it again.", "refused")
+            return None
+        action_id = request.get("action")
+        action = next((entry for entry in self.actions() if entry["id"] == action_id), None)
+        if action is None:
+            self.say("This command is not available in this view. Open Commands and choose another command.", "refused")
+            return None
+        if not action["enabled"]:
+            self.say(action["reason"], "refused")
+            return None
+        return self.handle({"key": INVENTORY_ACTION_KEYS[action_id], "generation": request["generation"],
+                            "focus_visible": request.get("focus_visible", True)})
 
     def state(self):
         result = {"event": "state", "mode": "builds", "inventory": self.report,
@@ -545,8 +626,10 @@ class InventoryView:
                   "query": self.query, "searching": self.searching, "expanded": self.expanded,
                   "step": self.step, "legend": self.keys(), "help_keys": self.keys(True),
                   "message": self.message, "message_kind": self.message_kind,
+                  "actions": self.actions(), "guidance": self.guidance(),
+                  "message_id": self.message_id, "message_transient": self.message_transient,
                   "generation": self.generation, "ignored_keys": self.ignored_keys,
-                  "reveal_focus": self.reveal_focus, "captured_at": self.report["observed_at"], "collecting": False}
+                  "reveal_focus": self.reveal_focus, "captured_at": self.report["observed_at"], "collecting": self.collecting}
         self.reveal_focus = False
         return result
 
@@ -554,6 +637,8 @@ class InventoryView:
         key = request.get("key")
         if not isinstance(key, str) or not 1 <= len(key) <= 32:
             raise ValueError("Invalid inventory key request.")
+        if key == "ACTION":
+            return self.handle_action(request)
         generation = request.get("generation", -1)
         focus_visible = request.get("focus_visible", True)
         if type(focus_visible) is not bool:
@@ -612,21 +697,23 @@ class InventoryView:
             self.step, self.reveal_focus = "inventory_inspect", True
         elif key == "d" and self.step == "inventory":
             self.expanded, self.reveal_focus = not self.expanded, True
+            self.say("Path details are visible." if self.expanded else "Path details are hidden.", transient=True)
         elif key == "r":
             self.generation += 1
+            self.collecting = True
             return "refresh"
         elif key == "ENTER" and self.step != "inventory_help":
             if not focus_visible:
                 self.reveal_focus = True
-                self.message, self.message_kind = "Focused output revealed. Press Enter again to review its repository.", "info"
+                self.say("Focused output revealed. Press Enter again to review its repository.")
             elif self.focused():
                 return "review"
             else:
-                self.message, self.message_kind = "No focused output path. Choose a repository with observed output first.", "refused"
+                self.say("No focused output path. Choose a repository with observed output first.", "refused")
         elif key in {" ", "s"}:
-            self.message, self.message_kind = "This inventory has no marks or save action. Press Enter to open a separate artifact review.", "info"
+            self.say("This inventory has no marks or save action. Press Enter to open a separate artifact review.")
         elif key == "PASTE":
-            self.message, self.message_kind = "Paste ignored. Type inventory keys individually.", "info"
+            self.say("Paste ignored. Type inventory keys individually.")
         return None
 
 
@@ -656,7 +743,8 @@ def serve(options):
             view.report = collect(options.projects_root, options.max_depth, options.state_dir)
             view.keep_focus()
             view.step, view.reveal_focus = "inventory", True
-            view.message, view.message_kind = "Inventory refreshed. No cleanup was run.", "done"
+            view.collecting = False
+            view.say("Inventory refreshed. No cleanup was run.", "done")
         emit(view.state())
     return 1
 
