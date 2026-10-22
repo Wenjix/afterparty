@@ -286,9 +286,11 @@ bounded panel below it.
 
 The on-screen legend lists primary controls for the current mode. Help lists
 all keys. Ctrl+P opens Commands outside Help, filtering, and confirmations.
-Type to find a command. Use arrows to choose it. Enter runs an available
-command, and Esc returns without changing the target filter or marks.
-Unavailable commands explain why they cannot run. Apply remains separate.
+
+Commands filters its list as you type. Arrow keys select a command.
+Enter runs an available command. Esc closes Commands and keeps the target
+filter, marks, focus, and scroll position. Unavailable commands explain why
+they cannot run. Apply remains separate.
 
 Choose expands only the focused target. Inspection shows full evidence.
 Panels count hidden detail lines. Review always lists each process-group
@@ -365,9 +367,11 @@ build caches, Docker caches, and entire dependency installations are outside
 this inventory.
 
 In the terminal, use arrows or `j`/`k`, `/`, `i`, `d`, `r`, and `?` to navigate
-and inspect. Enter leaves the inventory and opens a fresh artifact review for
-one repository. That review starts without marks. Saving and Apply remain
-separate actions.
+and inspect. Ctrl+P opens Commands from the inventory or inspection.
+Esc closes Commands and keeps the path filter and focus.
+
+Enter leaves the inventory and opens a fresh artifact review for one repository.
+That review starts without marks. Saving and Apply remain separate actions.
 
 At 80 columns, bars compare each path with the known allocated-byte total.
 Filtering keeps that scale. Unknown sizes remain unknown. These bars do not
