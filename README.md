@@ -1,11 +1,11 @@
-<p align="center">
-  <img src="./assets/afterparty-logo.svg" alt="Afterparty confetti logo" width="132" height="132">
-</p>
+<h1 align="center">
+  <a href="./assets/afterparty-terminal-preview.png">
+    <img src="./assets/afterparty-terminal-preview.png" alt="Afterparty: terminal preview of build output sizes and growth across fictional projects." width="1200">
+  </a>
+</h1>
 
-<h1 align="center">Afterparty</h1>
-
 <p align="center">
-  Cleanup for the mess coding agents leave behind.
+  <em>Illustrative preview with fictional projects and data. Select the image to view it at full size.</em>
 </p>
 
 Afterparty helps you review processes, worktrees, generated files, and caches
